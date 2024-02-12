@@ -5,25 +5,25 @@ import {
   dataDecodedBuilder,
   dataDecodedParameterBuilder,
 } from '@/domain/data-decoder/entities/__tests__/data-decoded.builder';
-import { AddressInfoHelper } from '../../../common/address-info/address-info.helper';
-import { NULL_ADDRESS } from '../../../common/constants';
-import { AddressInfo } from '../../../common/entities/address-info.entity';
-import { MULTI_SEND_METHOD_NAME } from '../../constants';
-import { DataDecodedParamHelper } from './data-decoded-param.helper';
-import { TransactionDataMapper } from './transaction-data.mapper';
 import { DELEGATE_OPERATION } from '@/domain/safe/entities/operation.entity';
+import { AddressInfoHelper } from '@/routes/common/address-info/address-info.helper';
+import { NULL_ADDRESS } from '@/routes/common/constants';
+import { AddressInfo } from '@/routes/common/entities/address-info.entity';
+import { MULTI_SEND_METHOD_NAME } from '@/routes/transactions/constants';
+import { DataDecodedParamHelper } from '@/routes/transactions/mappers/common/data-decoded-param.helper';
+import { TransactionDataMapper } from '@/routes/transactions/mappers/common/transaction-data.mapper';
 
 const addressInfoHelper = jest.mocked({
   get: jest.fn(),
-} as unknown as AddressInfoHelper);
+} as jest.MockedObjectDeep<AddressInfoHelper>);
 
 const contractsRepository = jest.mocked({
   getContract: jest.fn(),
-} as unknown as ContractsRepository);
+} as jest.MockedObjectDeep<ContractsRepository>);
 
 const dataDecodedParamHelper = jest.mocked({
   hasNestedDelegate: jest.fn(),
-} as unknown as DataDecodedParamHelper);
+} as jest.MockedObjectDeep<DataDecodedParamHelper>);
 
 describe('Transaction Data Mapper (Unit)', () => {
   let mapper: TransactionDataMapper;

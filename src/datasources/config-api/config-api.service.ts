@@ -1,13 +1,16 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { IConfigurationService } from '@/config/configuration.service.interface';
+import { CacheFirstDataSource } from '@/datasources/cache/cache.first.data.source';
+import { CacheRouter } from '@/datasources/cache/cache.router';
+import {
+  CacheService,
+  ICacheService,
+} from '@/datasources/cache/cache.service.interface';
+import { HttpErrorFactory } from '@/datasources/errors/http-error-factory';
 import { Chain } from '@/domain/chains/entities/chain.entity';
 import { Page } from '@/domain/entities/page.entity';
 import { IConfigApi } from '@/domain/interfaces/config-api.interface';
 import { SafeApp } from '@/domain/safe-apps/entities/safe-app.entity';
-import { CacheFirstDataSource } from '../cache/cache.first.data.source';
-import { CacheRouter } from '../cache/cache.router';
-import { HttpErrorFactory } from '../errors/http-error-factory';
-import { CacheService, ICacheService } from '../cache/cache.service.interface';
 
 @Injectable()
 export class ConfigApi implements IConfigApi {
@@ -54,14 +57,6 @@ export class ConfigApi implements IConfigApi {
     }
   }
 
-  async clearChains(): Promise<void> {
-    const pattern = CacheRouter.getChainsCachePattern();
-    await Promise.all([
-      this.cacheService.deleteByKey(CacheRouter.getChainsCacheKey()),
-      this.cacheService.deleteByKeyPattern(pattern),
-    ]);
-  }
-
   async getChain(chainId: string): Promise<Chain> {
     try {
       const url = `${this.baseUri}/api/v1/chains/${chainId}`;
@@ -79,9 +74,11 @@ export class ConfigApi implements IConfigApi {
   }
 
   async clearChain(chainId: string): Promise<void> {
+    const chainCacheKey = CacheRouter.getChainCacheKey(chainId);
+    const chainsCacheKey = CacheRouter.getChainsCacheKey();
     await Promise.all([
-      this.cacheService.deleteByKey(CacheRouter.getChainCacheKey(chainId)),
-      this.cacheService.deleteByKey(CacheRouter.getChainsCacheKey()),
+      this.cacheService.deleteByKey(chainCacheKey),
+      this.cacheService.deleteByKey(chainsCacheKey),
     ]);
   }
 
@@ -110,14 +107,8 @@ export class ConfigApi implements IConfigApi {
     }
   }
 
-  async clearSafeApps(chainId?: string): Promise<void> {
-    if (chainId) {
-      // if a chain id is provided, delete the safe apps data for that chain id
-      await this.cacheService.deleteByKey(CacheRouter.getSafeAppsKey(chainId));
-    } else {
-      // if a chain id is not provided, delete all the safe apps data
-      const pattern = CacheRouter.getSafeAppsCachePattern();
-      await this.cacheService.deleteByKeyPattern(pattern);
-    }
+  async clearSafeApps(chainId: string): Promise<void> {
+    const key = CacheRouter.getSafeAppsKey(chainId);
+    await this.cacheService.deleteByKey(key);
   }
 }

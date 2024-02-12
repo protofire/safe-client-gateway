@@ -1,35 +1,35 @@
 import { encodeFunctionData, formatUnits, getAddress, parseAbi } from 'viem';
 import { faker } from '@faker-js/faker';
-import { AddressInfo } from '../../../common/entities/address-info.entity';
-import { HumanDescriptionMapper } from './human-description.mapper';
 import { TokenRepository } from '@/domain/tokens/token.repository';
 import { tokenBuilder } from '@/domain/tokens/__tests__/token.builder';
 import { ILoggingService } from '@/logging/logging.interface';
 
 import { HumanDescriptionApi } from '@/datasources/human-description-api/human-description-api.service';
-import { MAX_UINT256 } from '../../constants';
-import { SafeAppInfo } from '../../entities/safe-app-info.entity';
 import { HumanDescriptionRepository } from '@/domain/human-description/human-description.repository';
 import { multisigTransactionBuilder } from '@/domain/safe/entities/__tests__/multisig-transaction.builder';
-import { SafeAppInfoMapper } from './safe-app-info.mapper';
 import { Hex } from 'viem/types/misc';
 import { MultisigTransaction } from '@/domain/safe/entities/multisig-transaction.entity';
 import { Token } from '@/domain/tokens/entities/token.entity';
+import { AddressInfo } from '@/routes/common/entities/address-info.entity';
+import { MAX_UINT256 } from '@/routes/transactions/constants';
+import { SafeAppInfo } from '@/routes/transactions/entities/safe-app-info.entity';
+import { HumanDescriptionMapper } from '@/routes/transactions/mappers/common/human-description.mapper';
+import { SafeAppInfoMapper } from '@/routes/transactions/mappers/common/safe-app-info.mapper';
 
 const tokenRepository = jest.mocked({
   getToken: jest.fn(),
-} as unknown as TokenRepository);
+} as jest.MockedObjectDeep<TokenRepository>);
 
-const mockLoggingService = {
+const mockLoggingService: jest.MockedObjectDeep<ILoggingService> = {
   info: jest.fn(),
   debug: jest.fn(),
   error: jest.fn(),
   warn: jest.fn(),
-} as unknown as ILoggingService;
+};
 
 const safeAppInfoMapper = jest.mocked({
   mapSafeAppInfo: jest.fn(),
-} as unknown as SafeAppInfoMapper);
+} as jest.MockedObjectDeep<SafeAppInfoMapper>);
 
 const humanDescriptionAPI = new HumanDescriptionApi();
 const humanDescriptionRepository = new HumanDescriptionRepository(

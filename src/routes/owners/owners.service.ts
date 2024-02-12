@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { SafeRepository } from '@/domain/safe/safe.repository';
 import { ISafeRepository } from '@/domain/safe/safe.repository.interface';
-import { SafeList } from './entities/safe-list.entity';
+import { SafeList } from '@/routes/owners/entities/safe-list.entity';
 
 @Injectable()
 export class OwnersService {
@@ -15,5 +15,11 @@ export class OwnersService {
     ownerAddress: string;
   }): Promise<SafeList> {
     return this.safeRepository.getSafesByOwner(args);
+  }
+
+  async getAllSafesByOwner(args: {
+    ownerAddress: string;
+  }): Promise<{ [chainId: string]: Array<string> }> {
+    return this.safeRepository.getAllSafesByOwner(args);
   }
 }

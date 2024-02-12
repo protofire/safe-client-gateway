@@ -1,7 +1,7 @@
 import { Controller, Get, Param } from '@nestjs/common';
 import { ApiOkResponse, ApiTags } from '@nestjs/swagger';
-import { SafeList } from './entities/safe-list.entity';
-import { OwnersService } from './owners.service';
+import { SafeList } from '@/routes/owners/entities/safe-list.entity';
+import { OwnersService } from '@/routes/owners/owners.service';
 
 @ApiTags('owners')
 @Controller({
@@ -18,5 +18,13 @@ export class OwnersController {
     @Param('ownerAddress') ownerAddress: string,
   ): Promise<SafeList> {
     return this.ownersService.getSafesByOwner({ chainId, ownerAddress });
+  }
+
+  @ApiOkResponse({ type: SafeList })
+  @Get('owners/:ownerAddress/safes')
+  async getAllSafesByOwner(
+    @Param('ownerAddress') ownerAddress: string,
+  ): Promise<{ [chainId: string]: Array<string> }> {
+    return this.ownersService.getAllSafesByOwner({ ownerAddress });
   }
 }

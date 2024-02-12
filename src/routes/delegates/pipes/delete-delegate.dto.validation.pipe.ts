@@ -1,16 +1,21 @@
-import { HttpStatus, Injectable, PipeTransform } from '@nestjs/common';
+import {
+  HttpException,
+  HttpStatus,
+  Injectable,
+  PipeTransform,
+} from '@nestjs/common';
 import { ValidateFunction } from 'ajv';
-import { GenericValidator } from '@/validation/providers/generic.validator';
-import { JsonSchemaService } from '@/validation/providers/json-schema.service';
-import { DeleteDelegateDto } from '../entities/delete-delegate.dto.entity';
+import { DeleteDelegateDto } from '@/routes/delegates/entities/delete-delegate.dto.entity';
 import {
   DELETE_DELEGATE_DTO_SCHEMA_ID,
   deleteDelegateDtoSchema,
-} from '../entities/schemas/delete-delegate.dto.schema';
+} from '@/routes/delegates/entities/schemas/delete-delegate.dto.schema';
+import { GenericValidator } from '@/validation/providers/generic.validator';
+import { JsonSchemaService } from '@/validation/providers/json-schema.service';
 
 @Injectable()
 export class DeleteDelegateDtoValidationPipe
-  implements PipeTransform<any, DeleteDelegateDto>
+  implements PipeTransform<unknown, DeleteDelegateDto>
 {
   private readonly isValid: ValidateFunction<DeleteDelegateDto>;
 
@@ -23,11 +28,13 @@ export class DeleteDelegateDtoValidationPipe
       deleteDelegateDtoSchema,
     );
   }
-  transform(data: any): DeleteDelegateDto {
+  transform(data: unknown): DeleteDelegateDto {
     try {
       return this.genericValidator.validate(this.isValid, data);
     } catch (err) {
-      err.status = HttpStatus.BAD_REQUEST;
+      if (err instanceof HttpException) {
+        throw new HttpException(err.getResponse(), HttpStatus.BAD_REQUEST);
+      }
       throw err;
     }
   }

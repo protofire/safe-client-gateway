@@ -1,20 +1,20 @@
 import { faker } from '@faker-js/faker';
 import { ClsService } from 'nestjs-cls';
 import * as winston from 'winston';
-import { RequestScopedLoggingService } from './logging.service';
 import { IConfigurationService } from '@/config/configuration.service.interface';
+import { RequestScopedLoggingService } from '@/logging/logging.service';
 
 const mockClsService = jest.mocked({
   getId: jest.fn(),
-} as unknown as ClsService);
+} as jest.MockedObjectDeep<ClsService>);
 
 const mockLogger = {
   log: jest.fn(),
-} as unknown as winston.Logger;
+} as jest.MockedObjectDeep<winston.Logger>;
 
 const mockConfigurationService = jest.mocked({
   get: jest.fn(),
-} as unknown as IConfigurationService);
+} as jest.MockedObjectDeep<IConfigurationService>);
 
 describe('RequestScopedLoggingService', () => {
   const systemTime: Date = faker.date.recent();

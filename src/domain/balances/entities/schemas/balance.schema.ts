@@ -1,5 +1,5 @@
 import { JSONSchemaType, Schema } from 'ajv';
-import { BalanceToken } from '../balance.token.entity';
+import { BalanceToken } from '@/domain/balances/entities/balance.token.entity';
 
 export const BALANCE_TOKEN_SCHEMA_ID =
   'https://safe-client.safe.global/schemas/balances/balance-token.json';
@@ -26,10 +26,10 @@ const balanceSchema: Schema = {
     tokenAddress: { type: 'string', nullable: true, default: null },
     token: { anyOf: [{ type: 'null' }, { $ref: 'balance-token.json' }] },
     balance: { type: 'string' },
-    fiatBalance: { type: 'string' },
-    fiatConversion: { type: 'string' },
+    fiatBalance: { type: 'string', nullable: true, default: null },
+    fiatConversion: { type: 'string', nullable: true, default: null },
   },
-  required: ['balance', 'fiatBalance', 'fiatConversion'],
+  required: ['balance'],
 };
 
 export { balanceSchema, balanceTokenSchema };

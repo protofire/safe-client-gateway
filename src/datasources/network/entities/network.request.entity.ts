@@ -1,4 +1,4 @@
 export interface NetworkRequest {
-  headers?: Record<string, string | number | boolean>;
-  params?: any;
+  headers?: Record<string, string>;
+  params?: Record<string, unknown>;
 }

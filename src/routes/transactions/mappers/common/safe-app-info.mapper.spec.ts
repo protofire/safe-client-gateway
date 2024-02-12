@@ -3,20 +3,21 @@ import { safeAppBuilder } from '@/domain/safe-apps/entities/__tests__/safe-app.b
 import { SafeAppsRepository } from '@/domain/safe-apps/safe-apps.repository';
 import { multisigTransactionBuilder } from '@/domain/safe/entities/__tests__/multisig-transaction.builder';
 import { ILoggingService } from '@/logging/logging.interface';
-import { SafeAppInfo } from '../../entities/safe-app-info.entity';
-import { SafeAppInfoMapper } from './safe-app-info.mapper';
+import { SafeAppInfo } from '@/routes/transactions/entities/safe-app-info.entity';
+import { SafeAppInfoMapper } from '@/routes/transactions/mappers/common/safe-app-info.mapper';
+import { SafeApp } from '@/domain/safe-apps/entities/safe-app.entity';
 
 describe('SafeAppInfo mapper (Unit)', () => {
   const safeAppsRepositoryMock = jest.mocked({
     getSafeApps: jest.fn(),
-  } as unknown as SafeAppsRepository);
+  } as jest.MockedObjectDeep<SafeAppsRepository>);
 
-  const mockLoggingService = {
+  const mockLoggingService: jest.MockedObjectDeep<ILoggingService> = {
     info: jest.fn(),
     debug: jest.fn(),
     error: jest.fn(),
     warn: jest.fn(),
-  } as unknown as ILoggingService;
+  };
 
   let mapper: SafeAppInfoMapper;
 
@@ -56,7 +57,7 @@ describe('SafeAppInfo mapper (Unit)', () => {
 
   it('should return null if no SafeApp is found and origin is not null', async () => {
     const chainId = faker.string.numeric();
-    const safeApps = [];
+    const safeApps: Array<SafeApp> = [];
     const transaction = multisigTransactionBuilder().build();
     safeAppsRepositoryMock.getSafeApps.mockResolvedValue(safeApps);
 

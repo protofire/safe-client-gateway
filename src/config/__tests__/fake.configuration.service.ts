@@ -1,9 +1,9 @@
-import { IConfigurationService } from '../configuration.service.interface';
+import { IConfigurationService } from '@/config/configuration.service.interface';
 
 export class FakeConfigurationService implements IConfigurationService {
-  private configuration: Record<string, any> = {};
+  private configuration: Record<string, unknown> = {};
 
-  set(key: string, value: any) {
+  set(key: string, value: unknown): void {
     this.configuration[key] = value;
   }
 
