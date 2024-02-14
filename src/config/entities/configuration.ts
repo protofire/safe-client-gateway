@@ -216,6 +216,7 @@ export default () => ({
       23295: { nativeCoin: 'oasis-network', chainName: 'oasis' },
       30: { nativeCoin: 'rootstock', chainName: 'rootstock' },
       31: { nativeCoin: 'rootstock', chainName: 'rootstock' },
+      18231: { nativeCoin: 'ethereum', chainName: 'unreal' },
     },
   },
   redis: {
