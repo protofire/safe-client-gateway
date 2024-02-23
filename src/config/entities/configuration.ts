@@ -219,6 +219,7 @@ export default () => ({
       18231: { nativeCoin: 'ethereum', chainName: 'unreal' },
       167008: { nativeCoin: 'ethereum', chainName: 'tko-katla' },
       713715: { nativeCoin: 'sei-network', chainName: 'sei-network' },
+      4202: { nativeCoin: 'ethereum', chainName: 'lisksep' },
     },
   },
   redis: {
