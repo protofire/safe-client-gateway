@@ -221,6 +221,7 @@ export default () => ({
       713715: { nativeCoin: 'sei-network', chainName: 'sei-network' },
       4202: { nativeCoin: 'ethereum', chainName: 'lisksep' },
       81457: { nativeCoin: 'ethereum', chainName: 'blast' },
+      252: { nativeCoin: 'ethereum', chainName: 'fraxtal' },
     },
   },
   redis: {
