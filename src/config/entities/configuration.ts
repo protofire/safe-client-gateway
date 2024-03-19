@@ -224,6 +224,7 @@ export default () => ({
       81457: { nativeCoin: 'ethereum', chainName: 'blast' },
       252: { nativeCoin: 'ethereum', chainName: 'fraxtal' },
       424: { nativeCoin: 'ethereum', chainName: 'PGN' },
+      1729: { nativeCoin: 'ethereum', chainName: 'reya' },
     },
   },
   redis: {
