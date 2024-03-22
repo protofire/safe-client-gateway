@@ -36,7 +36,7 @@ describe('Delete Transaction - Transactions Controller (Unit', () => {
   let fakeCacheService: FakeCacheService;
 
   beforeEach(async () => {
-    jest.clearAllMocks();
+    jest.resetAllMocks();
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(configuration)],
@@ -74,11 +74,14 @@ describe('Delete Transaction - Transactions Controller (Unit', () => {
     await request(app.getHttpServer())
       .delete(`/v1/chains/${chainId}/transactions/${safeTxHash}`)
       .send(invalidDeleteTransactionDto)
-      .expect(400)
+      .expect(422)
       .expect({
-        message: 'Validation failed',
-        code: 42,
-        arguments: [],
+        statusCode: 422,
+        code: 'invalid_type',
+        expected: 'string',
+        received: 'number',
+        path: ['signature'],
+        message: 'Expected string, received number',
       });
   });
 
@@ -89,7 +92,7 @@ describe('Delete Transaction - Transactions Controller (Unit', () => {
       signature: faker.string.hexadecimal({ length: 16 }),
     };
 
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       if (url === `${safeConfigUrl}/api/v1/chains/${chain.chainId}`) {
         return Promise.resolve({ data: chain, status: 200 });
       }
@@ -99,16 +102,16 @@ describe('Delete Transaction - Transactions Controller (Unit', () => {
       ) {
         return Promise.resolve({ data: multisigToJson(tx), status: 200 });
       }
-      fail(`No matching rule for url: ${url}`);
+      return Promise.reject(`No matching rule for url: ${url}`);
     });
-    networkService.delete.mockImplementation((url) => {
+    networkService.delete.mockImplementation(({ url }) => {
       if (
         url ===
         `${chain.transactionService}/api/v1/transactions/${tx.safeTxHash}`
       ) {
         return Promise.resolve({ data: {}, status: 204 });
       }
-      fail(`No matching rule for url: ${url}`);
+      return Promise.reject(`No matching rule for url: ${url}`);
     });
 
     await request(app.getHttpServer())
@@ -124,7 +127,7 @@ describe('Delete Transaction - Transactions Controller (Unit', () => {
       signature: faker.string.hexadecimal({ length: 16 }),
     };
 
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       if (url === `${safeConfigUrl}/api/v1/chains/${chain.chainId}`) {
         return Promise.resolve({ data: chain, status: 200 });
       }
@@ -134,16 +137,16 @@ describe('Delete Transaction - Transactions Controller (Unit', () => {
       ) {
         return Promise.resolve({ data: multisigToJson(tx), status: 200 });
       }
-      fail(`No matching rule for url: ${url}`);
+      return Promise.reject(`No matching rule for url: ${url}`);
     });
-    networkService.delete.mockImplementation((url) => {
+    networkService.delete.mockImplementation(({ url }) => {
       if (
         url ===
         `${chain.transactionService}/api/v1/transactions/${tx.safeTxHash}`
       ) {
         return Promise.resolve({ data: {}, status: 204 });
       }
-      fail(`No matching rule for url: ${url}`);
+      return Promise.reject(`No matching rule for url: ${url}`);
     });
 
     await request(app.getHttpServer())
@@ -173,7 +176,7 @@ describe('Delete Transaction - Transactions Controller (Unit', () => {
     };
 
     const tx = multisigTransactionBuilder().build();
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       if (url === `${safeConfigUrl}/api/v1/chains/${chain.chainId}`) {
         return Promise.resolve({ data: chain, status: 200 });
       }
@@ -183,9 +186,9 @@ describe('Delete Transaction - Transactions Controller (Unit', () => {
       ) {
         return Promise.resolve({ data: multisigToJson(tx), status: 200 });
       }
-      fail(`No matching rule for url: ${url}`);
+      return Promise.reject(`No matching rule for url: ${url}`);
     });
-    networkService.delete.mockImplementation((url) => {
+    networkService.delete.mockImplementation(({ url }) => {
       if (
         url ===
         `${chain.transactionService}/api/v1/transactions/${tx.safeTxHash}`
@@ -200,7 +203,7 @@ describe('Delete Transaction - Transactions Controller (Unit', () => {
           ),
         );
       }
-      fail(`No matching rule for url: ${url}`);
+      return Promise.reject(`No matching rule for url: ${url}`);
     });
 
     await request(app.getHttpServer())

@@ -27,6 +27,9 @@ import { IEmailApi } from '@/domain/interfaces/email-api.interface';
 import { TestEmailApiModule } from '@/datasources/email-api/__tests__/test.email-api.module';
 import { EmailApiModule } from '@/datasources/email-api/email-api.module';
 import { INestApplication } from '@nestjs/common';
+import { accountBuilder } from '@/domain/account/entities/__tests__/account.builder';
+import { verificationCodeBuilder } from '@/domain/account/entities/__tests__/verification-code.builder';
+import { EmailAddress } from '@/domain/account/entities/account.entity';
 
 describe('Email controller save email tests', () => {
   let app: INestApplication;
@@ -37,7 +40,7 @@ describe('Email controller save email tests', () => {
   let safeConfigUrl: string | undefined;
 
   beforeEach(async () => {
-    jest.clearAllMocks();
+    jest.resetAllMocks();
     jest.useFakeTimers();
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -73,7 +76,12 @@ describe('Email controller save email tests', () => {
     await app.close();
   });
 
-  it('stores email successfully', async () => {
+  it.each([
+    // non-checksummed address
+    { safeAddress: faker.finance.ethereumAddress().toLowerCase() },
+    // checksummed address
+    { safeAddress: getAddress(faker.finance.ethereumAddress()) },
+  ])('stores email successfully', async ({ safeAddress }) => {
     const chain = chainBuilder().build();
     const emailAddress = faker.internet.email();
     const timestamp = jest.now();
@@ -82,13 +90,13 @@ describe('Email controller save email tests', () => {
     const signerAddress = signer.address;
     // Signer is owner of safe
     const safe = safeBuilder()
+      // Allow test of non-checksummed address by casting
+      .with('address', safeAddress as `0x${string}`)
       .with('owners', [signerAddress])
-      // Faker generates non-checksum addresses only
-      .with('address', getAddress(faker.finance.ethereumAddress()))
       .build();
     const message = `email-register-${chain.chainId}-${safe.address}-${emailAddress}-${signerAddress}-${timestamp}`;
     const signature = await signer.signMessage({ message });
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       switch (url) {
         case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
           return Promise.resolve({ data: chain, status: 200 });
@@ -98,21 +106,34 @@ describe('Email controller save email tests', () => {
           return Promise.reject(new Error(`Could not match ${url}`));
       }
     });
-    accountDataSource.createAccount.mockResolvedValue();
+    accountDataSource.createAccount.mockResolvedValue([
+      accountBuilder()
+        .with('chainId', chain.chainId)
+        .with('emailAddress', new EmailAddress(emailAddress))
+        .with('safeAddress', getAddress(safe.address))
+        .with('signer', signerAddress)
+        .with('isVerified', false)
+        .build(),
+      verificationCodeBuilder().build(),
+    ]);
     accountDataSource.subscribe.mockResolvedValue([
       {
         key: faker.word.sample(),
         name: faker.word.words(2),
       },
     ]);
+    emailApi.createMessage.mockResolvedValue();
+    accountDataSource.setEmailVerificationSentDate.mockResolvedValue(
+      verificationCodeBuilder().build(),
+    );
 
     await request(app.getHttpServer())
-      .post(`/v1/chains/${chain.chainId}/safes/${safe.address}/emails`)
+      .post(`/v1/chains/${chain.chainId}/safes/${safeAddress}/emails`)
+      .set('Safe-Wallet-Signature', signature)
+      .set('Safe-Wallet-Signature-Timestamp', timestamp.toString())
       .send({
         emailAddress: emailAddress,
         signer: signer.address,
-        timestamp: timestamp,
-        signature: signature,
       })
       .expect(201)
       .expect({});
@@ -126,9 +147,20 @@ describe('Email controller save email tests', () => {
       ),
       to: [emailAddress],
     });
+    expect(accountDataSource.createAccount).toHaveBeenCalledWith({
+      chainId: chain.chainId,
+      // Should always store the checksummed address
+      safeAddress: getAddress(safeAddress),
+      emailAddress: new EmailAddress(emailAddress),
+      signer: signer.address,
+      code: expect.any(String),
+      codeGenerationDate: expect.any(Date),
+      unsubscriptionToken: expect.any(String),
+    });
     expect(accountDataSource.subscribe).toHaveBeenCalledWith({
       chainId: chain.chainId,
-      safeAddress: safe.address,
+      // should be called with checksummed address
+      safeAddress: getAddress(safeAddress),
       signer: signerAddress,
       notificationTypeKey: 'account_recovery',
     });
@@ -154,11 +186,11 @@ describe('Email controller save email tests', () => {
 
     await request(app.getHttpServer())
       .post(`/v1/chains/${chain.chainId}/safes/${safe.address}/emails`)
+      .set('Safe-Wallet-Signature', signature)
+      .set('Safe-Wallet-Signature-Timestamp', timestamp.toString())
       .send({
         emailAddress: emailAddress,
         account: account.address,
-        timestamp: timestamp,
-        signature: signature,
       })
       .expect(403)
       .expect({
@@ -186,11 +218,11 @@ describe('Email controller save email tests', () => {
 
     await request(app.getHttpServer())
       .post(`/v1/chains/${chain.chainId}/safes/${safe.address}/emails`)
+      .set('Safe-Wallet-Signature', signature)
+      .set('Safe-Wallet-Signature-Timestamp', timestamp.toString())
       .send({
         emailAddress: emailAddress,
         account: account.address,
-        timestamp: timestamp,
-        signature: signature,
       })
       .expect(403)
       .expect({
@@ -214,7 +246,7 @@ describe('Email controller save email tests', () => {
       .build();
     const message = `email-register-${chain.chainId}-${safe.address}-${emailAddress}-${accountAddress}-${timestamp}`;
     const signature = await account.signMessage({ message });
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       switch (url) {
         case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
           return Promise.resolve({ data: chain, status: 200 });
@@ -227,11 +259,11 @@ describe('Email controller save email tests', () => {
 
     await request(app.getHttpServer())
       .post(`/v1/chains/${chain.chainId}/safes/${safe.address}/emails`)
+      .set('Safe-Wallet-Signature', signature)
+      .set('Safe-Wallet-Signature-Timestamp', timestamp.toString())
       .send({
         emailAddress: emailAddress,
         account: account.address,
-        timestamp: timestamp,
-        signature: signature,
       })
       .expect(403)
       .expect({

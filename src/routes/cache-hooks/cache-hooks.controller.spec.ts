@@ -21,6 +21,7 @@ import {
 } from '@/datasources/network/network.service.interface';
 import { AccountDataSourceModule } from '@/datasources/account/account.datasource.module';
 import { TestAccountDataSourceModule } from '@/datasources/account/__tests__/test.account.datasource.module';
+import { getAddress } from 'viem';
 
 describe('Post Hook Events (Unit)', () => {
   let app: INestApplication;
@@ -28,9 +29,10 @@ describe('Post Hook Events (Unit)', () => {
   let safeConfigUrl: string;
   let fakeCacheService: FakeCacheService;
   let networkService: jest.MockedObjectDeep<INetworkService>;
+  let configurationService: IConfigurationService;
 
   beforeEach(async () => {
-    jest.clearAllMocks();
+    jest.resetAllMocks();
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(configuration)],
@@ -47,9 +49,9 @@ describe('Post Hook Events (Unit)', () => {
     app = moduleFixture.createNestApplication();
 
     fakeCacheService = moduleFixture.get<FakeCacheService>(CacheService);
-    const configurationService = moduleFixture.get(IConfigurationService);
-    authToken = configurationService.get('auth.token');
-    safeConfigUrl = configurationService.get('safeConfig.baseUri');
+    configurationService = moduleFixture.get(IConfigurationService);
+    authToken = configurationService.getOrThrow('auth.token');
+    safeConfigUrl = configurationService.getOrThrow('safeConfig.baseUri');
     networkService = moduleFixture.get(NetworkService);
 
     await app.init();
@@ -141,7 +143,7 @@ describe('Post Hook Events (Unit)', () => {
       chainId: chainId,
       ...payload,
     };
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       switch (url) {
         case `${safeConfigUrl}/api/v1/chains/${chainId}`:
           return Promise.resolve({
@@ -165,7 +167,7 @@ describe('Post Hook Events (Unit)', () => {
       type: 'SOME_TEST_TYPE_THAT_WE_DO_NOT_SUPPORT',
       safeTxHash: 'some-safe-tx-hash',
     };
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       switch (url) {
         case `${safeConfigUrl}/api/v1/chains/1`:
           return Promise.resolve({
@@ -181,7 +183,29 @@ describe('Post Hook Events (Unit)', () => {
       .post(`/hooks/events`)
       .set('Authorization', `Basic ${authToken}`)
       .send(data)
-      .expect(400);
+      .expect(422)
+      .expect({
+        statusCode: 422,
+        code: 'invalid_union_discriminator',
+        options: [
+          'CHAIN_UPDATE',
+          'DELETED_MULTISIG_TRANSACTION',
+          'EXECUTED_MULTISIG_TRANSACTION',
+          'INCOMING_ETHER',
+          'INCOMING_TOKEN',
+          'MESSAGE_CREATED',
+          'MODULE_TRANSACTION',
+          'NEW_CONFIRMATION',
+          'MESSAGE_CONFIRMATION',
+          'OUTGOING_ETHER',
+          'OUTGOING_TOKEN',
+          'PENDING_MULTISIG_TRANSACTION',
+          'SAFE_APPS_UPDATE',
+        ],
+        path: ['type'],
+        message:
+          "Invalid discriminator value. Expected 'CHAIN_UPDATE' | 'DELETED_MULTISIG_TRANSACTION' | 'EXECUTED_MULTISIG_TRANSACTION' | 'INCOMING_ETHER' | 'INCOMING_TOKEN' | 'MESSAGE_CREATED' | 'MODULE_TRANSACTION' | 'NEW_CONFIRMATION' | 'MESSAGE_CONFIRMATION' | 'OUTGOING_ETHER' | 'OUTGOING_TOKEN' | 'PENDING_MULTISIG_TRANSACTION' | 'SAFE_APPS_UPDATE'",
+      });
   });
 
   it.each([
@@ -207,18 +231,26 @@ describe('Post Hook Events (Unit)', () => {
     },
   ])('$type clears balances', async (payload) => {
     const safeAddress = faker.finance.ethereumAddress();
-    const chainId = faker.string.numeric();
+    const chainId = faker.string.numeric({
+      exclude: configurationService.getOrThrow(
+        'features.zerionBalancesChainIds',
+      ),
+    });
     const cacheDir = new CacheDir(
-      `${chainId}_balances_${safeAddress}`,
+      `${chainId}_safe_balances_${getAddress(safeAddress)}`,
       faker.string.alpha(),
     );
-    await fakeCacheService.set(cacheDir, faker.string.alpha());
+    await fakeCacheService.set(
+      cacheDir,
+      faker.string.alpha(),
+      faker.number.int({ min: 1 }),
+    );
     const data = {
       address: safeAddress,
       chainId: chainId,
       ...payload,
     };
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       switch (url) {
         case `${safeConfigUrl}/api/v1/chains/${chainId}`:
           return Promise.resolve({
@@ -262,16 +294,20 @@ describe('Post Hook Events (Unit)', () => {
     const safeAddress = faker.finance.ethereumAddress();
     const chainId = faker.string.numeric();
     const cacheDir = new CacheDir(
-      `${chainId}_multisig_transactions_${safeAddress}`,
+      `${chainId}_multisig_transactions_${getAddress(safeAddress)}`,
       faker.string.alpha(),
     );
-    await fakeCacheService.set(cacheDir, faker.string.alpha());
+    await fakeCacheService.set(
+      cacheDir,
+      faker.string.alpha(),
+      faker.number.int({ min: 1 }),
+    );
     const data = {
       address: safeAddress,
       chainId: chainId,
       ...payload,
     };
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       switch (url) {
         case `${safeConfigUrl}/api/v1/chains/${chainId}`:
           return Promise.resolve({
@@ -318,13 +354,17 @@ describe('Post Hook Events (Unit)', () => {
       `${chainId}_multisig_transaction_${payload.safeTxHash}`,
       faker.string.alpha(),
     );
-    await fakeCacheService.set(cacheDir, faker.string.alpha());
+    await fakeCacheService.set(
+      cacheDir,
+      faker.string.alpha(),
+      faker.number.int({ min: 1 }),
+    );
     const data = {
       address: safeAddress,
       chainId: chainId,
       ...payload,
     };
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       switch (url) {
         case `${safeConfigUrl}/api/v1/chains/${chainId}`:
           return Promise.resolve({
@@ -360,16 +400,20 @@ describe('Post Hook Events (Unit)', () => {
     const safeAddress = faker.finance.ethereumAddress();
     const chainId = faker.string.numeric();
     const cacheDir = new CacheDir(
-      `${chainId}_safe_${safeAddress}`,
+      `${chainId}_safe_${getAddress(safeAddress)}`,
       faker.string.alpha(),
     );
-    await fakeCacheService.set(cacheDir, faker.string.alpha());
+    await fakeCacheService.set(
+      cacheDir,
+      faker.string.alpha(),
+      faker.number.int({ min: 1 }),
+    );
     const data = {
       address: safeAddress,
       chainId: chainId,
       ...payload,
     };
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       switch (url) {
         case `${safeConfigUrl}/api/v1/chains/${chainId}`:
           return Promise.resolve({
@@ -408,18 +452,26 @@ describe('Post Hook Events (Unit)', () => {
     },
   ])('$type clears safe collectibles', async (payload) => {
     const safeAddress = faker.finance.ethereumAddress();
-    const chainId = faker.string.numeric();
+    const chainId = faker.string.numeric({
+      exclude: configurationService.getOrThrow(
+        'features.zerionBalancesChainIds',
+      ),
+    });
     const cacheDir = new CacheDir(
-      `${chainId}_collectibles_${safeAddress}`,
+      `${chainId}_safe_collectibles_${getAddress(safeAddress)}`,
       faker.string.alpha(),
     );
-    await fakeCacheService.set(cacheDir, faker.string.alpha());
+    await fakeCacheService.set(
+      cacheDir,
+      faker.string.alpha(),
+      faker.number.int({ min: 1 }),
+    );
     const data = {
       address: safeAddress,
       chainId: chainId,
       ...payload,
     };
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       switch (url) {
         case `${safeConfigUrl}/api/v1/chains/${chainId}`:
           return Promise.resolve({
@@ -460,16 +512,20 @@ describe('Post Hook Events (Unit)', () => {
     const safeAddress = faker.finance.ethereumAddress();
     const chainId = faker.string.numeric();
     const cacheDir = new CacheDir(
-      `${chainId}_transfers_${safeAddress}`,
+      `${chainId}_transfers_${getAddress(safeAddress)}`,
       faker.string.alpha(),
     );
-    await fakeCacheService.set(cacheDir, faker.string.alpha());
+    await fakeCacheService.set(
+      cacheDir,
+      faker.string.alpha(),
+      faker.number.int({ min: 1 }),
+    );
     const data = {
       address: safeAddress,
       chainId: chainId,
       ...payload,
     };
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       switch (url) {
         case `${safeConfigUrl}/api/v1/chains/${chainId}`:
           return Promise.resolve({
@@ -505,16 +561,20 @@ describe('Post Hook Events (Unit)', () => {
     const safeAddress = faker.finance.ethereumAddress();
     const chainId = faker.string.numeric();
     const cacheDir = new CacheDir(
-      `${chainId}_incoming_transfers_${safeAddress}`,
+      `${chainId}_incoming_transfers_${getAddress(safeAddress)}`,
       faker.string.alpha(),
     );
-    await fakeCacheService.set(cacheDir, faker.string.alpha());
+    await fakeCacheService.set(
+      cacheDir,
+      faker.string.alpha(),
+      faker.number.int({ min: 1 }),
+    );
     const data = {
       address: safeAddress,
       chainId: chainId,
       ...payload,
     };
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       switch (url) {
         case `${safeConfigUrl}/api/v1/chains/${chainId}`:
           return Promise.resolve({
@@ -545,16 +605,20 @@ describe('Post Hook Events (Unit)', () => {
     const safeAddress = faker.finance.ethereumAddress();
     const chainId = faker.string.numeric();
     const cacheDir = new CacheDir(
-      `${chainId}_module_transactions_${safeAddress}`,
+      `${chainId}_module_transactions_${getAddress(safeAddress)}`,
       faker.string.alpha(),
     );
-    await fakeCacheService.set(cacheDir, faker.string.alpha());
+    await fakeCacheService.set(
+      cacheDir,
+      faker.string.alpha(),
+      faker.number.int({ min: 1 }),
+    );
     const data = {
       address: safeAddress,
       chainId: chainId,
       ...payload,
     };
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       switch (url) {
         case `${safeConfigUrl}/api/v1/chains/${chainId}`:
           return Promise.resolve({
@@ -610,16 +674,20 @@ describe('Post Hook Events (Unit)', () => {
     const safeAddress = faker.finance.ethereumAddress();
     const chainId = faker.string.numeric();
     const cacheDir = new CacheDir(
-      `${chainId}_all_transactions_${safeAddress}`,
+      `${chainId}_all_transactions_${getAddress(safeAddress)}`,
       faker.string.alpha(),
     );
-    await fakeCacheService.set(cacheDir, faker.string.alpha());
+    await fakeCacheService.set(
+      cacheDir,
+      faker.string.alpha(),
+      faker.number.int({ min: 1 }),
+    );
     const data = {
       address: safeAddress,
       chainId: chainId,
       ...payload,
     };
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       switch (url) {
         case `${safeConfigUrl}/api/v1/chains/${chainId}`:
           return Promise.resolve({
@@ -653,16 +721,20 @@ describe('Post Hook Events (Unit)', () => {
     const safeAddress = faker.finance.ethereumAddress();
     const chainId = faker.string.numeric();
     const cacheDir = new CacheDir(
-      `${chainId}_messages_${safeAddress}`,
+      `${chainId}_messages_${getAddress(safeAddress)}`,
       faker.string.alpha(),
     );
-    await fakeCacheService.set(cacheDir, faker.string.alpha());
+    await fakeCacheService.set(
+      cacheDir,
+      faker.string.alpha(),
+      faker.number.int({ min: 1 }),
+    );
     const data = {
       address: safeAddress,
       chainId: chainId,
       ...payload,
     };
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       switch (url) {
         case `${safeConfigUrl}/api/v1/chains/${chainId}`:
           return Promise.resolve({
@@ -690,7 +762,11 @@ describe('Post Hook Events (Unit)', () => {
   ])('$type clears chain', async (payload) => {
     const chainId = faker.string.numeric();
     const cacheDir = new CacheDir(`${chainId}_chain`, '');
-    await fakeCacheService.set(cacheDir, faker.string.alpha());
+    await fakeCacheService.set(
+      cacheDir,
+      faker.string.alpha(),
+      faker.number.int({ min: 1 }),
+    );
     const data = {
       chainId: chainId,
       ...payload,
@@ -712,7 +788,11 @@ describe('Post Hook Events (Unit)', () => {
   ])('$type clears chains', async (payload) => {
     const chainId = faker.string.numeric();
     const cacheDir = new CacheDir(`chains`, '');
-    await fakeCacheService.set(cacheDir, faker.string.alpha());
+    await fakeCacheService.set(
+      cacheDir,
+      faker.string.alpha(),
+      faker.number.int({ min: 1 }),
+    );
     const data = {
       chainId: chainId,
       ...payload,
@@ -734,7 +814,11 @@ describe('Post Hook Events (Unit)', () => {
   ])('$type clears safe apps', async (payload) => {
     const chainId = faker.string.numeric();
     const cacheDir = new CacheDir(`${chainId}_safe_apps`, '');
-    await fakeCacheService.set(cacheDir, faker.string.alpha());
+    await fakeCacheService.set(
+      cacheDir,
+      faker.string.alpha(),
+      faker.number.int({ min: 1 }),
+    );
     const data = {
       chainId: chainId,
       ...payload,

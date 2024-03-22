@@ -21,14 +21,15 @@ import {
 import { IAccountDataSource } from '@/domain/interfaces/account.datasource.interface';
 import { chainBuilder } from '@/domain/chains/entities/__tests__/chain.builder';
 import { safeBuilder } from '@/domain/safe/entities/__tests__/safe.builder';
-import { getAddress } from 'viem';
 import { EmailControllerModule } from '@/routes/email/email.controller.module';
 import { INestApplication } from '@nestjs/common';
-import { AccountDoesNotExistError } from '@/datasources/account/errors/account-does-not-exist.error';
+import { AccountDoesNotExistError } from '@/domain/account/errors/account-does-not-exist.error';
 import {
   Account,
   EmailAddress,
 } from '@/domain/account/entities/account.entity';
+import { accountBuilder } from '@/domain/account/entities/__tests__/account.builder';
+import { getAddress } from 'viem';
 
 const verificationCodeTtlMs = 100;
 
@@ -39,7 +40,7 @@ describe('Email controller edit email tests', () => {
   let networkService: jest.MockedObjectDeep<INetworkService>;
 
   beforeEach(async () => {
-    jest.clearAllMocks();
+    jest.resetAllMocks();
     jest.useFakeTimers();
 
     const defaultConfiguration = configuration();
@@ -87,7 +88,12 @@ describe('Email controller edit email tests', () => {
     await app.close();
   });
 
-  it('edits email successfully', async () => {
+  it.each([
+    // non-checksummed address
+    { safeAddress: faker.finance.ethereumAddress().toLowerCase() },
+    // checksummed address
+    { safeAddress: getAddress(faker.finance.ethereumAddress()) },
+  ])('edits email successfully', async ({ safeAddress }) => {
     const chain = chainBuilder().build();
     const prevEmailAddress = faker.internet.email();
     const emailAddress = faker.internet.email();
@@ -95,15 +101,13 @@ describe('Email controller edit email tests', () => {
     const privateKey = generatePrivateKey();
     const signer = privateKeyToAccount(privateKey);
     const signerAddress = signer.address;
-    // Signer is owner of safe
     const safe = safeBuilder()
-      .with('owners', [signerAddress])
-      // Faker generates non-checksum addresses only
-      .with('address', getAddress(faker.finance.ethereumAddress()))
+      // Allow test of non-checksummed address by casting
+      .with('address', safeAddress as `0x${string}`)
       .build();
     const message = `email-edit-${chain.chainId}-${safe.address}-${emailAddress}-${signerAddress}-${timestamp}`;
     const signature = await signer.signMessage({ message });
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       switch (url) {
         case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
           return Promise.resolve({ data: chain, status: 200 });
@@ -113,21 +117,64 @@ describe('Email controller edit email tests', () => {
           return Promise.reject(new Error(`Could not match ${url}`));
       }
     });
-    accountDataSource.getAccount.mockResolvedValue({
-      emailAddress: new EmailAddress(prevEmailAddress),
-    } as Account);
-    accountDataSource.updateAccountEmail.mockResolvedValue();
+    accountDataSource.getAccount.mockResolvedValue(
+      accountBuilder()
+        .with('chainId', chain.chainId)
+        .with('signer', signerAddress)
+        .with('isVerified', true)
+        .with('safeAddress', getAddress(safe.address))
+        .with('emailAddress', new EmailAddress(prevEmailAddress))
+        .build(),
+    );
+    accountDataSource.updateAccountEmail.mockResolvedValue(
+      accountBuilder()
+        .with('emailAddress', new EmailAddress(emailAddress))
+        .build(),
+    );
 
     await request(app.getHttpServer())
-      .put(`/v1/chains/${chain.chainId}/safes/${safe.address}/emails`)
+      .put(
+        `/v1/chains/${chain.chainId}/safes/${safe.address}/emails/${signer.address}`,
+      )
+      .set('Safe-Wallet-Signature', signature)
+      .set('Safe-Wallet-Signature-Timestamp', timestamp.toString())
       .send({
         emailAddress,
-        signer: signer.address,
-        timestamp,
-        signature,
       })
       .expect(202)
       .expect({});
+
+    expect(accountDataSource.updateAccountEmail).toHaveBeenCalledTimes(1);
+    expect(accountDataSource.updateAccountEmail).toHaveBeenCalledWith({
+      chainId: chain.chainId,
+      emailAddress: new EmailAddress(emailAddress),
+      // Should always call with the checksummed address
+      safeAddress: getAddress(safe.address),
+      signer: signerAddress,
+      unsubscriptionToken: expect.any(String),
+    });
+    expect(accountDataSource.setEmailVerificationCode).toHaveBeenCalledTimes(1);
+    expect(accountDataSource.setEmailVerificationCode).toHaveBeenCalledWith({
+      chainId: chain.chainId,
+      code: expect.any(String),
+      signer: signerAddress,
+      // Should always call with the checksummed address
+      safeAddress: getAddress(safe.address),
+      codeGenerationDate: expect.any(Date),
+    });
+    expect(
+      accountDataSource.setEmailVerificationSentDate,
+    ).toHaveBeenCalledTimes(1);
+    expect(accountDataSource.setEmailVerificationSentDate).toHaveBeenCalledWith(
+      {
+        chainId: chain.chainId,
+        // Should always call with the checksummed address
+        safeAddress: getAddress(safe.address),
+        signer: signerAddress,
+        sentOn: expect.any(Date),
+      },
+    );
+    // TODO: validate that `IEmailApi.createMessage` is triggered with the correct code
   });
 
   it('should return 409 if trying to edit with the same email', async () => {
@@ -137,15 +184,10 @@ describe('Email controller edit email tests', () => {
     const privateKey = generatePrivateKey();
     const signer = privateKeyToAccount(privateKey);
     const signerAddress = signer.address;
-    // Signer is owner of safe
-    const safe = safeBuilder()
-      .with('owners', [signerAddress])
-      // Faker generates non-checksum addresses only
-      .with('address', getAddress(faker.finance.ethereumAddress()))
-      .build();
+    const safe = safeBuilder().build();
     const message = `email-edit-${chain.chainId}-${safe.address}-${emailAddress}-${signerAddress}-${timestamp}`;
     const signature = await signer.signMessage({ message });
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       switch (url) {
         case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
           return Promise.resolve({ data: chain, status: 200 });
@@ -160,19 +202,62 @@ describe('Email controller edit email tests', () => {
     } as Account);
 
     await request(app.getHttpServer())
-      .put(`/v1/chains/${chain.chainId}/safes/${safe.address}/emails`)
+      .put(
+        `/v1/chains/${chain.chainId}/safes/${safe.address}/emails/${signer.address}`,
+      )
+      .set('Safe-Wallet-Signature', signature)
+      .set('Safe-Wallet-Signature-Timestamp', timestamp.toString())
       .send({
         emailAddress,
-        signer: signer.address,
-        timestamp,
-        signature,
       })
       .expect(409)
       .expect({
         statusCode: 409,
         message: 'Email address matches that of the Safe owner.',
       });
+
     expect(accountDataSource.updateAccountEmail).toHaveBeenCalledTimes(0);
+    expect(accountDataSource.setEmailVerificationCode).toHaveBeenCalledTimes(0);
+    expect(
+      accountDataSource.setEmailVerificationSentDate,
+    ).toHaveBeenCalledTimes(0);
+  });
+
+  it('returns 422 if Safe address is not a valid Ethereum address', async () => {
+    const chain = chainBuilder().build();
+    const emailAddress = faker.internet.email();
+    const timestamp = jest.now();
+    const privateKey = generatePrivateKey();
+    const signer = privateKeyToAccount(privateKey);
+    const signerAddress = signer.address;
+    const invalidSafeAddress = faker.word.sample();
+    const message = `email-edit-${chain.chainId}-${invalidSafeAddress}-${emailAddress}-${signerAddress}-${timestamp}`;
+    const signature = await signer.signMessage({ message });
+    accountDataSource.getAccount.mockResolvedValue({
+      emailAddress: new EmailAddress(emailAddress),
+    } as Account);
+
+    await request(app.getHttpServer())
+      .put(
+        `/v1/chains/${chain.chainId}/safes/${invalidSafeAddress}/emails/${signer.address}`,
+      )
+      .set('Safe-Wallet-Signature', signature)
+      .set('Safe-Wallet-Signature-Timestamp', timestamp.toString())
+      .send({
+        emailAddress,
+      })
+      .expect(422)
+      .expect({
+        message: `Address "${invalidSafeAddress}" is invalid.`,
+        error: 'Unprocessable Entity',
+        statusCode: 422,
+      });
+
+    expect(accountDataSource.updateAccountEmail).toHaveBeenCalledTimes(0);
+    expect(accountDataSource.setEmailVerificationCode).toHaveBeenCalledTimes(0);
+    expect(
+      accountDataSource.setEmailVerificationSentDate,
+    ).toHaveBeenCalledTimes(0);
   });
 
   it('should return 404 if trying to edit a non-existent email entry', async () => {
@@ -182,15 +267,10 @@ describe('Email controller edit email tests', () => {
     const privateKey = generatePrivateKey();
     const signer = privateKeyToAccount(privateKey);
     const signerAddress = signer.address;
-    // Signer is owner of safe
-    const safe = safeBuilder()
-      .with('owners', [signerAddress])
-      // Faker generates non-checksum addresses only
-      .with('address', getAddress(faker.finance.ethereumAddress()))
-      .build();
+    const safe = safeBuilder().build();
     const message = `email-edit-${chain.chainId}-${safe.address}-${emailAddress}-${signerAddress}-${timestamp}`;
     const signature = await signer.signMessage({ message });
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       switch (url) {
         case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
           return Promise.resolve({ data: chain, status: 200 });
@@ -205,19 +285,25 @@ describe('Email controller edit email tests', () => {
     );
 
     await request(app.getHttpServer())
-      .put(`/v1/chains/${chain.chainId}/safes/${safe.address}/emails`)
+      .put(
+        `/v1/chains/${chain.chainId}/safes/${safe.address}/emails/${signer.address}`,
+      )
+      .set('Safe-Wallet-Signature', signature)
+      .set('Safe-Wallet-Signature-Timestamp', timestamp.toString())
       .send({
         emailAddress,
-        signer: signer.address,
-        timestamp,
-        signature,
       })
       .expect(404)
       .expect({
         statusCode: 404,
         message: `No email address was found for the provided signer ${signerAddress}.`,
       });
+
     expect(accountDataSource.updateAccountEmail).toHaveBeenCalledTimes(0);
+    expect(accountDataSource.setEmailVerificationCode).toHaveBeenCalledTimes(0);
+    expect(
+      accountDataSource.setEmailVerificationSentDate,
+    ).toHaveBeenCalledTimes(0);
   });
 
   it('return 500 if updating fails in general', async () => {
@@ -228,15 +314,10 @@ describe('Email controller edit email tests', () => {
     const privateKey = generatePrivateKey();
     const signer = privateKeyToAccount(privateKey);
     const signerAddress = signer.address;
-    // Signer is owner of safe
-    const safe = safeBuilder()
-      .with('owners', [signerAddress])
-      // Faker generates non-checksum addresses only
-      .with('address', getAddress(faker.finance.ethereumAddress()))
-      .build();
+    const safe = safeBuilder().build();
     const message = `email-edit-${chain.chainId}-${safe.address}-${emailAddress}-${signerAddress}-${timestamp}`;
     const signature = await signer.signMessage({ message });
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       switch (url) {
         case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
           return Promise.resolve({ data: chain, status: 200 });
@@ -252,18 +333,25 @@ describe('Email controller edit email tests', () => {
     accountDataSource.updateAccountEmail.mockRejectedValue(new Error());
 
     await request(app.getHttpServer())
-      .put(`/v1/chains/${chain.chainId}/safes/${safe.address}/emails`)
+      .put(
+        `/v1/chains/${chain.chainId}/safes/${safe.address}/emails/${signer.address}`,
+      )
+      .set('Safe-Wallet-Signature', signature)
+      .set('Safe-Wallet-Signature-Timestamp', timestamp.toString())
       .send({
         emailAddress,
-        signer: signer.address,
-        timestamp,
-        signature,
       })
       .expect(500)
       .expect({
         code: 500,
         message: 'Internal server error',
       });
+
+    expect(accountDataSource.updateAccountEmail).toHaveBeenCalledTimes(1);
+    expect(accountDataSource.setEmailVerificationCode).toHaveBeenCalledTimes(0);
+    expect(
+      accountDataSource.setEmailVerificationSentDate,
+    ).toHaveBeenCalledTimes(0);
   });
 
   it('returns 403 is message was signed with a timestamp older than 5 minutes', async () => {
@@ -273,24 +361,20 @@ describe('Email controller edit email tests', () => {
     const privateKey = generatePrivateKey();
     const account = privateKeyToAccount(privateKey);
     const accountAddress = account.address;
-    // Signer is owner of safe
-    const safe = safeBuilder()
-      .with('owners', [accountAddress])
-      // Faker generates non-checksum addresses only
-      .with('address', getAddress(faker.finance.ethereumAddress()))
-      .build();
+    const safe = safeBuilder().build();
     const message = `email-edit-${chain.chainId}-${safe.address}-${emailAddress}-${accountAddress}-${timestamp}`;
     const signature = await account.signMessage({ message });
 
     jest.advanceTimersByTime(5 * 60 * 1000);
 
     await request(app.getHttpServer())
-      .put(`/v1/chains/${chain.chainId}/safes/${safe.address}/emails`)
+      .put(
+        `/v1/chains/${chain.chainId}/safes/${safe.address}/emails/${account.address}`,
+      )
+      .set('Safe-Wallet-Signature', signature)
+      .set('Safe-Wallet-Signature-Timestamp', timestamp.toString())
       .send({
         emailAddress,
-        account: account.address,
-        timestamp,
-        signature,
       })
       .expect(403)
       .expect({
@@ -298,6 +382,12 @@ describe('Email controller edit email tests', () => {
         error: 'Forbidden',
         statusCode: 403,
       });
+
+    expect(accountDataSource.updateAccountEmail).toHaveBeenCalledTimes(0);
+    expect(accountDataSource.setEmailVerificationCode).toHaveBeenCalledTimes(0);
+    expect(
+      accountDataSource.setEmailVerificationSentDate,
+    ).toHaveBeenCalledTimes(0);
   });
 
   it('returns 403 on wrong message signature', async () => {
@@ -307,22 +397,18 @@ describe('Email controller edit email tests', () => {
     const privateKey = generatePrivateKey();
     const account = privateKeyToAccount(privateKey);
     const accountAddress = account.address;
-    // Signer is owner of safe
-    const safe = safeBuilder()
-      .with('owners', [accountAddress])
-      // Faker generates non-checksum addresses only
-      .with('address', getAddress(faker.finance.ethereumAddress()))
-      .build();
+    const safe = safeBuilder().build();
     const message = `some-action-${chain.chainId}-${safe.address}-${emailAddress}-${accountAddress}-${timestamp}`;
     const signature = await account.signMessage({ message });
 
     await request(app.getHttpServer())
-      .put(`/v1/chains/${chain.chainId}/safes/${safe.address}/emails`)
+      .put(
+        `/v1/chains/${chain.chainId}/safes/${safe.address}/emails/${account.address}`,
+      )
+      .set('Safe-Wallet-Signature', signature)
+      .set('Safe-Wallet-Signature-Timestamp', timestamp.toString())
       .send({
         emailAddress,
-        account: account.address,
-        timestamp,
-        signature,
       })
       .expect(403)
       .expect({
@@ -330,46 +416,11 @@ describe('Email controller edit email tests', () => {
         error: 'Forbidden',
         statusCode: 403,
       });
-  });
 
-  it('returns 403 if message not signed by owner', async () => {
-    const chain = chainBuilder().build();
-    const emailAddress = faker.internet.email();
-    const timestamp = jest.now();
-    const privateKey = generatePrivateKey();
-    const account = privateKeyToAccount(privateKey);
-    const accountAddress = account.address;
-    // Signer is owner of safe
-    const safe = safeBuilder()
-      // Faker generates non-checksum addresses only
-      .with('address', getAddress(faker.finance.ethereumAddress()))
-      .build();
-    const message = `email-edit-${chain.chainId}-${safe.address}-${emailAddress}-${accountAddress}-${timestamp}`;
-    const signature = await account.signMessage({ message });
-    networkService.get.mockImplementation((url) => {
-      switch (url) {
-        case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
-          return Promise.resolve({ data: chain, status: 200 });
-        case `${chain.transactionService}/api/v1/safes/${safe.address}`:
-          return Promise.resolve({ data: safe, status: 200 });
-        default:
-          return Promise.reject(new Error(`Could not match ${url}`));
-      }
-    });
-
-    await request(app.getHttpServer())
-      .put(`/v1/chains/${chain.chainId}/safes/${safe.address}/emails`)
-      .send({
-        emailAddress,
-        account: account.address,
-        timestamp,
-        signature,
-      })
-      .expect(403)
-      .expect({
-        message: 'Forbidden resource',
-        error: 'Forbidden',
-        statusCode: 403,
-      });
+    expect(accountDataSource.updateAccountEmail).toHaveBeenCalledTimes(0);
+    expect(accountDataSource.setEmailVerificationCode).toHaveBeenCalledTimes(0);
+    expect(
+      accountDataSource.setEmailVerificationSentDate,
+    ).toHaveBeenCalledTimes(0);
   });
 });

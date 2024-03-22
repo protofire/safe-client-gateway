@@ -35,6 +35,7 @@ import { NetworkModule } from '@/datasources/network/network.module';
 import { NetworkResponseError } from '@/datasources/network/entities/network.error.entity';
 import { AccountDataSourceModule } from '@/datasources/account/account.datasource.module';
 import { TestAccountDataSourceModule } from '@/datasources/account/__tests__/test.account.datasource.module';
+import { getAddress } from 'viem';
 
 describe('List multisig transactions by Safe - Transactions Controller (Unit)', () => {
   let app: INestApplication;
@@ -42,7 +43,7 @@ describe('List multisig transactions by Safe - Transactions Controller (Unit)', 
   let networkService: jest.MockedObjectDeep<INetworkService>;
 
   beforeEach(async () => {
-    jest.clearAllMocks();
+    jest.resetAllMocks();
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(configuration)],
@@ -89,10 +90,9 @@ describe('List multisig transactions by Safe - Transactions Controller (Unit)', 
       });
 
     expect(networkService.get).toHaveBeenCalledTimes(1);
-    expect(networkService.get).toHaveBeenCalledWith(
-      `${safeConfigUrl}/api/v1/chains/${chainId}`,
-      undefined,
-    );
+    expect(networkService.get).toHaveBeenCalledWith({
+      url: `${safeConfigUrl}/api/v1/chains/${chainId}`,
+    });
   });
 
   it('Failure: Transaction API fails', async () => {
@@ -120,20 +120,19 @@ describe('List multisig transactions by Safe - Transactions Controller (Unit)', 
       });
 
     expect(networkService.get).toHaveBeenCalledTimes(2);
-    expect(networkService.get).toHaveBeenCalledWith(
-      `${safeConfigUrl}/api/v1/chains/${chainId}`,
-      undefined,
-    );
-    expect(networkService.get).toHaveBeenCalledWith(
-      `${chainResponse.transactionService}/api/v1/safes/${safeAddress}/multisig-transactions/`,
-      expect.objectContaining({
+    expect(networkService.get).toHaveBeenCalledWith({
+      url: `${safeConfigUrl}/api/v1/chains/${chainId}`,
+    });
+    expect(networkService.get).toHaveBeenCalledWith({
+      url: `${chainResponse.transactionService}/api/v1/safes/${safeAddress}/multisig-transactions/`,
+      networkRequest: expect.objectContaining({
         params: expect.objectContaining({
           ordering: '-nonce',
           safe: safeAddress,
           trusted: true,
         }),
       }),
-    );
+    });
   });
 
   it('Failure: data validation fails', async () => {
@@ -221,9 +220,9 @@ describe('List multisig transactions by Safe - Transactions Controller (Unit)', 
       .build();
     const token = tokenBuilder()
       .with('type', TokenType.Erc20)
-      .with('address', multisigTransaction.to)
+      .with('address', getAddress(multisigTransaction.to))
       .build();
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       const getChainUrl = `${safeConfigUrl}/api/v1/chains/${chain.chainId}`;
       const getMultisigTransactionsUrl = `${chain.transactionService}/api/v1/safes/${safe.address}/multisig-transactions/`;
       const getSafeUrl = `${chain.transactionService}/api/v1/safes/${safe.address}`;
@@ -346,7 +345,7 @@ describe('List multisig transactions by Safe - Transactions Controller (Unit)', 
         confirmationBuilder().build(),
       ])
       .build();
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       const getChainUrl = `${safeConfigUrl}/api/v1/chains/${chain.chainId}`;
       const getMultisigTransactionsUrl = `${chain.transactionService}/api/v1/safes/${safe.address}/multisig-transactions/`;
       const getSafeUrl = `${chain.transactionService}/api/v1/safes/${safe.address}`;
@@ -443,7 +442,7 @@ describe('List multisig transactions by Safe - Transactions Controller (Unit)', 
           .build(),
       )
       .build();
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       const getChainUrl = `${safeConfigUrl}/api/v1/chains/${chain.chainId}`;
       const getSafeAppsUrl = `${safeConfigUrl}/api/v1/safe-apps/`;
       const getMultisigTransactionsUrl = `${chain.transactionService}/api/v1/safes/${domainTransaction.safe}/multisig-transactions/`;

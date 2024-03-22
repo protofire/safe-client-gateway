@@ -8,7 +8,6 @@ import { TestCacheModule } from '@/datasources/cache/__tests__/test.cache.module
 import { TestNetworkModule } from '@/datasources/network/__tests__/test.network.module';
 import { chainBuilder } from '@/domain/chains/entities/__tests__/chain.builder';
 import { pageBuilder } from '@/domain/entities/__tests__/page.builder';
-import { GetEstimationDto } from '@/domain/estimations/entities/get-estimation.dto.entity';
 import { estimationBuilder } from '@/domain/estimations/entities/__tests__/estimation.builder';
 import {
   multisigTransactionBuilder,
@@ -35,7 +34,7 @@ describe('Estimations Controller (Unit)', () => {
   let networkService: jest.MockedObjectDeep<INetworkService>;
 
   beforeEach(async () => {
-    jest.clearAllMocks();
+    jest.resetAllMocks();
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(configuration)],
@@ -68,7 +67,7 @@ describe('Estimations Controller (Unit)', () => {
       const safe = safeBuilder().build();
       const estimation = estimationBuilder().build();
       const lastTransaction = multisigTransactionBuilder().build();
-      networkService.get.mockImplementation((url) => {
+      networkService.get.mockImplementation(({ url }) => {
         const chainsUrl = `${safeConfigUrl}/api/v1/chains/${chain.chainId}`;
         const getSafeUrl = `${chain.transactionService}/api/v1/safes/${safe.address}`;
         const multisigTransactionsUrl = `${chain.transactionService}/api/v1/safes/${safe.address}/multisig-transactions/`;
@@ -89,7 +88,7 @@ describe('Estimations Controller (Unit)', () => {
         }
         return Promise.reject(`No matching rule for url: ${url}`);
       });
-      networkService.post.mockImplementation((url) => {
+      networkService.post.mockImplementation(({ url }) => {
         const estimationsUrl = `${chain.transactionService}/api/v1/safes/${safe.address}/multisig-transactions/estimations/`;
         return url === estimationsUrl
           ? Promise.resolve({ data: estimation, status: 200 })
@@ -100,14 +99,12 @@ describe('Estimations Controller (Unit)', () => {
         .post(
           `/v2/chains/${chain.chainId}/safes/${safe.address}/multisig-transactions/estimations`,
         )
-        .send(
-          new GetEstimationDto(
-            faker.finance.ethereumAddress(),
-            faker.string.numeric(),
-            faker.string.hexadecimal({ length: 32 }),
-            0,
-          ),
-        )
+        .send({
+          to: faker.finance.ethereumAddress(),
+          value: faker.string.numeric(),
+          data: faker.string.hexadecimal({ length: 32 }),
+          operation: 0,
+        })
         .expect(200)
         .expect({
           currentNonce: safe.nonce,
@@ -117,20 +114,78 @@ describe('Estimations Controller (Unit)', () => {
     });
   });
 
+  it('should validate the response', async () => {
+    const chain = chainBuilder().build();
+    const safe = safeBuilder().build();
+    const estimation = { invalid: 'value' };
+    const lastTransaction = multisigTransactionBuilder().build();
+    networkService.get.mockImplementation(({ url }) => {
+      const chainsUrl = `${safeConfigUrl}/api/v1/chains/${chain.chainId}`;
+      const getSafeUrl = `${chain.transactionService}/api/v1/safes/${safe.address}`;
+      const multisigTransactionsUrl = `${chain.transactionService}/api/v1/safes/${safe.address}/multisig-transactions/`;
+      if (url === chainsUrl) {
+        return Promise.resolve({ data: chain, status: 200 });
+      }
+      if (url === getSafeUrl) {
+        return Promise.resolve({ data: safe, status: 200 });
+      }
+      if (url === multisigTransactionsUrl) {
+        return Promise.resolve({
+          data: pageBuilder()
+            .with('count', 1)
+            .with('results', [multisigTransactionToJson(lastTransaction)])
+            .build(),
+          status: 200,
+        });
+      }
+      return Promise.reject(`No matching rule for url: ${url}`);
+    });
+    networkService.post.mockImplementation(({ url }) => {
+      const estimationsUrl = `${chain.transactionService}/api/v1/safes/${safe.address}/multisig-transactions/estimations/`;
+      return url === estimationsUrl
+        ? Promise.resolve({ data: estimation, status: 200 })
+        : Promise.reject(`No matching rule for url: ${url}`);
+    });
+
+    await request(app.getHttpServer())
+      .post(
+        `/v2/chains/${chain.chainId}/safes/${safe.address}/multisig-transactions/estimations`,
+      )
+      .send({
+        to: faker.finance.ethereumAddress(),
+        value: faker.string.numeric(),
+        data: faker.string.hexadecimal({ length: 32 }),
+        operation: 0,
+      })
+      .expect(500)
+      .expect({
+        statusCode: 500,
+        message: 'Internal server error',
+      });
+  });
+
   it('Should get a validation error', async () => {
-    const getEstimationDto = new GetEstimationDto(
-      faker.finance.ethereumAddress(),
-      faker.string.numeric(),
-      faker.string.hexadecimal({ length: 32 }),
-      1,
-    );
+    const getEstimationDto = {
+      to: faker.finance.ethereumAddress(),
+      value: faker.string.numeric(),
+      data: faker.string.hexadecimal({ length: 32 }),
+      operation: 1,
+    };
+
     await request(app.getHttpServer())
       .post(
         `/v2/chains/${faker.string.numeric()}/safes/${faker.finance.ethereumAddress()}/multisig-transactions/estimations`,
       )
       .send(omit(getEstimationDto, 'value'))
-      .expect(400)
-      .expect({ message: 'Validation failed', code: 42, arguments: [] });
+      .expect(422)
+      .expect({
+        statusCode: 422,
+        code: 'invalid_type',
+        expected: 'string',
+        received: 'undefined',
+        path: ['value'],
+        message: 'Required',
+      });
   });
 
   it('should return last transaction nonce plus 1 as recommended nonce', async () => {
@@ -143,7 +198,7 @@ describe('Estimations Controller (Unit)', () => {
     const lastTransaction = multisigTransactionBuilder()
       .with('nonce', faker.number.int({ min: 51 }))
       .build();
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       const chainsUrl = `${safeConfigUrl}/api/v1/chains/${chain.chainId}`;
       const getSafeUrl = `${chain.transactionService}/api/v1/safes/${address}`;
       const multisigTransactionsUrl = `${chain.transactionService}/api/v1/safes/${address}/multisig-transactions/`;
@@ -164,7 +219,7 @@ describe('Estimations Controller (Unit)', () => {
       }
       return Promise.reject(`No matching rule for url: ${url}`);
     });
-    networkService.post.mockImplementation((url) => {
+    networkService.post.mockImplementation(({ url }) => {
       const estimationsUrl = `${chain.transactionService}/api/v1/safes/${address}/multisig-transactions/estimations/`;
       return url === estimationsUrl
         ? Promise.resolve({ data: estimation, status: 200 })
@@ -175,14 +230,12 @@ describe('Estimations Controller (Unit)', () => {
       .post(
         `/v2/chains/${chain.chainId}/safes/${address}/multisig-transactions/estimations`,
       )
-      .send(
-        new GetEstimationDto(
-          faker.finance.ethereumAddress(),
-          faker.string.numeric(),
-          faker.string.hexadecimal({ length: 32 }),
-          0,
-        ),
-      )
+      .send({
+        to: faker.finance.ethereumAddress(),
+        value: faker.string.numeric(),
+        data: faker.string.hexadecimal({ length: 32 }),
+        operation: 0,
+      })
       .expect(200)
       .expect({
         currentNonce: safe.nonce,
@@ -196,7 +249,7 @@ describe('Estimations Controller (Unit)', () => {
     const chain = chainBuilder().build();
     const safe = safeBuilder().with('nonce', faker.number.int()).build();
     const estimation = estimationBuilder().build();
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       const chainsUrl = `${safeConfigUrl}/api/v1/chains/${chain.chainId}`;
       const getSafeUrl = `${chain.transactionService}/api/v1/safes/${address}`;
       const multisigTransactionsUrl = `${chain.transactionService}/api/v1/safes/${address}/multisig-transactions/`;
@@ -214,7 +267,7 @@ describe('Estimations Controller (Unit)', () => {
       }
       return Promise.reject(`No matching rule for url: ${url}`);
     });
-    networkService.post.mockImplementation((url) => {
+    networkService.post.mockImplementation(({ url }) => {
       const estimationsUrl = `${chain.transactionService}/api/v1/safes/${address}/multisig-transactions/estimations/`;
       return url === estimationsUrl
         ? Promise.resolve({ data: estimation, status: 200 })
@@ -225,14 +278,12 @@ describe('Estimations Controller (Unit)', () => {
       .post(
         `/v2/chains/${chain.chainId}/safes/${address}/multisig-transactions/estimations`,
       )
-      .send(
-        new GetEstimationDto(
-          faker.finance.ethereumAddress(),
-          faker.string.numeric(),
-          faker.string.hexadecimal({ length: 32 }),
-          0,
-        ),
-      )
+      .send({
+        to: faker.finance.ethereumAddress(),
+        value: faker.string.numeric(),
+        data: faker.string.hexadecimal({ length: 32 }),
+        operation: 0,
+      })
       .expect(200)
       .expect({
         currentNonce: safe.nonce,
@@ -249,7 +300,7 @@ describe('Estimations Controller (Unit)', () => {
     const lastTransaction = multisigTransactionBuilder()
       .with('nonce', faker.number.int({ max: safe.nonce }))
       .build();
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       const chainsUrl = `${safeConfigUrl}/api/v1/chains/${chain.chainId}`;
       const getSafeUrl = `${chain.transactionService}/api/v1/safes/${address}`;
       const multisigTransactionsUrl = `${chain.transactionService}/api/v1/safes/${address}/multisig-transactions/`;
@@ -270,7 +321,7 @@ describe('Estimations Controller (Unit)', () => {
       }
       return Promise.reject(`No matching rule for url: ${url}`);
     });
-    networkService.post.mockImplementation((url) => {
+    networkService.post.mockImplementation(({ url }) => {
       const estimationsUrl = `${chain.transactionService}/api/v1/safes/${address}/multisig-transactions/estimations/`;
       return url === estimationsUrl
         ? Promise.resolve({ data: estimation, status: 200 })
@@ -281,14 +332,12 @@ describe('Estimations Controller (Unit)', () => {
       .post(
         `/v2/chains/${chain.chainId}/safes/${address}/multisig-transactions/estimations`,
       )
-      .send(
-        new GetEstimationDto(
-          faker.finance.ethereumAddress(),
-          faker.string.numeric(),
-          faker.string.hexadecimal({ length: 32 }),
-          0,
-        ),
-      )
+      .send({
+        to: faker.finance.ethereumAddress(),
+        value: faker.string.numeric(),
+        data: faker.string.hexadecimal({ length: 32 }),
+        operation: 0,
+      })
       .expect(200)
       .expect({
         currentNonce: safe.nonce,

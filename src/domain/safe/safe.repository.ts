@@ -2,7 +2,6 @@ import { Inject, Injectable } from '@nestjs/common';
 import { isEmpty } from 'lodash';
 import { Page } from '@/domain/entities/page.entity';
 import { ITransactionApiManager } from '@/domain/interfaces/transaction-api.manager.interface';
-import { CreationTransactionValidator } from '@/domain/safe/creation-transaction.validator';
 import { CreationTransaction } from '@/domain/safe/entities/creation-transaction.entity';
 import { ModuleTransaction } from '@/domain/safe/entities/module-transaction.entity';
 import { MultisigTransaction } from '@/domain/safe/entities/multisig-transaction.entity';
@@ -10,11 +9,13 @@ import { SafeList } from '@/domain/safe/entities/safe-list.entity';
 import { Safe } from '@/domain/safe/entities/safe.entity';
 import { Transaction } from '@/domain/safe/entities/transaction.entity';
 import { Transfer } from '@/domain/safe/entities/transfer.entity';
-import { ModuleTransactionValidator } from '@/domain/safe/module-transaction.validator';
+import {
+  ModuleTransactionPageSchema,
+  ModuleTransactionSchema,
+} from '@/domain/safe/entities/schemas/module-transaction.schema';
 import { MultisigTransactionValidator } from '@/domain/safe/multisig-transaction.validator';
-import { SafeListValidator } from '@/domain/safe/safe-list.validator';
+import { SafeListSchema } from '@/domain/safe/entities/schemas/safe-list.schema';
 import { ISafeRepository } from '@/domain/safe/safe.repository.interface';
-import { SafeValidator } from '@/domain/safe/safe.validator';
 import { TransactionTypeValidator } from '@/domain/safe/transaction-type.validator';
 import { TransferValidator } from '@/domain/safe/transfer.validator';
 import { AddConfirmationDto } from '@/domain/transactions/entities/add-confirmation.dto.entity';
@@ -22,6 +23,8 @@ import { ProposeTransactionDto } from '@/domain/transactions/entities/propose-tr
 import { getAddress } from 'viem';
 import { ILoggingService, LoggingService } from '@/logging/logging.interface';
 import { IChainsRepository } from '@/domain/chains/chains.repository.interface';
+import { CreationTransactionSchema } from '@/domain/safe/entities/schemas/creation-transaction.schema';
+import { SafeSchema } from '@/domain/safe/entities/schemas/safe.schema';
 
 @Injectable()
 export class SafeRepository implements ISafeRepository {
@@ -29,12 +32,8 @@ export class SafeRepository implements ISafeRepository {
     @Inject(ITransactionApiManager)
     private readonly transactionApiManager: ITransactionApiManager,
     private readonly multisigTransactionValidator: MultisigTransactionValidator,
-    private readonly safeListValidator: SafeListValidator,
-    private readonly safeValidator: SafeValidator,
     private readonly transactionTypeValidator: TransactionTypeValidator,
     private readonly transferValidator: TransferValidator,
-    private readonly moduleTransactionValidator: ModuleTransactionValidator,
-    private readonly creationTransactionValidator: CreationTransactionValidator,
     @Inject(LoggingService) private readonly loggingService: ILoggingService,
     @Inject(IChainsRepository)
     private readonly chainsRepository: IChainsRepository,
@@ -43,8 +42,8 @@ export class SafeRepository implements ISafeRepository {
   async getSafe(args: { chainId: string; address: string }): Promise<Safe> {
     const transactionService =
       await this.transactionApiManager.getTransactionApi(args.chainId);
-    const safe: Safe = await transactionService.getSafe(args.address);
-    return this.safeValidator.validate(safe);
+    const safe = await transactionService.getSafe(args.address);
+    return SafeSchema.parse(safe);
   }
 
   async clearSafe(args: { chainId: string; address: string }): Promise<void> {
@@ -139,7 +138,7 @@ export class SafeRepository implements ISafeRepository {
     const moduleTransaction = await transactionService.getModuleTransaction(
       args.moduleTransactionId,
     );
-    return this.moduleTransactionValidator.validate(moduleTransaction);
+    return ModuleTransactionSchema.parse(moduleTransaction);
   }
 
   async getModuleTransactions(args: {
@@ -153,7 +152,7 @@ export class SafeRepository implements ISafeRepository {
     const transactionService =
       await this.transactionApiManager.getTransactionApi(args.chainId);
     const page = await transactionService.getModuleTransactions(args);
-    return this.moduleTransactionValidator.validatePage(page);
+    return ModuleTransactionPageSchema.parse(page);
   }
 
   async clearModuleTransactions(args: {
@@ -220,7 +219,7 @@ export class SafeRepository implements ISafeRepository {
     const createTransaction = await transactionService.getCreationTransaction(
       args.safeAddress,
     );
-    return this.creationTransactionValidator.validate(createTransaction);
+    return CreationTransactionSchema.parse(createTransaction);
   }
 
   async getTransactionHistory(args: {
@@ -371,12 +370,14 @@ export class SafeRepository implements ISafeRepository {
       args.ownerAddress,
     );
 
-    return this.safeListValidator.validate(safeList);
+    return SafeListSchema.parse(safeList);
   }
 
   async getAllSafesByOwner(args: {
     ownerAddress: string;
   }): Promise<{ [chainId: string]: Array<string> }> {
+    // Note: does not take pagination into account but we do not support
+    // enough chains for it to be an issue
     const { results } = await this.chainsRepository.getChains();
     const allSafeLists = await Promise.all(
       results.map(async ({ chainId }) => {
@@ -467,6 +468,6 @@ export class SafeRepository implements ISafeRepository {
       args.moduleAddress,
     );
 
-    return this.safeListValidator.validate(safesByModule);
+    return SafeListSchema.parse(safesByModule);
   }
 }

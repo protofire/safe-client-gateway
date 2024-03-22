@@ -20,7 +20,7 @@ describe('FetchNetworkService', () => {
   let target: FetchNetworkService;
 
   beforeEach(async () => {
-    jest.clearAllMocks();
+    jest.resetAllMocks();
     target = new FetchNetworkService(fetchClientMock, loggingServiceMock);
   });
 
@@ -28,7 +28,7 @@ describe('FetchNetworkService', () => {
     it(`get uses GET method`, async () => {
       const url = faker.internet.url({ appendSlash: false });
 
-      await target.get(url);
+      await target.get({ url });
 
       expect(fetchClientMock).toHaveBeenCalledTimes(1);
       expect(fetchClientMock).toHaveBeenCalledWith(`${url}/`, {
@@ -38,14 +38,14 @@ describe('FetchNetworkService', () => {
 
     it(`get calls fetch get with request`, async () => {
       const url = faker.internet.url({ appendSlash: false });
-      const request: NetworkRequest = {
+      const networkRequest: NetworkRequest = {
         params: { some_query_param: 'query_param' },
         headers: {
           test: 'value',
         },
       };
 
-      await target.get(url, request);
+      await target.get({ url, networkRequest });
 
       expect(fetchClientMock).toHaveBeenCalledTimes(1);
       expect(fetchClientMock).toHaveBeenCalledWith(
@@ -61,7 +61,7 @@ describe('FetchNetworkService', () => {
 
     it(`get should remove empty strings, null and undefined query params from the request`, async () => {
       const url = faker.internet.url({ appendSlash: false });
-      const request: NetworkRequest = {
+      const networkRequest: NetworkRequest = {
         params: {
           boolean: true,
           falsy_boolean: false,
@@ -75,7 +75,7 @@ describe('FetchNetworkService', () => {
         },
       };
 
-      await target.get(url, request);
+      await target.get({ url, networkRequest });
 
       expect(fetchClientMock).toHaveBeenCalledTimes(1);
       expect(fetchClientMock).toHaveBeenCalledWith(
@@ -98,7 +98,7 @@ describe('FetchNetworkService', () => {
       );
       fetchClientMock.mockRejectedValueOnce(error);
 
-      await expect(target.get(url)).rejects.toThrow(error);
+      await expect(target.get({ url })).rejects.toThrow(error);
 
       expect(loggingService.debug).toHaveBeenCalledTimes(1);
       expect(loggingService.debug).toHaveBeenCalledWith({
@@ -118,7 +118,7 @@ describe('FetchNetworkService', () => {
       const url = faker.internet.url({ appendSlash: false });
       const data = { [faker.word.sample()]: faker.string.alphanumeric() };
 
-      await target.post(url, data);
+      await target.post({ url, data });
 
       expect(fetchClientMock).toHaveBeenCalledTimes(1);
       expect(fetchClientMock).toHaveBeenCalledWith(`${url}/`, {
@@ -133,14 +133,14 @@ describe('FetchNetworkService', () => {
     it(`post calls fetch with request`, async () => {
       const url = faker.internet.url({ appendSlash: false });
       const data = { [faker.word.sample()]: faker.string.alphanumeric() };
-      const request: NetworkRequest = {
+      const networkRequest: NetworkRequest = {
         params: { some_query_param: 'query_param' },
         headers: {
           test: 'value',
         },
       };
 
-      await target.post(url, data, request);
+      await target.post({ url, data, networkRequest });
 
       expect(fetchClientMock).toHaveBeenCalledTimes(1);
       expect(fetchClientMock).toHaveBeenCalledWith(
@@ -168,7 +168,7 @@ describe('FetchNetworkService', () => {
       );
       fetchClientMock.mockRejectedValueOnce(error);
 
-      await expect(target.post(url, {})).rejects.toThrow(error);
+      await expect(target.post({ url, data: {} })).rejects.toThrow(error);
 
       expect(loggingService.debug).toHaveBeenCalledTimes(1);
       expect(loggingService.debug).toHaveBeenCalledWith({
@@ -187,12 +187,38 @@ describe('FetchNetworkService', () => {
     it(`delete uses DELETE method`, async () => {
       const url = faker.internet.url({ appendSlash: false });
 
-      await target.delete(url);
+      await target.delete({ url });
 
       expect(fetchClientMock).toHaveBeenCalledTimes(1);
-      expect(fetchClientMock).toHaveBeenCalledWith(url, {
+      expect(fetchClientMock).toHaveBeenCalledWith(`${url}/`, {
         method: 'DELETE',
       });
+    });
+
+    it(`delete calls fetch with request`, async () => {
+      const url = faker.internet.url({ appendSlash: false });
+      const data = { [faker.word.sample()]: faker.string.alphanumeric() };
+      const networkRequest: NetworkRequest = {
+        params: { some_query_param: 'query_param' },
+        headers: {
+          test: 'value',
+        },
+      };
+
+      await target.delete({ url, data, networkRequest });
+
+      expect(fetchClientMock).toHaveBeenCalledTimes(1);
+      expect(fetchClientMock).toHaveBeenCalledWith(
+        `${url}/?some_query_param=query_param`,
+        {
+          method: 'DELETE',
+          headers: {
+            test: 'value',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(data),
+        },
+      );
     });
 
     it(`delete logs response error`, async () => {
@@ -207,7 +233,7 @@ describe('FetchNetworkService', () => {
       );
       fetchClientMock.mockRejectedValueOnce(error);
 
-      await expect(target.delete(url)).rejects.toThrow(error);
+      await expect(target.delete({ url })).rejects.toThrow(error);
 
       expect(loggingService.debug).toHaveBeenCalledTimes(1);
       expect(loggingService.debug).toHaveBeenCalledWith({

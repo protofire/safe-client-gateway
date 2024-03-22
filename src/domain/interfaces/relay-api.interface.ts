@@ -1,5 +1,10 @@
-export interface RelayApi {
-  getRelayCount(args: { chainId: string; address: string }): Promise<number>;
+export const IRelayApi = Symbol('IRelayApi');
 
-  relay(args: { chainId: string; data: string; to: string }): Promise<unknown>;
+export interface IRelayApi {
+  relay(args: {
+    chainId: string;
+    to: string;
+    data: string;
+    gasLimit: bigint | null;
+  }): Promise<{ taskId: string }>;
 }

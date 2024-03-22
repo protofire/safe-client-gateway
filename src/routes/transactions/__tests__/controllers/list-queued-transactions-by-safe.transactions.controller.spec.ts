@@ -26,6 +26,7 @@ import {
   NetworkService,
 } from '@/datasources/network/network.service.interface';
 import { pageBuilder } from '@/domain/entities/__tests__/page.builder';
+import { getAddress } from 'viem';
 
 describe('List queued transactions by Safe - Transactions Controller (Unit)', () => {
   let app: INestApplication;
@@ -33,7 +34,7 @@ describe('List queued transactions by Safe - Transactions Controller (Unit)', ()
   let networkService: jest.MockedObjectDeep<INetworkService>;
 
   beforeEach(async () => {
-    jest.clearAllMocks();
+    jest.resetAllMocks();
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [
@@ -66,7 +67,7 @@ describe('List queued transactions by Safe - Transactions Controller (Unit)', ()
     const chain = chainBuilder().build();
     const safe = safeBuilder().build();
     const page = pageBuilder().build();
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       const getChainUrl = `${safeConfigUrl}/api/v1/chains/${chainId}`;
       const getMultisigTransactionsUrl = `${chain.transactionService}/api/v1/safes/${safe.address}/multisig-transactions/`;
       const getSafeUrl = `${chain.transactionService}/api/v1/safes/${safe.address}`;
@@ -98,7 +99,7 @@ describe('List queued transactions by Safe - Transactions Controller (Unit)', ()
   it('should get a transactions queue with labels and conflict headers', async () => {
     const chainId = faker.string.numeric();
     const chainResponse = chainBuilder().build();
-    const safeAddress = faker.finance.ethereumAddress();
+    const safeAddress = getAddress(faker.finance.ethereumAddress());
     const safeResponse = safeBuilder()
       .with('address', safeAddress)
       .with('nonce', 1)
@@ -168,7 +169,7 @@ describe('List queued transactions by Safe - Transactions Controller (Unit)', ()
       ) as MultisigTransaction,
     ];
 
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       const getChainUrl = `${safeConfigUrl}/api/v1/chains/${chainId}`;
       const getSafeAppsUrl = `${safeConfigUrl}/api/v1/safe-apps/`;
       const getMultisigTransactionsUrl = `${chainResponse.transactionService}/api/v1/safes/${safeAddress}/multisig-transactions/`;
@@ -274,7 +275,7 @@ describe('List queued transactions by Safe - Transactions Controller (Unit)', ()
 
   it('should get a transactions queue with labels and conflict headers for a multi-page queue', async () => {
     const chainId = faker.string.numeric();
-    const safeAddress = faker.finance.ethereumAddress();
+    const safeAddress = getAddress(faker.finance.ethereumAddress());
     const chainResponse = chainBuilder().build();
     const contractResponse = contractBuilder().build();
     const safeResponse = safeBuilder()
@@ -362,7 +363,7 @@ describe('List queued transactions by Safe - Transactions Controller (Unit)', ()
           .build(),
       ) as MultisigTransaction,
     ];
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       const getChainUrl = `${safeConfigUrl}/api/v1/chains/${chainId}`;
       const getSafeAppsUrl = `${safeConfigUrl}/api/v1/safe-apps/`;
       const getMultisigTransactionsUrl = `${chainResponse.transactionService}/api/v1/safes/${safeAddress}/multisig-transactions/`;
@@ -477,7 +478,7 @@ describe('List queued transactions by Safe - Transactions Controller (Unit)', ()
 
   it('should get an "untrusted" queue', async () => {
     const chainId = faker.string.numeric();
-    const safeAddress = faker.finance.ethereumAddress();
+    const safeAddress = getAddress(faker.finance.ethereumAddress());
     const chainResponse = chainBuilder().build();
     const contractResponse = contractBuilder().build();
     const safeResponse = safeBuilder()
@@ -503,7 +504,7 @@ describe('List queued transactions by Safe - Transactions Controller (Unit)', ()
           .build(),
       ) as MultisigTransaction,
     ];
-    networkService.get.mockImplementation((url, query) => {
+    networkService.get.mockImplementation(({ url, networkRequest }) => {
       const getChainUrl = `${safeConfigUrl}/api/v1/chains/${chainId}`;
       const getSafeAppsUrl = `${safeConfigUrl}/api/v1/safe-apps/`;
       const getMultisigTransactionsUrl = `${chainResponse.transactionService}/api/v1/safes/${safeAddress}/multisig-transactions/`;
@@ -513,10 +514,10 @@ describe('List queued transactions by Safe - Transactions Controller (Unit)', ()
         return Promise.resolve({ data: chainResponse, status: 200 });
       }
       if (url === getMultisigTransactionsUrl) {
-        if (!query?.params) {
-          fail('Query params not found');
+        if (!networkRequest?.params) {
+          return Promise.reject('Query params not found');
         }
-        expect(query.params.trusted).toBe(false);
+        expect(networkRequest.params.trusted).toBe(false);
 
         return Promise.resolve({
           data: {

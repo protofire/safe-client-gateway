@@ -3,10 +3,10 @@ import { CacheFirstDataSource } from '@/datasources/cache/cache.first.data.sourc
 import { CacheRouter } from '@/datasources/cache/cache.router';
 import { ICacheService } from '@/datasources/cache/cache.service.interface';
 import { HttpErrorFactory } from '@/datasources/errors/http-error-factory';
+import { NetworkResponseError } from '@/datasources/network/entities/network.error.entity';
 import { INetworkService } from '@/datasources/network/network.service.interface';
 import { Backbone } from '@/domain/backbone/entities/backbone.entity';
 import { Singleton } from '@/domain/chains/entities/singleton.entity';
-import { Collectible } from '@/domain/collectibles/entities/collectible.entity';
 import { Contract } from '@/domain/contracts/entities/contract.entity';
 import { DataDecoded } from '@/domain/data-decoder/entities/data-decoded.entity';
 import { Delegate } from '@/domain/delegate/entities/delegate.entity';
@@ -26,13 +26,16 @@ import { Transfer } from '@/domain/safe/entities/transfer.entity';
 import { Token } from '@/domain/tokens/entities/token.entity';
 import { AddConfirmationDto } from '@/domain/transactions/entities/add-confirmation.dto.entity';
 import { ProposeTransactionDto } from '@/domain/transactions/entities/propose-transaction.dto.entity';
-import { Balance } from '@/domain/balances/entities/balance.entity';
+import { get } from 'lodash';
 
 export class TransactionApi implements ITransactionApi {
+  private static readonly ERROR_ARRAY_PATH = 'nonFieldErrors';
+
   private readonly defaultExpirationTimeInSeconds: number;
   private readonly defaultNotFoundExpirationTimeSeconds: number;
   private readonly tokenNotFoundExpirationTimeSeconds: number;
   private readonly contractNotFoundExpirationTimeSeconds: number;
+  private readonly ownersExpirationTimeSeconds: number;
 
   constructor(
     private readonly chainId: string,
@@ -59,101 +62,29 @@ export class TransactionApi implements ITransactionApi {
       this.configurationService.getOrThrow<number>(
         'expirationTimeInSeconds.notFound.contract',
       );
-  }
-
-  async getBalances(args: {
-    safeAddress: string;
-    trusted?: boolean;
-    excludeSpam?: boolean;
-  }): Promise<Balance[]> {
-    try {
-      const cacheDir = CacheRouter.getBalancesCacheDir({
-        chainId: this.chainId,
-        ...args,
-      });
-      const url = `${this.baseUrl}/api/v1/safes/${args.safeAddress}/balances/`;
-      return await this.dataSource.get({
-        cacheDir,
-        url,
-        notFoundExpireTimeSeconds: this.defaultNotFoundExpirationTimeSeconds,
-        networkRequest: {
-          params: {
-            trusted: args.trusted,
-            exclude_spam: args.excludeSpam,
-          },
-        },
-        expireTimeSeconds: this.defaultExpirationTimeInSeconds,
-      });
-    } catch (error) {
-      throw this.httpErrorFactory.from(error);
-    }
-  }
-
-  async clearLocalBalances(safeAddress: string): Promise<void> {
-    const key = CacheRouter.getBalancesCacheKey({
-      chainId: this.chainId,
-      safeAddress,
-    });
-    await this.cacheService.deleteByKey(key);
+    this.ownersExpirationTimeSeconds =
+      this.configurationService.getOrThrow<number>('owners.ownersTtlSeconds');
   }
 
   async getDataDecoded(args: {
-    data: string;
-    to?: string;
+    data: `0x${string}`;
+    to?: `0x${string}`;
   }): Promise<DataDecoded> {
     try {
       const url = `${this.baseUrl}/api/v1/data-decoder/`;
       const { data: dataDecoded } = await this.networkService.post<DataDecoded>(
-        url,
         {
-          data: args.data,
-          to: args.to,
+          url,
+          data: {
+            data: args.data,
+            to: args.to,
+          },
         },
       );
       return dataDecoded;
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
-  }
-
-  async getCollectibles(args: {
-    safeAddress: string;
-    limit?: number;
-    offset?: number;
-    trusted?: boolean;
-    excludeSpam?: boolean;
-  }): Promise<Page<Collectible>> {
-    try {
-      const cacheDir = CacheRouter.getCollectiblesCacheDir({
-        chainId: this.chainId,
-        ...args,
-      });
-      const url = `${this.baseUrl}/api/v2/safes/${args.safeAddress}/collectibles/`;
-      return await this.dataSource.get({
-        cacheDir,
-        url,
-        notFoundExpireTimeSeconds: this.defaultNotFoundExpirationTimeSeconds,
-        networkRequest: {
-          params: {
-            limit: args.limit,
-            offset: args.offset,
-            trusted: args.trusted,
-            exclude_spam: args.excludeSpam,
-          },
-        },
-        expireTimeSeconds: this.defaultExpirationTimeInSeconds,
-      });
-    } catch (error) {
-      throw this.httpErrorFactory.from(error);
-    }
-  }
-
-  async clearCollectibles(safeAddress: string): Promise<void> {
-    const key = CacheRouter.getCollectiblesKey({
-      chainId: this.chainId,
-      safeAddress,
-    });
-    await this.cacheService.deleteByKey(key);
   }
 
   // Important: there is no hook which invalidates this endpoint,
@@ -169,7 +100,7 @@ export class TransactionApi implements ITransactionApi {
         expireTimeSeconds: this.defaultExpirationTimeInSeconds,
       });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -186,7 +117,7 @@ export class TransactionApi implements ITransactionApi {
         expireTimeSeconds: this.defaultExpirationTimeInSeconds,
       });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -204,7 +135,7 @@ export class TransactionApi implements ITransactionApi {
         expireTimeSeconds: this.defaultExpirationTimeInSeconds,
       });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -232,7 +163,7 @@ export class TransactionApi implements ITransactionApi {
         expireTimeSeconds: this.defaultExpirationTimeInSeconds,
       });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -266,28 +197,31 @@ export class TransactionApi implements ITransactionApi {
         },
       });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
   async postDelegate(args: {
-    safeAddress?: string;
-    delegate?: string;
-    delegator?: string;
-    signature?: string;
-    label?: string;
+    safeAddress: `0x${string}` | null;
+    delegate: `0x${string}`;
+    delegator: `0x${string}`;
+    signature: string;
+    label: string;
   }): Promise<void> {
     try {
       const url = `${this.baseUrl}/api/v1/delegates/`;
-      await this.networkService.post(url, {
-        safe: args.safeAddress,
-        delegate: args.delegate,
-        delegator: args.delegator,
-        signature: args.signature,
-        label: args.label,
+      await this.networkService.post({
+        url,
+        data: {
+          safe: args.safeAddress,
+          delegate: args.delegate,
+          delegator: args.delegator,
+          signature: args.signature,
+          label: args.label,
+        },
       });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -298,13 +232,16 @@ export class TransactionApi implements ITransactionApi {
   }): Promise<unknown> {
     try {
       const url = `${this.baseUrl}/api/v1/delegates/${args.delegate}`;
-      return await this.networkService.delete(url, {
-        delegate: args.delegate,
-        delegator: args.delegator,
-        signature: args.signature,
+      return await this.networkService.delete({
+        url,
+        data: {
+          delegate: args.delegate,
+          delegator: args.delegator,
+          signature: args.signature,
+        },
       });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -315,13 +252,16 @@ export class TransactionApi implements ITransactionApi {
   }): Promise<unknown> {
     try {
       const url = `${this.baseUrl}/api/v1/safes/${args.safeAddress}/delegates/${args.delegate}`;
-      return await this.networkService.delete(url, {
-        delegate: args.delegate,
-        safe: args.safeAddress,
-        signature: args.signature,
+      return await this.networkService.delete({
+        url,
+        data: {
+          delegate: args.delegate,
+          safe: args.safeAddress,
+          signature: args.signature,
+        },
       });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -341,7 +281,7 @@ export class TransactionApi implements ITransactionApi {
         expireTimeSeconds: this.defaultExpirationTimeInSeconds,
       });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -373,7 +313,7 @@ export class TransactionApi implements ITransactionApi {
         expireTimeSeconds: this.defaultExpirationTimeInSeconds,
       });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -419,7 +359,7 @@ export class TransactionApi implements ITransactionApi {
         expireTimeSeconds: this.defaultExpirationTimeInSeconds,
       });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -437,21 +377,24 @@ export class TransactionApi implements ITransactionApi {
   }): Promise<unknown> {
     try {
       const url = `${this.baseUrl}/api/v1/multisig-transactions/${args.safeTxHash}/confirmations/`;
-      return await this.networkService.post(url, {
-        signature: args.addConfirmationDto.signedSafeTxHash,
+      return await this.networkService.post({
+        url,
+        data: {
+          signature: args.addConfirmationDto.signedSafeTxHash,
+        },
       });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
   async getSafesByModule(moduleAddress: string): Promise<SafeList> {
     try {
       const url = `${this.baseUrl}/api/v1/modules/${moduleAddress}/safes/`;
-      const { data } = await this.networkService.get<SafeList>(url);
+      const { data } = await this.networkService.get<SafeList>({ url });
       return data;
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -473,7 +416,7 @@ export class TransactionApi implements ITransactionApi {
         expireTimeSeconds: this.defaultExpirationTimeInSeconds,
       });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -505,7 +448,7 @@ export class TransactionApi implements ITransactionApi {
         expireTimeSeconds: this.defaultExpirationTimeInSeconds,
       });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -560,7 +503,7 @@ export class TransactionApi implements ITransactionApi {
         expireTimeSeconds: this.defaultExpirationTimeInSeconds,
       });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -588,7 +531,7 @@ export class TransactionApi implements ITransactionApi {
         expireTimeSeconds: this.defaultExpirationTimeInSeconds,
       });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -598,11 +541,14 @@ export class TransactionApi implements ITransactionApi {
   }): Promise<void> {
     try {
       const url = `${this.baseUrl}/api/v1/transactions/${args.safeTxHash}`;
-      await this.networkService.delete(url, {
-        signature: args.signature,
+      await this.networkService.delete({
+        url,
+        data: {
+          signature: args.signature,
+        },
       });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -632,7 +578,7 @@ export class TransactionApi implements ITransactionApi {
         expireTimeSeconds: this.defaultExpirationTimeInSeconds,
       });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -667,7 +613,7 @@ export class TransactionApi implements ITransactionApi {
         expireTimeSeconds: this.defaultExpirationTimeInSeconds,
       });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -695,7 +641,7 @@ export class TransactionApi implements ITransactionApi {
         expireTimeSeconds: this.defaultExpirationTimeInSeconds,
       });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -724,12 +670,12 @@ export class TransactionApi implements ITransactionApi {
         expireTimeSeconds: this.defaultExpirationTimeInSeconds,
       });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
   // Important: there is no hook which invalidates this endpoint,
-  // Therefore, this data will live in cache until [defaultExpirationTimeInSeconds]
+  // Therefore, this data will live in cache until [ownersExpirationTimeSeconds]
   async getSafesByOwner(ownerAddress: string): Promise<SafeList> {
     try {
       const cacheDir = CacheRouter.getSafesByOwnerCacheDir({
@@ -741,10 +687,10 @@ export class TransactionApi implements ITransactionApi {
         cacheDir,
         url,
         notFoundExpireTimeSeconds: this.defaultNotFoundExpirationTimeSeconds,
-        expireTimeSeconds: this.defaultExpirationTimeInSeconds,
+        expireTimeSeconds: this.ownersExpirationTimeSeconds,
       });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -755,28 +701,31 @@ export class TransactionApi implements ITransactionApi {
   }): Promise<void> {
     try {
       const url = `${this.baseUrl}/api/v1/notifications/devices/`;
-      await this.networkService.post(url, {
-        uuid: args.device.uuid,
-        cloudMessagingToken: args.device.cloudMessagingToken,
-        buildNumber: args.device.buildNumber,
-        bundle: args.device.bundle,
-        deviceType: args.device.deviceType,
-        version: args.device.version,
-        timestamp: args.device.timestamp,
-        safes: args.safes,
-        signatures: args.signatures,
+      await this.networkService.post({
+        url,
+        data: {
+          uuid: args.device.uuid,
+          cloudMessagingToken: args.device.cloudMessagingToken,
+          buildNumber: args.device.buildNumber,
+          bundle: args.device.bundle,
+          deviceType: args.device.deviceType,
+          version: args.device.version,
+          timestamp: args.device.timestamp,
+          safes: args.safes,
+          signatures: args.signatures,
+        },
       });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
   async deleteDeviceRegistration(uuid: string): Promise<void> {
     try {
       const url = `${this.baseUrl}/api/v1/notifications/devices/${uuid}`;
-      await this.networkService.delete(url);
+      await this.networkService.delete({ url });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -786,9 +735,9 @@ export class TransactionApi implements ITransactionApi {
   }): Promise<void> {
     try {
       const url = `${this.baseUrl}/api/v1/notifications/devices/${args.uuid}/safes/${args.safeAddress}`;
-      await this.networkService.delete(url);
+      await this.networkService.delete({ url });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -798,18 +747,18 @@ export class TransactionApi implements ITransactionApi {
   }): Promise<Estimation> {
     try {
       const url = `${this.baseUrl}/api/v1/safes/${args.address}/multisig-transactions/estimations/`;
-      const { data: estimation } = await this.networkService.post<Estimation>(
+      const { data: estimation } = await this.networkService.post<Estimation>({
         url,
-        {
+        data: {
           to: args.getEstimationDto.to,
           value: args.getEstimationDto.value,
           data: args.getEstimationDto.data,
           operation: args.getEstimationDto.operation,
         },
-      );
+      });
       return estimation;
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -827,7 +776,7 @@ export class TransactionApi implements ITransactionApi {
         expireTimeSeconds: this.defaultExpirationTimeInSeconds,
       });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -855,7 +804,7 @@ export class TransactionApi implements ITransactionApi {
         expireTimeSeconds: this.defaultExpirationTimeInSeconds,
       });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -865,24 +814,27 @@ export class TransactionApi implements ITransactionApi {
   }): Promise<unknown> {
     try {
       const url = `${this.baseUrl}/api/v1/safes/${args.address}/multisig-transactions/`;
-      return await this.networkService.post(url, {
-        to: args.data.to,
-        value: args.data.value,
-        data: args.data.data,
-        operation: args.data.operation,
-        baseGas: args.data.baseGas,
-        gasPrice: args.data.gasPrice,
-        gasToken: args.data.gasToken,
-        refundReceiver: args.data.refundReceiver,
-        nonce: args.data.nonce,
-        safeTxGas: args.data.safeTxGas,
-        contractTransactionHash: args.data.safeTxHash,
-        sender: args.data.sender,
-        signature: args.data.signature,
-        origin: args.data.origin,
+      return await this.networkService.post({
+        url,
+        data: {
+          to: args.data.to,
+          value: args.data.value,
+          data: args.data.data,
+          operation: args.data.operation,
+          baseGas: args.data.baseGas,
+          gasPrice: args.data.gasPrice,
+          gasToken: args.data.gasToken,
+          refundReceiver: args.data.refundReceiver,
+          nonce: args.data.nonce,
+          safeTxGas: args.data.safeTxGas,
+          contractTransactionHash: args.data.safeTxHash,
+          sender: args.data.sender,
+          signature: args.data.signature,
+          origin: args.data.origin,
+        },
       });
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -894,14 +846,17 @@ export class TransactionApi implements ITransactionApi {
   }): Promise<Message> {
     try {
       const url = `${this.baseUrl}/api/v1/safes/${args.safeAddress}/messages/`;
-      const { data } = await this.networkService.post<Message>(url, {
-        message: args.message,
-        safeAppId: args.safeAppId,
-        signature: args.signature,
+      const { data } = await this.networkService.post<Message>({
+        url,
+        data: {
+          message: args.message,
+          safeAppId: args.safeAppId,
+          signature: args.signature,
+        },
       });
       return data;
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -911,12 +866,15 @@ export class TransactionApi implements ITransactionApi {
   }): Promise<unknown> {
     try {
       const url = `${this.baseUrl}/api/v1/messages/${args.messageHash}/signatures/`;
-      const { data } = await this.networkService.post(url, {
-        signature: args.signature,
+      const { data } = await this.networkService.post({
+        url,
+        data: {
+          signature: args.signature,
+        },
       });
       return data;
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
 
@@ -934,5 +892,18 @@ export class TransactionApi implements ITransactionApi {
       messageHash: args.messageHash,
     });
     await this.cacheService.deleteByKey(key);
+  }
+
+  private mapError(error: unknown): unknown {
+    if (error instanceof NetworkResponseError) {
+      const errors = get(error.data, TransactionApi.ERROR_ARRAY_PATH);
+      if (errors) {
+        return new NetworkResponseError(error.url, error.response, {
+          // We only return the first error message so as to be a string
+          message: errors[0],
+        });
+      }
+    }
+    return error;
   }
 }

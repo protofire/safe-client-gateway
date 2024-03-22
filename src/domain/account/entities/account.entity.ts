@@ -8,11 +8,15 @@ export interface Account {
   chainId: string;
   emailAddress: EmailAddress;
   isVerified: boolean;
-  safeAddress: string;
-  signer: string;
-  verificationCode: string | null;
-  verificationGeneratedOn: Date | null;
-  verificationSentOn: Date | null;
+  safeAddress: `0x${string}`;
+  signer: `0x${string}`;
+  unsubscriptionToken: string;
+}
+
+export interface VerificationCode {
+  code: string;
+  generatedOn: Date;
+  sentOn: Date | null;
 }
 
 export class EmailAddress {

@@ -6,10 +6,15 @@ export interface ICacheService {
   set(
     cacheDir: CacheDir,
     value: string,
-    expireTimeSeconds?: number,
+    expireTimeSeconds: number | undefined,
   ): Promise<void>;
 
   get(cacheDir: CacheDir): Promise<string | undefined>;
 
   deleteByKey(key: string): Promise<number>;
+
+  increment(
+    cacheKey: string,
+    expireTimeSeconds: number | undefined,
+  ): Promise<number>;
 }

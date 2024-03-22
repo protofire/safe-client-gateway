@@ -23,7 +23,7 @@ import { chainBuilder } from '@/domain/chains/entities/__tests__/chain.builder';
 import { safeBuilder } from '@/domain/safe/entities/__tests__/safe.builder';
 import { getAddress } from 'viem';
 import { EmailControllerModule } from '@/routes/email/email.controller.module';
-import { AccountDoesNotExistError } from '@/datasources/account/errors/account-does-not-exist.error';
+import { AccountDoesNotExistError } from '@/domain/account/errors/account-does-not-exist.error';
 import { EmailApiModule } from '@/datasources/email-api/email-api.module';
 import { TestEmailApiModule } from '@/datasources/email-api/__tests__/test.email-api.module';
 import { IEmailApi } from '@/domain/interfaces/email-api.interface';
@@ -38,7 +38,7 @@ describe('Email controller delete email tests', () => {
   let networkService: jest.MockedObjectDeep<INetworkService>;
 
   beforeEach(async () => {
-    jest.clearAllMocks();
+    jest.resetAllMocks();
     jest.useFakeTimers();
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -74,36 +74,45 @@ describe('Email controller delete email tests', () => {
     await app.close();
   });
 
-  it('deletes email successfully', async () => {
+  it.each([
+    // non-checksummed address
+    { safeAddress: faker.finance.ethereumAddress().toLowerCase() },
+    // checksummed address
+    { safeAddress: getAddress(faker.finance.ethereumAddress()) },
+  ])('deletes email successfully', async ({ safeAddress }) => {
     const chain = chainBuilder().build();
     const timestamp = jest.now();
     const privateKey = generatePrivateKey();
     const signer = privateKeyToAccount(privateKey);
     const signerAddress = signer.address;
-    const safeAddress = faker.finance.ethereumAddress();
     const account = accountBuilder()
       .with('signer', signerAddress)
-      .with('safeAddress', safeAddress)
+      .with('safeAddress', getAddress(safeAddress))
       .with('chainId', chain.chainId)
       .build();
     const message = `email-delete-${chain.chainId}-${safeAddress}-${signerAddress}-${timestamp}`;
     const signature = await signer.signMessage({ message });
     accountDataSource.getAccount.mockResolvedValue(account);
-    accountDataSource.deleteAccount.mockImplementation(() => Promise.resolve());
+    accountDataSource.deleteAccount.mockResolvedValue(account);
     emailApi.deleteEmailAddress.mockResolvedValue();
 
     await request(app.getHttpServer())
-      .delete(`/v1/chains/${chain.chainId}/safes/${safeAddress}/emails`)
-      .send({
-        signer: signer.address,
-        timestamp: timestamp,
-        signature: signature,
-      })
+      .delete(
+        `/v1/chains/${chain.chainId}/safes/${safeAddress}/emails/${account.signer}`,
+      )
+      .set('Safe-Wallet-Signature', signature)
+      .set('Safe-Wallet-Signature-Timestamp', timestamp.toString())
       .expect(204)
       .expect({});
 
     expect(emailApi.deleteEmailAddress).toHaveBeenCalledTimes(1);
     expect(accountDataSource.deleteAccount).toHaveBeenCalledTimes(1);
+    expect(accountDataSource.deleteAccount).toHaveBeenCalledWith({
+      chainId: chain.chainId,
+      // Should always call with the checksummed address
+      safeAddress: getAddress(safeAddress),
+      signer: signer.address,
+    });
   });
 
   it("returns 204 if trying to deleting an email that doesn't exist", async () => {
@@ -120,7 +129,7 @@ describe('Email controller delete email tests', () => {
       .build();
     const message = `email-delete-${chain.chainId}-${safe.address}-${signerAddress}-${timestamp}`;
     const signature = await signer.signMessage({ message });
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       switch (url) {
         case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
           return Promise.resolve({ data: chain, status: 200 });
@@ -135,14 +144,40 @@ describe('Email controller delete email tests', () => {
     );
 
     await request(app.getHttpServer())
-      .delete(`/v1/chains/${chain.chainId}/safes/${safe.address}/emails`)
-      .send({
-        signer: signer.address,
-        timestamp: timestamp,
-        signature: signature,
-      })
+      .delete(
+        `/v1/chains/${chain.chainId}/safes/${safe.address}/emails/${signer.address}`,
+      )
+      .set('Safe-Wallet-Signature', signature)
+      .set('Safe-Wallet-Signature-Timestamp', timestamp.toString())
       .expect(204)
       .expect({});
+
+    expect(emailApi.deleteEmailAddress).toHaveBeenCalledTimes(0);
+    expect(accountDataSource.deleteAccount).toHaveBeenCalledTimes(0);
+  });
+
+  it('returns 422 if Safe address is not a valid Ethereum address', async () => {
+    const chain = chainBuilder().build();
+    const timestamp = jest.now();
+    const privateKey = generatePrivateKey();
+    const signer = privateKeyToAccount(privateKey);
+    const signerAddress = signer.address;
+    const invalidSafeAddress = faker.word.sample();
+    const message = `email-delete-${chain.chainId}-${invalidSafeAddress}-${signerAddress}-${timestamp}`;
+    const signature = await signer.signMessage({ message });
+
+    await request(app.getHttpServer())
+      .delete(
+        `/v1/chains/${chain.chainId}/safes/${invalidSafeAddress}/emails/${signer.address}`,
+      )
+      .set('Safe-Wallet-Signature', signature)
+      .set('Safe-Wallet-Signature-Timestamp', timestamp.toString())
+      .expect(422)
+      .expect({
+        message: `Address "${invalidSafeAddress}" is invalid.`,
+        error: 'Unprocessable Entity',
+        statusCode: 422,
+      });
 
     expect(emailApi.deleteEmailAddress).toHaveBeenCalledTimes(0);
     expect(accountDataSource.deleteAccount).toHaveBeenCalledTimes(0);
@@ -166,12 +201,11 @@ describe('Email controller delete email tests', () => {
     jest.advanceTimersByTime(5 * 60 * 1000);
 
     await request(app.getHttpServer())
-      .delete(`/v1/chains/${chain.chainId}/safes/${safe.address}/emails`)
-      .send({
-        account: account.address,
-        timestamp: timestamp,
-        signature: signature,
-      })
+      .delete(
+        `/v1/chains/${chain.chainId}/safes/${safe.address}/emails/${account.address}`,
+      )
+      .set('Safe-Wallet-Signature', signature)
+      .set('Safe-Wallet-Signature-Timestamp', timestamp.toString())
       .expect(403)
       .expect({
         message: 'Forbidden resource',
@@ -196,12 +230,11 @@ describe('Email controller delete email tests', () => {
     const signature = await account.signMessage({ message });
 
     await request(app.getHttpServer())
-      .delete(`/v1/chains/${chain.chainId}/safes/${safe.address}/emails`)
-      .send({
-        account: account.address,
-        timestamp: timestamp,
-        signature: signature,
-      })
+      .delete(
+        `/v1/chains/${chain.chainId}/safes/${safe.address}/emails/${account.address}`,
+      )
+      .set('Safe-Wallet-Signature', signature)
+      .set('Safe-Wallet-Signature-Timestamp', timestamp.toString())
       .expect(403)
       .expect({
         message: 'Forbidden resource',
@@ -217,19 +250,15 @@ describe('Email controller delete email tests', () => {
     const signer = privateKeyToAccount(privateKey);
     const signerAddress = signer.address;
     // Signer is owner of safe
-    const safe = safeBuilder()
-      .with('owners', [signerAddress])
-      // Faker generates non-checksum addresses only
-      .with('address', getAddress(faker.finance.ethereumAddress()))
-      .build();
+    const safe = safeBuilder().with('owners', [signerAddress]).build();
     const account = accountBuilder()
       .with('signer', signerAddress)
-      .with('safeAddress', safe.address)
+      .with('safeAddress', getAddress(safe.address))
       .with('chainId', chain.chainId)
       .build();
     const message = `email-delete-${chain.chainId}-${safe.address}-${signerAddress}-${timestamp}`;
     const signature = await signer.signMessage({ message });
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       switch (url) {
         case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
           return Promise.resolve({ data: chain, status: 200 });
@@ -243,12 +272,11 @@ describe('Email controller delete email tests', () => {
     emailApi.deleteEmailAddress.mockRejectedValue(new Error('Some error'));
 
     await request(app.getHttpServer())
-      .delete(`/v1/chains/${chain.chainId}/safes/${safe.address}/emails`)
-      .send({
-        signer: signer.address,
-        timestamp: timestamp,
-        signature: signature,
-      })
+      .delete(
+        `/v1/chains/${chain.chainId}/safes/${safe.address}/emails/${account.signer}`,
+      )
+      .set('Safe-Wallet-Signature', signature)
+      .set('Safe-Wallet-Signature-Timestamp', timestamp.toString())
       .expect(500)
       .expect({ code: 500, message: 'Internal server error' });
 
