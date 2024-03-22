@@ -39,7 +39,6 @@ export default () => ({
           43114: { chainName: 'avax' },
           56: { chainName: 'bsc' },
           8453: { chainName: 'base' },
-          168587773: { chainName: 'blast' },
         },
       },
     },
@@ -145,7 +144,6 @@ export default () => ({
       8453: { nativeCoin: 'ethereum', chainName: 'base' },
       84531: { nativeCoin: 'ethereum', chainName: 'base' },
       84532: { nativeCoin: 'ethereum', chainName: 'base' },
-      168587773: { nativeCoin: 'ethereum', chainName: 'blast' },
     },
   },
   redis: {
