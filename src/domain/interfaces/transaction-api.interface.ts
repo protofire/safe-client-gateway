@@ -1,7 +1,5 @@
 import { Backbone } from '@/domain/backbone/entities/backbone.entity';
-import { Balance } from '@/domain/balances/entities/balance.entity';
 import { Singleton } from '@/domain/chains/entities/singleton.entity';
-import { Collectible } from '@/domain/collectibles/entities/collectible.entity';
 import { Contract } from '@/domain/contracts/entities/contract.entity';
 import { DataDecoded } from '@/domain/data-decoder/entities/data-decoded.entity';
 import { Delegate } from '@/domain/delegate/entities/delegate.entity';
@@ -22,25 +20,10 @@ import { AddConfirmationDto } from '@/domain/transactions/entities/add-confirmat
 import { ProposeTransactionDto } from '@/domain/transactions/entities/propose-transaction.dto.entity';
 
 export interface ITransactionApi {
-  getBalances(args: {
-    safeAddress: string;
-    trusted?: boolean;
-    excludeSpam?: boolean;
-  }): Promise<Balance[]>;
-
-  clearLocalBalances(safeAddress: string): Promise<void>;
-
-  getDataDecoded(args: { data: string; to?: string }): Promise<DataDecoded>;
-
-  getCollectibles(args: {
-    safeAddress: string;
-    limit?: number;
-    offset?: number;
-    trusted?: boolean;
-    excludeSpam?: boolean;
-  }): Promise<Page<Collectible>>;
-
-  clearCollectibles(safeAddress: string): Promise<void>;
+  getDataDecoded(args: {
+    data: `0x${string}`;
+    to?: `0x${string}`;
+  }): Promise<DataDecoded>;
 
   getBackbone(): Promise<Backbone>;
 
@@ -62,11 +45,11 @@ export interface ITransactionApi {
   }): Promise<Page<Delegate>>;
 
   postDelegate(args: {
-    safeAddress?: string;
-    delegate?: string;
-    delegator?: string;
-    signature?: string;
-    label?: string;
+    safeAddress: `0x${string}` | null;
+    delegate: `0x${string}`;
+    delegator: `0x${string}`;
+    signature: string;
+    label: string;
   }): Promise<void>;
 
   deleteDelegate(args: {

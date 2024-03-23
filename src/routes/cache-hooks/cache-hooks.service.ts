@@ -5,7 +5,7 @@ import { ICollectiblesRepository } from '@/domain/collectibles/collectibles.repo
 import { IMessagesRepository } from '@/domain/messages/messages.repository.interface';
 import { ISafeAppsRepository } from '@/domain/safe-apps/safe-apps.repository.interface';
 import { ISafeRepository } from '@/domain/safe/safe.repository.interface';
-import { EventType } from '@/routes/cache-hooks/entities/event-payload.entity';
+import { EventType } from '@/routes/cache-hooks/entities/event-type.entity';
 import { LoggingService, ILoggingService } from '@/logging/logging.interface';
 import { Event } from '@/routes/cache-hooks/entities/event.entity';
 
@@ -144,7 +144,7 @@ export class CacheHooksService {
       // - the incoming transfers for that safe
       case EventType.INCOMING_ETHER:
         promises.push(
-          this.balancesRepository.clearLocalBalances({
+          this.balancesRepository.clearBalances({
             chainId: event.chainId,
             safeAddress: event.address,
           }),
@@ -174,7 +174,7 @@ export class CacheHooksService {
       // - the transfers for that safe
       case EventType.OUTGOING_ETHER:
         promises.push(
-          this.balancesRepository.clearLocalBalances({
+          this.balancesRepository.clearBalances({
             chainId: event.chainId,
             safeAddress: event.address,
           }),
@@ -202,7 +202,7 @@ export class CacheHooksService {
       // - the incoming transfers for that safe
       case EventType.INCOMING_TOKEN:
         promises.push(
-          this.balancesRepository.clearLocalBalances({
+          this.balancesRepository.clearBalances({
             chainId: event.chainId,
             safeAddress: event.address,
           }),
@@ -237,7 +237,7 @@ export class CacheHooksService {
       // - the transfers for that safe
       case EventType.OUTGOING_TOKEN:
         promises.push(
-          this.balancesRepository.clearLocalBalances({
+          this.balancesRepository.clearBalances({
             chainId: event.chainId,
             safeAddress: event.address,
           }),

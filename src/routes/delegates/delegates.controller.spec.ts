@@ -26,6 +26,7 @@ import { deleteSafeDelegateDtoBuilder } from '@/routes/delegates/entities/__test
 import { NetworkResponseError } from '@/datasources/network/entities/network.error.entity';
 import { AccountDataSourceModule } from '@/datasources/account/account.datasource.module';
 import { TestAccountDataSourceModule } from '@/datasources/account/__tests__/test.account.datasource.module';
+import { getAddress } from 'viem';
 
 describe('Delegates controller', () => {
   let app: INestApplication;
@@ -33,7 +34,7 @@ describe('Delegates controller', () => {
   let networkService: jest.MockedObjectDeep<INetworkService>;
 
   beforeEach(async () => {
-    jest.clearAllMocks();
+    jest.resetAllMocks();
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(configuration)],
@@ -58,7 +59,7 @@ describe('Delegates controller', () => {
 
   describe('GET delegates for a Safe', () => {
     it('Success', async () => {
-      const safe = faker.finance.ethereumAddress();
+      const safe = getAddress(faker.finance.ethereumAddress());
       const chain = chainBuilder().build();
       const delegatesPage = pageBuilder()
         .with('count', 2)
@@ -69,7 +70,7 @@ describe('Delegates controller', () => {
           delegateBuilder().with('safe', safe).build(),
         ])
         .build();
-      networkService.get.mockImplementation((url) => {
+      networkService.get.mockImplementation(({ url }) => {
         if (url === `${safeConfigUrl}/api/v1/chains/${chain.chainId}`) {
           return Promise.resolve({ data: chain, status: 200 });
         }
@@ -86,7 +87,7 @@ describe('Delegates controller', () => {
     });
 
     it('Should return a validation error', async () => {
-      const safe = faker.finance.ethereumAddress();
+      const safe = getAddress(faker.finance.ethereumAddress());
       const chain = chainBuilder().build();
       const delegatesPage = pageBuilder()
         .with('count', 2)
@@ -97,7 +98,7 @@ describe('Delegates controller', () => {
           { ...delegateBuilder().with('safe', safe).build(), label: true },
         ])
         .build();
-      networkService.get.mockImplementation((url) => {
+      networkService.get.mockImplementation(({ url }) => {
         if (url === `${safeConfigUrl}/api/v1/chains/${chain.chainId}`) {
           return Promise.resolve({ data: chain, status: 200 });
         }
@@ -111,9 +112,8 @@ describe('Delegates controller', () => {
         .get(`/v1/chains/${chain.chainId}/delegates?safe=${safe}`)
         .expect(500)
         .expect({
-          message: 'Validation failed',
-          code: 42,
-          arguments: [],
+          statusCode: 500,
+          message: 'Internal server error',
         });
     });
 
@@ -126,7 +126,7 @@ describe('Delegates controller', () => {
         .with('previous', null)
         .with('results', [])
         .build();
-      networkService.get.mockImplementation((url) => {
+      networkService.get.mockImplementation(({ url }) => {
         if (url === `${safeConfigUrl}/api/v1/chains/${chain.chainId}`) {
           return Promise.resolve({ data: chain, status: 200 });
         }
@@ -147,8 +147,13 @@ describe('Delegates controller', () => {
 
       await request(app.getHttpServer())
         .get(`/v1/chains/${chain.chainId}/delegates`)
-        .expect(400)
-        .expect({ message: 'Validation failed', code: 42, arguments: [] });
+        .expect(422)
+        .expect({
+          statusCode: 422,
+          code: 'custom',
+          message: 'At least one property is required',
+          path: [],
+        });
     });
   });
 
@@ -156,12 +161,12 @@ describe('Delegates controller', () => {
     it('Success', async () => {
       const createDelegateDto = createDelegateDtoBuilder().build();
       const chain = chainBuilder().build();
-      networkService.get.mockImplementation((url) =>
+      networkService.get.mockImplementation(({ url }) =>
         url === `${safeConfigUrl}/api/v1/chains/${chain.chainId}`
           ? Promise.resolve({ data: chain, status: 200 })
           : Promise.reject(`No matching rule for url: ${url}`),
       );
-      networkService.post.mockImplementation((url) =>
+      networkService.post.mockImplementation(({ url }) =>
         url === `${chain.transactionService}/api/v1/delegates/`
           ? Promise.resolve({ status: 201, data: {} })
           : Promise.reject(`No matching rule for url: ${url}`),
@@ -179,20 +184,27 @@ describe('Delegates controller', () => {
       await request(app.getHttpServer())
         .post(`/v1/chains/${faker.string.numeric()}/delegates/`)
         .send(omit(createDelegateDto, 'signature'))
-        .expect(400)
-        .expect({ message: 'Validation failed', code: 42, arguments: [] });
+        .expect(422)
+        .expect({
+          statusCode: 422,
+          code: 'invalid_type',
+          expected: 'string',
+          received: 'undefined',
+          path: ['signature'],
+          message: 'Required',
+        });
     });
 
-    it('Success with safe undefined', async () => {
+    it('Success with null safe', async () => {
       const createDelegateDto = createDelegateDtoBuilder().build();
-      createDelegateDto.safe = undefined;
+      createDelegateDto.safe = null;
       const chain = chainBuilder().build();
-      networkService.get.mockImplementation((url) =>
+      networkService.get.mockImplementation(({ url }) =>
         url === `${safeConfigUrl}/api/v1/chains/${chain.chainId}`
           ? Promise.resolve({ data: chain, status: 200 })
           : Promise.reject(`No matching rule for url: ${url}`),
       );
-      networkService.post.mockImplementation((url) =>
+      networkService.post.mockImplementation(({ url }) =>
         url === `${chain.transactionService}/api/v1/delegates/`
           ? Promise.resolve({ status: 201, data: {} })
           : Promise.reject(`No matching rule for url: ${url}`),
@@ -207,7 +219,7 @@ describe('Delegates controller', () => {
     it('Should return the tx-service error message', async () => {
       const createDelegateDto = createDelegateDtoBuilder().build();
       const chain = chainBuilder().build();
-      networkService.get.mockImplementation((url) =>
+      networkService.get.mockImplementation(({ url }) =>
         url === `${safeConfigUrl}/api/v1/chains/${chain.chainId}`
           ? Promise.resolve({ data: chain, status: 200 })
           : Promise.reject(`No matching rule for url: ${url}`),
@@ -220,7 +232,7 @@ describe('Delegates controller', () => {
         } as Response,
         { message: 'Malformed body', status: 400 },
       );
-      networkService.post.mockImplementation((url) =>
+      networkService.post.mockImplementation(({ url }) =>
         url === transactionServiceUrl
           ? Promise.reject(error)
           : Promise.reject(`No matching rule for url: ${url}`),
@@ -239,7 +251,7 @@ describe('Delegates controller', () => {
     it('Should fail with An error occurred', async () => {
       const createDelegateDto = createDelegateDtoBuilder().build();
       const chain = chainBuilder().build();
-      networkService.get.mockImplementation((url) =>
+      networkService.get.mockImplementation(({ url }) =>
         url === `${safeConfigUrl}/api/v1/chains/${chain.chainId}`
           ? Promise.resolve({ data: chain, status: 200 })
           : Promise.reject(`No matching rule for url: ${url}`),
@@ -248,7 +260,7 @@ describe('Delegates controller', () => {
       const error = new NetworkResponseError(new URL(transactionServiceUrl), {
         status: 503,
       } as Response);
-      networkService.post.mockImplementation((url) =>
+      networkService.post.mockImplementation(({ url }) =>
         url === transactionServiceUrl
           ? Promise.reject(error)
           : Promise.reject(`No matching rule for url: ${url}`),
@@ -269,12 +281,12 @@ describe('Delegates controller', () => {
     it('Success', async () => {
       const deleteDelegateDto = deleteDelegateDtoBuilder().build();
       const chain = chainBuilder().build();
-      networkService.get.mockImplementation((url) =>
+      networkService.get.mockImplementation(({ url }) =>
         url === `${safeConfigUrl}/api/v1/chains/${chain.chainId}`
           ? Promise.resolve({ data: chain, status: 200 })
           : Promise.reject(`No matching rule for url: ${url}`),
       );
-      networkService.delete.mockImplementation((url) =>
+      networkService.delete.mockImplementation(({ url }) =>
         url ===
         `${chain.transactionService}/api/v1/delegates/${deleteDelegateDto.delegate}`
           ? Promise.resolve({ data: {}, status: 204 })
@@ -292,7 +304,7 @@ describe('Delegates controller', () => {
     it('Should return the tx-service error message', async () => {
       const deleteDelegateDto = deleteDelegateDtoBuilder().build();
       const chain = chainBuilder().build();
-      networkService.get.mockImplementation((url) =>
+      networkService.get.mockImplementation(({ url }) =>
         url === `${safeConfigUrl}/api/v1/chains/${chain.chainId}`
           ? Promise.resolve({ data: chain, status: 200 })
           : Promise.reject(`No matching rule for url: ${url}`),
@@ -305,7 +317,7 @@ describe('Delegates controller', () => {
         } as Response,
         { message: 'Malformed body', status: 400 },
       );
-      networkService.delete.mockImplementation((url) =>
+      networkService.delete.mockImplementation(({ url }) =>
         url === transactionServiceUrl
           ? Promise.reject(error)
           : Promise.reject(`No matching rule for url: ${url}`),
@@ -326,7 +338,7 @@ describe('Delegates controller', () => {
     it('Should fail with An error occurred', async () => {
       const deleteDelegateDto = deleteDelegateDtoBuilder().build();
       const chain = chainBuilder().build();
-      networkService.get.mockImplementation((url) =>
+      networkService.get.mockImplementation(({ url }) =>
         url === `${safeConfigUrl}/api/v1/chains/${chain.chainId}`
           ? Promise.resolve({ data: chain, status: 200 })
           : Promise.reject(`No matching rule for url: ${url}`),
@@ -335,7 +347,7 @@ describe('Delegates controller', () => {
       const error = new NetworkResponseError(new URL(transactionServiceUrl), {
         status: 503,
       } as Response);
-      networkService.delete.mockImplementation((url) =>
+      networkService.delete.mockImplementation(({ url }) =>
         url ===
         `${chain.transactionService}/api/v1/delegates/${deleteDelegateDto.delegate}`
           ? Promise.reject(error)
@@ -354,7 +366,7 @@ describe('Delegates controller', () => {
         });
     });
 
-    it('Should get a validation error', async () => {
+    it('Should get a validation error if wrong signature type', async () => {
       const deleteDelegateDto = deleteDelegateDtoBuilder().build();
       const chain = chainBuilder().build();
 
@@ -363,8 +375,35 @@ describe('Delegates controller', () => {
           `/v1/chains/${chain.chainId}/delegates/${deleteDelegateDto.delegate}`,
         )
         .send({ ...deleteDelegateDto, signature: faker.number.int() })
-        .expect(400)
-        .expect({ message: 'Validation failed', code: 42, arguments: [] });
+        .expect(422)
+        .expect({
+          statusCode: 422,
+          code: 'invalid_type',
+          expected: 'string',
+          received: 'number',
+          path: ['signature'],
+          message: 'Expected string, received number',
+        });
+    });
+
+    it('Should get a validation error if a required field is missing', async () => {
+      const deleteDelegateDto = deleteDelegateDtoBuilder().build();
+      const chain = chainBuilder().build();
+
+      await request(app.getHttpServer())
+        .delete(
+          `/v1/chains/${chain.chainId}/delegates/${deleteDelegateDto.delegate}`,
+        )
+        .send(omit(deleteDelegateDto, 'delegator'))
+        .expect(422)
+        .expect({
+          statusCode: 422,
+          code: 'invalid_type',
+          expected: 'string',
+          received: 'undefined',
+          path: ['delegator'],
+          message: 'Required',
+        });
     });
   });
 
@@ -372,12 +411,12 @@ describe('Delegates controller', () => {
     it('Success', async () => {
       const chain = chainBuilder().build();
       const deleteSafeDelegateDto = deleteSafeDelegateDtoBuilder().build();
-      networkService.get.mockImplementation((url) =>
+      networkService.get.mockImplementation(({ url }) =>
         url === `${safeConfigUrl}/api/v1/chains/${chain.chainId}`
           ? Promise.resolve({ data: chain, status: 200 })
           : Promise.reject(`No matching rule for url: ${url}`),
       );
-      networkService.delete.mockImplementation((url) =>
+      networkService.delete.mockImplementation(({ url }) =>
         url ===
         `${chain.transactionService}/api/v1/safes/${deleteSafeDelegateDto.safe}/delegates/${deleteSafeDelegateDto.delegate}`
           ? Promise.resolve({ data: {}, status: 204 })
@@ -395,7 +434,7 @@ describe('Delegates controller', () => {
     it('Should return errors from provider', async () => {
       const chain = chainBuilder().build();
       const deleteSafeDelegateDto = deleteSafeDelegateDtoBuilder().build();
-      networkService.get.mockImplementation((url) =>
+      networkService.get.mockImplementation(({ url }) =>
         url === `${safeConfigUrl}/api/v1/chains/${chain.chainId}`
           ? Promise.resolve({ data: chain, status: 200 })
           : Promise.reject(`No matching rule for url: ${url}`),
@@ -408,7 +447,7 @@ describe('Delegates controller', () => {
         } as Response,
         { message: 'Malformed body', status: 400 },
       );
-      networkService.delete.mockImplementation((url) =>
+      networkService.delete.mockImplementation(({ url }) =>
         url === transactionServiceUrl
           ? Promise.reject(error)
           : Promise.reject(`No matching rule for url: ${url}`),

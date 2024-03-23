@@ -41,14 +41,12 @@ export class Chain {
   chainName: string;
   @ApiProperty()
   description: string;
-  // TODO: Make required when implemented on config service and deemed stable
-  @ApiPropertyOptional()
-  chainLogoUri?: string;
+  @ApiPropertyOptional({ type: String, nullable: true })
+  chainLogoUri: string | null;
   @ApiProperty()
   l2: boolean;
-  // TODO: Make required when implemented on config service and deemed stable
-  @ApiPropertyOptional()
-  isTestnet?: boolean;
+  @ApiProperty()
+  isTestnet: boolean;
   @ApiProperty()
   nativeCurrency: ApiNativeCurrency;
   @ApiProperty()
@@ -102,10 +100,8 @@ export class Chain {
     shortName: string,
     theme: Theme,
     ensRegistryAddress: string | null,
-    // TODO: Make required when deemed stable on config service
-    isTestnet?: boolean,
-    // TODO: Make required when deemed stable on config service
-    chainLogoUri?: string,
+    isTestnet: boolean,
+    chainLogoUri: string | null,
   ) {
     this.chainId = chainId;
     this.chainName = chainName;

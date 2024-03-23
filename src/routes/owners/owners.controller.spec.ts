@@ -27,7 +27,7 @@ describe('Owners Controller (Unit)', () => {
   let networkService: jest.MockedObjectDeep<INetworkService>;
 
   beforeEach(async () => {
-    jest.clearAllMocks();
+    jest.resetAllMocks();
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(configuration)],
@@ -103,10 +103,9 @@ describe('Owners Controller (Unit)', () => {
         });
 
       expect(networkService.get).toHaveBeenCalledTimes(1);
-      expect(networkService.get).toHaveBeenCalledWith(
-        `${safeConfigUrl}/api/v1/chains/${chainId}`,
-        undefined,
-      );
+      expect(networkService.get).toHaveBeenCalledWith({
+        url: `${safeConfigUrl}/api/v1/chains/${chainId}`,
+      });
     });
 
     it('Failure: Transaction API fails', async () => {
@@ -136,14 +135,12 @@ describe('Owners Controller (Unit)', () => {
         });
 
       expect(networkService.get).toHaveBeenCalledTimes(2);
-      expect(networkService.get).toHaveBeenCalledWith(
-        `${safeConfigUrl}/api/v1/chains/${chainId}`,
-        undefined,
-      );
-      expect(networkService.get).toHaveBeenCalledWith(
-        `${chainResponse.transactionService}/api/v1/owners/${ownerAddress}/safes/`,
-        undefined,
-      );
+      expect(networkService.get).toHaveBeenCalledWith({
+        url: `${safeConfigUrl}/api/v1/chains/${chainId}`,
+      });
+      expect(networkService.get).toHaveBeenCalledWith({
+        url: `${chainResponse.transactionService}/api/v1/owners/${ownerAddress}/safes/`,
+      });
     });
 
     it('Failure: data validation fails', async () => {
@@ -198,7 +195,7 @@ describe('Owners Controller (Unit)', () => {
         faker.finance.ethereumAddress(),
       ];
 
-      networkService.get.mockImplementation((url: string) => {
+      networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains`: {
             return Promise.resolve({
@@ -238,7 +235,7 @@ describe('Owners Controller (Unit)', () => {
           }
 
           default: {
-            fail(`Unexpected URL: ${url}`);
+            return Promise.reject(`No matching rule for url: ${url}`);
           }
         }
       });
@@ -255,7 +252,7 @@ describe('Owners Controller (Unit)', () => {
     it('Failure: Config API fails', async () => {
       const ownerAddress = faker.finance.ethereumAddress();
 
-      networkService.get.mockImplementation((url: string) => {
+      networkService.get.mockImplementation(({ url }) => {
         if (url === `${safeConfigUrl}/api/v1/chains`) {
           const error = new NetworkResponseError(
             new URL(`${safeConfigUrl}/api/v1/chains`),
@@ -265,7 +262,7 @@ describe('Owners Controller (Unit)', () => {
           );
           return Promise.reject(error);
         }
-        fail(`Unexpected URL: ${url}`);
+        return Promise.reject(`No matching rule for url: ${url}`);
       });
 
       await request(app.getHttpServer())
@@ -277,10 +274,10 @@ describe('Owners Controller (Unit)', () => {
         });
 
       expect(networkService.get).toHaveBeenCalledTimes(1);
-      expect(networkService.get).toHaveBeenCalledWith(
-        `${safeConfigUrl}/api/v1/chains`,
-        { params: { limit: undefined, offset: undefined } },
-      );
+      expect(networkService.get).toHaveBeenCalledWith({
+        url: `${safeConfigUrl}/api/v1/chains`,
+        networkRequest: { params: { limit: undefined, offset: undefined } },
+      });
     });
 
     it('Failure: data validation fails', async () => {
@@ -296,7 +293,7 @@ describe('Owners Controller (Unit)', () => {
         faker.finance.ethereumAddress(),
       ];
 
-      networkService.get.mockImplementation((url: string) => {
+      networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains`: {
             return Promise.resolve({
@@ -322,7 +319,7 @@ describe('Owners Controller (Unit)', () => {
           }
 
           default: {
-            fail(`Unexpected URL: ${url}`);
+            return Promise.reject(`No matching rule for url: ${url}`);
           }
         }
       });

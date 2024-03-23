@@ -1,16 +1,15 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ICollectiblesRepository } from '@/domain/collectibles/collectibles.repository.interface';
-import { CollectiblesValidator } from '@/domain/collectibles/collectibles.validator';
+import { CollectibleSchema } from '@/domain/collectibles/entities/schemas/collectible.schema';
 import { Collectible } from '@/domain/collectibles/entities/collectible.entity';
 import { Page } from '@/domain/entities/page.entity';
-import { ITransactionApiManager } from '@/domain/interfaces/transaction-api.manager.interface';
+import { IBalancesApiManager } from '@/domain/interfaces/balances-api.manager.interface';
 
 @Injectable()
 export class CollectiblesRepository implements ICollectiblesRepository {
   constructor(
-    @Inject(ITransactionApiManager)
-    private readonly transactionApiManager: ITransactionApiManager,
-    private readonly validator: CollectiblesValidator,
+    @Inject(IBalancesApiManager)
+    private readonly balancesApiManager: IBalancesApiManager,
   ) {}
 
   async getCollectibles(args: {
@@ -21,18 +20,9 @@ export class CollectiblesRepository implements ICollectiblesRepository {
     trusted?: boolean;
     excludeSpam?: boolean;
   }): Promise<Page<Collectible>> {
-    const transactionApi = await this.transactionApiManager.getTransactionApi(
-      args.chainId,
-    );
-    const page = await transactionApi.getCollectibles({
-      safeAddress: args.safeAddress,
-      limit: args.limit,
-      offset: args.offset,
-      trusted: args.trusted,
-      excludeSpam: args.excludeSpam,
-    });
-
-    page?.results.map((result) => this.validator.validate(result));
+    const api = await this.balancesApiManager.getBalancesApi(args.chainId);
+    const page = await api.getCollectibles(args);
+    page?.results.map((result) => CollectibleSchema.parse(result));
     return page;
   }
 
@@ -40,10 +30,7 @@ export class CollectiblesRepository implements ICollectiblesRepository {
     chainId: string;
     safeAddress: string;
   }): Promise<void> {
-    const transactionApi = await this.transactionApiManager.getTransactionApi(
-      args.chainId,
-    );
-
-    return transactionApi.clearCollectibles(args.safeAddress);
+    const api = await this.balancesApiManager.getBalancesApi(args.chainId);
+    await api.clearCollectibles(args);
   }
 }

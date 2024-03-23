@@ -2,11 +2,12 @@ import { Inject, Injectable } from '@nestjs/common';
 import { Hex } from 'viem';
 import { IAlertsRepository } from '@/domain/alerts/alerts.repository.interface';
 import { IAlertsApi } from '@/domain/interfaces/alerts-api.interface';
-import { AlertsRegistration } from '@/domain/alerts/entities/alerts.entity';
+import { AlertsRegistration } from '@/domain/alerts/entities/alerts-registration.entity';
+import { AlertsDeletion } from '@/domain/alerts/entities/alerts-deletion.entity';
 import { AlertLog } from '@/routes/alerts/entities/alert.dto.entity';
-import { DelayModifierDecoder } from '@/domain/alerts/contracts/delay-modifier-decoder.helper';
-import { SafeDecoder } from '@/domain/alerts/contracts/safe-decoder.helper';
-import { MultiSendDecoder } from '@/domain/alerts/contracts/multi-send-decoder.helper';
+import { DelayModifierDecoder } from '@/domain/alerts/contracts/decoders/delay-modifier-decoder.helper';
+import { SafeDecoder } from '@/domain/contracts/decoders/safe-decoder.helper';
+import { MultiSendDecoder } from '@/domain/contracts/decoders/multi-send-decoder.helper';
 import { IEmailApi } from '@/domain/interfaces/email-api.interface';
 import { IAccountRepository } from '@/domain/account/account.repository.interface';
 import { ILoggingService, LoggingService } from '@/logging/logging.interface';
@@ -15,6 +16,9 @@ import { ISafeRepository } from '@/domain/safe/safe.repository.interface';
 import { Safe } from '@/domain/safe/entities/safe.entity';
 import { UrlGeneratorHelper } from '@/domain/alerts/urls/url-generator.helper';
 import { IChainsRepository } from '@/domain/chains/chains.repository.interface';
+import { ISubscriptionRepository } from '@/domain/subscriptions/subscription.repository.interface';
+import { SubscriptionRepository } from '@/domain/subscriptions/subscription.repository';
+import { Account } from '@/domain/account/entities/account.entity';
 
 @Injectable()
 export class AlertsRepository implements IAlertsRepository {
@@ -40,10 +44,16 @@ export class AlertsRepository implements IAlertsRepository {
     private readonly safeRepository: ISafeRepository,
     @Inject(IChainsRepository)
     private readonly chainRepository: IChainsRepository,
+    @Inject(ISubscriptionRepository)
+    private readonly subscriptionRepository: ISubscriptionRepository,
   ) {}
 
-  async addContracts(contracts: Array<AlertsRegistration>): Promise<void> {
-    await this.alertsApi.addContracts(contracts);
+  async addContract(contract: AlertsRegistration): Promise<void> {
+    await this.alertsApi.addContract(contract);
+  }
+
+  async deleteContract(contract: AlertsDeletion): Promise<void> {
+    await this.alertsApi.deleteContract(contract);
   }
 
   async handleAlertLog(chainId: string, log: AlertLog): Promise<void> {
@@ -63,14 +73,11 @@ export class AlertsRepository implements IAlertsRepository {
 
     // Recovery module is deployed per Safe so we can assume that it is only enabled on one
     const safeAddress = safes[0];
-
-    const verifiedAccounts = await this.accountRepository.getAccounts({
+    const subscribedAccounts = await this._getSubscribedAccounts({
       chainId,
       safeAddress,
-      onlyVerified: true,
     });
-
-    if (verifiedAccounts.length === 0) {
+    if (subscribedAccounts.length === 0) {
       this.loggingService.debug(
         `An alert for a Safe with no associated emails was received. moduleAddress=${moduleAddress}, safeAddress=${safeAddress}`,
       );
@@ -99,17 +106,53 @@ export class AlertsRepository implements IAlertsRepository {
       await this._notifySafeSetup({
         chainId,
         newSafeState,
+        accountsToNotify: subscribedAccounts,
       });
     } catch {
-      const emails = verifiedAccounts.map(
-        (account) => account.emailAddress.value,
-      );
       await this._notifyUnknownTransaction({
         chainId,
         safeAddress,
-        emails,
+        accountsToNotify: subscribedAccounts,
       });
     }
+  }
+
+  /**
+   * Gets all the subscribed accounts to CATEGORY_ACCOUNT_RECOVERY for a given safe
+   *
+   * @param args.chainId - the chain id where the safe is deployed
+   * @param args.safeAddress - the safe address to which the accounts should be retrieved
+   *
+   * @private
+   */
+  private async _getSubscribedAccounts(args: {
+    chainId: string;
+    safeAddress: string;
+  }): Promise<Account[]> {
+    const accounts = await this.accountRepository.getAccounts({
+      chainId: args.chainId,
+      safeAddress: args.safeAddress,
+      onlyVerified: true,
+    });
+
+    const subscribedAccounts = accounts.map(async (account) => {
+      const accountSubscriptions =
+        await this.subscriptionRepository.getSubscriptions({
+          chainId: account.chainId,
+          safeAddress: account.safeAddress,
+          signer: account.signer,
+        });
+      return accountSubscriptions.some(
+        (subscription) =>
+          subscription.key === SubscriptionRepository.CATEGORY_ACCOUNT_RECOVERY,
+      )
+        ? account
+        : null;
+    });
+
+    return (await Promise.all(subscribedAccounts)).filter(
+      (account): account is Account => account !== null,
+    );
   }
 
   private _decodeTransactionAdded(
@@ -197,44 +240,52 @@ export class AlertsRepository implements IAlertsRepository {
   private async _notifyUnknownTransaction(args: {
     safeAddress: string;
     chainId: string;
-    emails: string[];
+    accountsToNotify: Account[];
   }): Promise<void> {
     const chain = await this.chainRepository.getChain(args.chainId);
-
     const webAppUrl = this.urlGenerator.addressToSafeWebAppUrl({
       chain,
       safeAddress: args.safeAddress,
     });
 
-    return this.emailApi.createMessage({
-      to: args.emails,
-      template: this.configurationService.getOrThrow<string>(
-        'email.templates.unknownRecoveryTx',
-      ),
-      subject: AlertsRepository.UNKNOWN_TX_EMAIL_SUBJECT,
-      substitutions: {
-        webAppUrl,
-      },
+    const emailActions = args.accountsToNotify.map((account) => {
+      const unsubscriptionUrl = this.urlGenerator.unsubscriptionSafeWebAppUrl({
+        unsubscriptionToken: account.unsubscriptionToken,
+      });
+      return this.emailApi.createMessage({
+        to: [account.emailAddress.value],
+        template: this.configurationService.getOrThrow<string>(
+          'email.templates.unknownRecoveryTx',
+        ),
+        subject: AlertsRepository.UNKNOWN_TX_EMAIL_SUBJECT,
+        substitutions: {
+          webAppUrl,
+          unsubscriptionUrl,
+        },
+      });
     });
+
+    Promise.allSettled(emailActions)
+      .then((results) => {
+        results.forEach((result, index) => {
+          if (result.status === 'rejected') {
+            const signer = args.accountsToNotify.at(index)?.signer;
+            this.loggingService.warn(
+              `Error sending email to user with account ${signer}, for Safe ${args.safeAddress} on chain ${args.chainId}`,
+            );
+          }
+        });
+      })
+      .catch((reason) => {
+        this.loggingService.warn(reason);
+      });
   }
 
   private async _notifySafeSetup(args: {
     chainId: string;
     newSafeState: Safe;
+    accountsToNotify: Account[];
   }): Promise<void> {
-    const verifiedAccounts = await this.accountRepository.getAccounts({
-      chainId: args.chainId,
-      safeAddress: args.newSafeState.address,
-      onlyVerified: true,
-    });
-
-    if (!verifiedAccounts.length) {
-      this.loggingService.debug(
-        `An alert log for an transaction with no verified emails associated was thrown for Safe ${args.newSafeState.address}`,
-      );
-      return;
-    }
-
     const chain = await this.chainRepository.getChain(args.chainId);
 
     const webAppUrl = this.urlGenerator.addressToSafeWebAppUrl({
@@ -251,20 +302,38 @@ export class AlertsRepository implements IAlertsRepository {
       };
     });
 
-    const emails = verifiedAccounts.map(
-      (account) => account.emailAddress.value,
-    );
-    return this.emailApi.createMessage({
-      to: emails,
-      template: this.configurationService.getOrThrow<string>(
-        'email.templates.recoveryTx',
-      ),
-      subject: AlertsRepository.RECOVERY_TX_EMAIL_SUBJECT,
-      substitutions: {
-        webAppUrl,
-        owners,
-        threshold: args.newSafeState.threshold.toString(),
-      },
+    const emailActions = args.accountsToNotify.map((account) => {
+      const unsubscriptionUrl = this.urlGenerator.unsubscriptionSafeWebAppUrl({
+        unsubscriptionToken: account.unsubscriptionToken,
+      });
+      return this.emailApi.createMessage({
+        to: [account.emailAddress.value],
+        template: this.configurationService.getOrThrow<string>(
+          'email.templates.recoveryTx',
+        ),
+        subject: AlertsRepository.RECOVERY_TX_EMAIL_SUBJECT,
+        substitutions: {
+          webAppUrl,
+          owners,
+          threshold: args.newSafeState.threshold.toString(),
+          unsubscriptionUrl,
+        },
+      });
     });
+
+    Promise.allSettled(emailActions)
+      .then((results) => {
+        results.forEach((result, index) => {
+          if (result.status === 'rejected') {
+            const signer = args.accountsToNotify.at(index)?.signer;
+            this.loggingService.warn(
+              `Error sending email to user with account ${signer}, for Safe ${args.newSafeState.address} on chain ${args.chainId}`,
+            );
+          }
+        });
+      })
+      .catch((reason) => {
+        this.loggingService.warn(reason);
+      });
   }
 }

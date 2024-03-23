@@ -21,32 +21,41 @@ export default () => ({
   balances: {
     balancesTtlSeconds: parseInt(process.env.BALANCES_TTL_SECONDS ?? `${300}`),
     providers: {
-      valk: {
-        baseUri:
-          process.env.VALK_BASE_URI ||
-          'https://merlin-api-v1.cf/api/merlin/public',
-        apiKey: process.env.VALK_API_KEY,
-        chains: {
-          1: { chainName: 'eth' },
-          10: { chainName: 'op' },
-          56: { chainName: 'bsc' },
-          100: { chainName: 'xdai' },
-          137: { chainName: 'matic' },
-          324: { chainName: 'era' },
-          1101: { chainName: 'pze' },
-          8453: { chainName: 'base' },
-          42161: { chainName: 'arb' },
-          42220: { chainName: 'celo' },
-          43114: { chainName: 'avax' },
-          // 11155111 (Sepolia) is not available on Valk
-          // 11155111: { chainName: '' },
-          1313161554: { chainName: 'aurora' },
+      safe: {
+        prices: {
+          baseUri:
+            process.env.PRICES_PROVIDER_API_BASE_URI ||
+            'https://api.coingecko.com/api/v3',
+          apiKey: process.env.PRICES_PROVIDER_API_KEY,
+          pricesTtlSeconds: parseInt(
+            process.env.PRICES_TTL_SECONDS ?? `${300}`,
+          ),
+          notFoundPriceTtlSeconds: parseInt(
+            process.env.NOT_FOUND_PRICE_TTL_SECONDS ?? `${72 * 60 * 60}`,
+          ),
+          chains: {
+            1: { nativeCoin: 'ethereum', chainName: 'ethereum' },
+            10: { nativeCoin: 'ethereum', chainName: 'optimistic-ethereum' },
+            100: { nativeCoin: 'xdai', chainName: 'xdai' },
+            1101: { nativeCoin: 'ethereum', chainName: 'polygon-zkevm' },
+            11155111: { nativeCoin: 'ethereum', chainName: 'ethereum' },
+            1313161554: { nativeCoin: 'ethereum', chainName: 'aurora' },
+            137: { nativeCoin: 'matic-network', chainName: 'polygon-pos' },
+            324: { nativeCoin: 'ethereum', chainName: 'zksync' },
+            42161: { nativeCoin: 'ethereum', chainName: 'arbitrum-one' },
+            42220: { nativeCoin: 'celo', chainName: 'celo' },
+            43114: { nativeCoin: 'avalanche-2', chainName: 'avalanche' },
+            5: { nativeCoin: 'ethereum', chainName: 'ethereum' },
+            56: { nativeCoin: 'binancecoin', chainName: 'binance-smart-chain' },
+            8453: { nativeCoin: 'ethereum', chainName: 'base' },
+            84531: { nativeCoin: 'ethereum', chainName: 'base' },
+            84532: { nativeCoin: 'ethereum', chainName: 'base' },
+          },
         },
-        currencies: ['AED', 'AUD', 'CAD', 'EUR', 'GBP', 'INR', 'USD'],
       },
       zerion: {
-        baseUri: process.env.ZERION_BASE_URI || 'https://api.zerion.io',
         apiKey: process.env.ZERION_API_KEY,
+        baseUri: process.env.ZERION_BASE_URI || 'https://api.zerion.io',
         chains: {
           1: { chainName: 'ethereum' },
           10: { chainName: 'optimism' },
@@ -82,6 +91,12 @@ export default () => ({
           'try',
           'zar',
         ],
+        limitPeriodSeconds: parseInt(
+          process.env.ZERION_RATE_LIMIT_PERIOD_SECONDS ?? `${10}`,
+        ),
+        limitCalls: parseInt(
+          process.env.ZERION_RATE_LIMIT_CALLS_BY_PERIOD ?? `${2}`,
+        ),
       },
     },
   },
@@ -92,6 +107,18 @@ export default () => ({
       database: process.env.POSTGRES_DB || 'safe-client-gateway',
       username: process.env.POSTGRES_USER || 'postgres',
       password: process.env.POSTGRES_PASSWORD || 'postgres',
+      ssl: {
+        enabled: process.env.POSTGRES_SSL_ENABLED?.toLowerCase() === 'true',
+        requestCert:
+          process.env.POSTGRES_SSL_REQUEST_CERT?.toLowerCase() !== 'false',
+        // If the value is not explicitly set to false, default should be true
+        // If not false the server will reject any connection which is not authorized with the list of supplied CAs
+        // https://nodejs.org/docs/latest-v20.x/api/tls.html#tlscreateserveroptions-secureconnectionlistener
+        rejectUnauthorized:
+          process.env.POSTGRES_SSL_REJECT_UNAUTHORIZED?.toLowerCase() !==
+          'false',
+        caPath: process.env.POSTGRES_SSL_CA_PATH,
+      },
     },
   },
   email: {
@@ -139,10 +166,11 @@ export default () => ({
   features: {
     richFragments: process.env.FF_RICH_FRAGMENTS?.toLowerCase() === 'true',
     email: process.env.FF_EMAIL?.toLowerCase() === 'true',
-    valkBalancesChainIds:
-      process.env.FF_VALK_BALANCES_CHAIN_IDS?.split(',') ?? [],
     zerionBalancesChainIds:
       process.env.FF_ZERION_BALANCES_CHAIN_IDS?.split(',') ?? [],
+    locking: process.env.FF_LOCKING?.toLowerCase() === 'true',
+    relay: process.env.FF_RELAY?.toLowerCase() === 'true',
+    swapsDecoding: process.env.FF_SWAPS_DECODING?.toLowerCase() === 'true',
   },
   httpClient: {
     // Timeout in milliseconds to be used for the HTTP client.
@@ -151,9 +179,17 @@ export default () => ({
       process.env.HTTP_CLIENT_REQUEST_TIMEOUT_MILLISECONDS ?? `${5_000}`,
     ),
   },
+  locking: {
+    // TODO: Add fallback value and requirement validation
+    baseUri: process.env.LOCKING_PROVIDER_API_BASE_URI || '',
+  },
   log: {
     level: process.env.LOG_LEVEL || 'debug',
     silent: process.env.LOG_SILENT?.toLowerCase() === 'true',
+  },
+  owners: {
+    // There is no hook to invalidate the owners, so defaulting 0 disables the cache
+    ownersTtlSeconds: parseInt(process.env.OWNERS_TTL_SECONDS ?? `${0}`),
   },
   mappings: {
     history: {
@@ -162,77 +198,21 @@ export default () => ({
       ),
     },
   },
-  prices: {
-    baseUri:
-      process.env.PRICES_PROVIDER_API_BASE_URI ||
-      'https://api.coingecko.com/api/v3',
-    apiKey: process.env.PRICES_PROVIDER_API_KEY,
-    pricesTtlSeconds: parseInt(process.env.PRICES_TTL_SECONDS ?? `${300}`),
-    notFoundPriceTtlSeconds: parseInt(
-      process.env.NOT_FOUND_PRICE_TTL_SECONDS ?? `${72 * 60 * 60}`,
-    ),
-    chains: {
-      1: { nativeCoin: 'ethereum', chainName: 'ethereum' },
-      10: { nativeCoin: 'ethereum', chainName: 'optimistic-ethereum' },
-      100: { nativeCoin: 'xdai', chainName: 'xdai' },
-      1101: { nativeCoin: 'ethereum', chainName: 'polygon-zkevm' },
-      11155111: { nativeCoin: 'ethereum', chainName: 'ethereum' },
-      1313161554: { nativeCoin: 'ethereum', chainName: 'aurora' },
-      137: { nativeCoin: 'matic-network', chainName: 'polygon-pos' },
-      324: { nativeCoin: 'ethereum', chainName: 'zksync' },
-      42161: { nativeCoin: 'ethereum', chainName: 'arbitrum-one' },
-      42220: { nativeCoin: 'celo', chainName: 'celo' },
-      43114: { nativeCoin: 'avalanche-2', chainName: 'avalanche' },
-      5: { nativeCoin: 'ethereum', chainName: 'ethereum' },
-      56: { nativeCoin: 'binancecoin', chainName: 'binance-smart-chain' },
-      8453: { nativeCoin: 'ethereum', chainName: 'base' },
-      84531: { nativeCoin: 'ethereum', chainName: 'base' },
-      84532: { nativeCoin: 'ethereum', chainName: 'base' },
-      1284: { nativeCoin: 'moonbeam', chainName: 'moonbeam' },
-      1285: { nativeCoin: 'moonriver', chainName: 'moonriver' },
-      1287: { nativeCoin: 'moonbeam', chainName: 'moonbeam' },
-      59144: { nativeCoin: 'ethereum', chainName: 'linea' },
-      59140: { nativeCoin: 'ethereum', chainName: 'linea' },
-      245022934: { nativeCoin: 'neon', chainName: 'neon-evm' },
-      534352: { nativeCoin: 'ethereum', chainName: 'scroll' },
-      534351: { nativeCoin: 'ethereum', chainName: 'scroll' },
-      80085: { nativeCoin: 'berachain-bera', chainName: 'berachain' },
-      17000: { nativeCoin: 'ethereum', chainName: 'ethereum' },
-      255: { nativeCoin: 'ethereum', chainName: 'kroma' },
-      2358: { nativeCoin: 'ethereum', chainName: 'kroma' },
-      11155420: { nativeCoin: 'ethereum', chainName: 'ethereum' },
-      7777777: { nativeCoin: 'ethereum', chainName: 'zorachain' },
-      999999999: { nativeCoin: 'ethereum', chainName: 'zorachain' },
-      34443: { nativeCoin: 'ethereum', chainName: 'modechain' },
-      919: { nativeCoin: 'ethereum', chainName: 'modechain' },
-      1111: { nativeCoin: 'wemix-token', chainName: 'wemix-network' },
-      1112: { nativeCoin: 'wemix-token', chainName: 'wemix-network' },
-      7000: { nativeCoin: 'zetachain', chainName: 'zetachain' },
-      7001: { nativeCoin: 'zetachain', chainName: 'zetachain' },
-      168587773: { nativeCoin: 'ethereum', chainName: 'blast' },
-      1666600000: { nativeCoin: 'harmony', chainName: 'harmony-shard-0' },
-      1666700000: { nativeCoin: 'harmony', chainName: 'harmony-shard-0' },
-      23294: { nativeCoin: 'oasis-network', chainName: 'oasis' },
-      23295: { nativeCoin: 'oasis-network', chainName: 'oasis' },
-      30: { nativeCoin: 'rootstock', chainName: 'rootstock' },
-      31: { nativeCoin: 'rootstock', chainName: 'rootstock' },
-      18233: { nativeCoin: 'ethereum', chainName: 'unreal' },
-      111188: { nativeCoin: 'ethereum', chainName: 're-al' },
-      167008: { nativeCoin: 'ethereum', chainName: 'tko-katla' },
-      713715: { nativeCoin: 'sei-network', chainName: 'sei-network' },
-      4202: { nativeCoin: 'ethereum', chainName: 'lisksep' },
-      81457: { nativeCoin: 'ethereum', chainName: 'blast' },
-      252: { nativeCoin: 'ethereum', chainName: 'fraxtal' },
-      424: { nativeCoin: 'ethereum', chainName: 'PGN' },
-      1729: { nativeCoin: 'ethereum', chainName: 'reya' },
-    },
-  },
   redis: {
     host: process.env.REDIS_HOST || 'localhost',
     port: process.env.REDIS_PORT || '6379',
   },
   relay: {
+    baseUri:
+      process.env.RELAY_PROVIDER_API_BASE_URI || 'https://api.gelato.digital',
     limit: parseInt(process.env.RELAY_THROTTLE_LIMIT ?? `${5}`),
+    ttlSeconds: parseInt(
+      process.env.RELAY_THROTTLE_TTL_SECONDS ?? `${60 * 60}`,
+    ),
+    apiKey: {
+      100: process.env.RELAY_PROVIDER_API_KEY_GNOSIS_CHAIN,
+      11155111: process.env.RELAY_PROVIDER_API_KEY_SEPOLIA,
+    },
   },
   safeConfig: {
     baseUri:
@@ -243,5 +223,12 @@ export default () => ({
   },
   safeWebApp: {
     baseUri: process.env.SAFE_WEB_APP_BASE_URI || 'https://app.safe.global',
+  },
+  swaps: {
+    api: {
+      1: 'https://api.cow.fi/mainnet',
+      100: 'https://api.cow.fi/xdai',
+      11155111: 'https://api.cow.fi/sepolia',
+    },
   },
 });

@@ -1,66 +1,69 @@
 import { IConfigurationService } from '@/config/configuration.service.interface';
-import { IValkBalancesApi } from '@/datasources/balances-api/valk-balances-api.service';
+import { SafeBalancesApi } from '@/datasources/balances-api/safe-balances-api.service';
 import { IZerionBalancesApi } from '@/datasources/balances-api/zerion-balances-api.service';
+import { CacheFirstDataSource } from '@/datasources/cache/cache.first.data.source';
+import {
+  CacheService,
+  ICacheService,
+} from '@/datasources/cache/cache.service.interface';
+import { HttpErrorFactory } from '@/datasources/errors/http-error-factory';
 import { IBalancesApi } from '@/domain/interfaces/balances-api.interface';
 import { IBalancesApiManager } from '@/domain/interfaces/balances-api.manager.interface';
+import { IConfigApi } from '@/domain/interfaces/config-api.interface';
+import { IPricesApi } from '@/datasources/balances-api/prices-api.interface';
 import { Inject, Injectable } from '@nestjs/common';
 import { intersection } from 'lodash';
 
 @Injectable()
 export class BalancesApiManager implements IBalancesApiManager {
-  private readonly valkBalancesChainIds: string[];
-  private readonly valkBalancesApi: IBalancesApi;
-  private readonly zerionBalancesChainIds: string[];
+  private safeBalancesApiMap: Record<string, SafeBalancesApi> = {};
+  private readonly zerionChainIds: string[];
   private readonly zerionBalancesApi: IBalancesApi;
-  private readonly externalApiChainIds: string[];
+  private readonly useVpcUrl: boolean;
 
   constructor(
     @Inject(IConfigurationService)
     private readonly configurationService: IConfigurationService,
-    @Inject(IValkBalancesApi) valkBalancesApi: IBalancesApi,
+    @Inject(IConfigApi) private readonly configApi: IConfigApi,
+    private readonly dataSource: CacheFirstDataSource,
+    @Inject(CacheService) private readonly cacheService: ICacheService,
+    private readonly httpErrorFactory: HttpErrorFactory,
     @Inject(IZerionBalancesApi) zerionBalancesApi: IBalancesApi,
+    @Inject(IPricesApi) private readonly coingeckoApi: IPricesApi,
   ) {
-    this.valkBalancesChainIds = this.configurationService.getOrThrow<string[]>(
-      'features.valkBalancesChainIds',
+    this.zerionChainIds = this.configurationService.getOrThrow<string[]>(
+      'features.zerionBalancesChainIds',
     );
-    this.zerionBalancesChainIds = this.configurationService.getOrThrow<
-      string[]
-    >('features.zerionBalancesChainIds');
-
-    this.externalApiChainIds = [
-      ...this.valkBalancesChainIds,
-      ...this.zerionBalancesChainIds,
-    ];
-
-    this.valkBalancesApi = valkBalancesApi;
+    this.useVpcUrl = this.configurationService.getOrThrow<boolean>(
+      'safeTransaction.useVpcUrl',
+    );
     this.zerionBalancesApi = zerionBalancesApi;
   }
 
-  useExternalApi(chainId: string): boolean {
-    return this.externalApiChainIds.includes(chainId);
-  }
-
-  getBalancesApi(chainId: string): IBalancesApi {
-    if (this._isSupportedByValk(chainId)) {
-      return this.valkBalancesApi;
-    }
-    if (this._isSupportedByZerion(chainId)) {
+  async getBalancesApi(chainId: string): Promise<IBalancesApi> {
+    if (this.zerionChainIds.includes(chainId)) {
       return this.zerionBalancesApi;
     }
-    throw new Error(`Chain ID ${chainId} balances provider is not configured`);
+
+    const safeBalancesApi = this.safeBalancesApiMap[chainId];
+    if (safeBalancesApi !== undefined) return safeBalancesApi;
+
+    const chain = await this.configApi.getChain(chainId);
+    this.safeBalancesApiMap[chainId] = new SafeBalancesApi(
+      chainId,
+      this.useVpcUrl ? chain.vpcTransactionService : chain.transactionService,
+      this.dataSource,
+      this.cacheService,
+      this.configurationService,
+      this.httpErrorFactory,
+      this.coingeckoApi,
+    );
+    return this.safeBalancesApiMap[chainId];
   }
 
-  getFiatCodes(): string[] {
-    const valkFiatCodes = this.valkBalancesApi.getFiatCodes();
-    const zerionFiatCodes = this.zerionBalancesApi.getFiatCodes();
-    return intersection(valkFiatCodes, zerionFiatCodes).sort();
-  }
-
-  private _isSupportedByValk(chainId: string): boolean {
-    return this.valkBalancesChainIds.includes(chainId);
-  }
-
-  private _isSupportedByZerion(chainId: string): boolean {
-    return this.zerionBalancesChainIds.includes(chainId);
+  async getFiatCodes(): Promise<string[]> {
+    const zerionFiatCodes = await this.zerionBalancesApi.getFiatCodes();
+    const safeFiatCodes = await this.coingeckoApi.getFiatCodes();
+    return intersection(zerionFiatCodes, safeFiatCodes).sort();
   }
 }

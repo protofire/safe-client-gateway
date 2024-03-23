@@ -29,6 +29,7 @@ import {
   EmailAddress,
 } from '@/domain/account/entities/account.entity';
 import { accountBuilder } from '@/domain/account/entities/__tests__/account.builder';
+import { getAddress } from 'viem';
 
 const verificationCodeTtlMs = 100;
 
@@ -39,7 +40,7 @@ describe('Email controller edit email tests', () => {
   let networkService: jest.MockedObjectDeep<INetworkService>;
 
   beforeEach(async () => {
-    jest.clearAllMocks();
+    jest.resetAllMocks();
     jest.useFakeTimers();
 
     const defaultConfiguration = configuration();
@@ -87,7 +88,12 @@ describe('Email controller edit email tests', () => {
     await app.close();
   });
 
-  it('edits email successfully', async () => {
+  it.each([
+    // non-checksummed address
+    { safeAddress: faker.finance.ethereumAddress().toLowerCase() },
+    // checksummed address
+    { safeAddress: getAddress(faker.finance.ethereumAddress()) },
+  ])('edits email successfully', async ({ safeAddress }) => {
     const chain = chainBuilder().build();
     const prevEmailAddress = faker.internet.email();
     const emailAddress = faker.internet.email();
@@ -95,10 +101,10 @@ describe('Email controller edit email tests', () => {
     const privateKey = generatePrivateKey();
     const signer = privateKeyToAccount(privateKey);
     const signerAddress = signer.address;
-    const safe = safeBuilder().build();
+    const safe = safeBuilder().with('address', safeAddress).build();
     const message = `email-edit-${chain.chainId}-${safe.address}-${emailAddress}-${signerAddress}-${timestamp}`;
     const signature = await signer.signMessage({ message });
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       switch (url) {
         case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
           return Promise.resolve({ data: chain, status: 200 });
@@ -113,7 +119,7 @@ describe('Email controller edit email tests', () => {
         .with('chainId', chain.chainId)
         .with('signer', signerAddress)
         .with('isVerified', true)
-        .with('safeAddress', safe.address)
+        .with('safeAddress', getAddress(safe.address))
         .with('emailAddress', new EmailAddress(prevEmailAddress))
         .build(),
     );
@@ -139,7 +145,8 @@ describe('Email controller edit email tests', () => {
     expect(accountDataSource.updateAccountEmail).toHaveBeenCalledWith({
       chainId: chain.chainId,
       emailAddress: new EmailAddress(emailAddress),
-      safeAddress: safe.address,
+      // Should always call with the checksummed address
+      safeAddress: getAddress(safe.address),
       signer: signerAddress,
       unsubscriptionToken: expect.any(String),
     });
@@ -148,7 +155,8 @@ describe('Email controller edit email tests', () => {
       chainId: chain.chainId,
       code: expect.any(String),
       signer: signerAddress,
-      safeAddress: safe.address,
+      // Should always call with the checksummed address
+      safeAddress: getAddress(safe.address),
       codeGenerationDate: expect.any(Date),
     });
     expect(
@@ -157,7 +165,8 @@ describe('Email controller edit email tests', () => {
     expect(accountDataSource.setEmailVerificationSentDate).toHaveBeenCalledWith(
       {
         chainId: chain.chainId,
-        safeAddress: safe.address,
+        // Should always call with the checksummed address
+        safeAddress: getAddress(safe.address),
         signer: signerAddress,
         sentOn: expect.any(Date),
       },
@@ -175,7 +184,7 @@ describe('Email controller edit email tests', () => {
     const safe = safeBuilder().build();
     const message = `email-edit-${chain.chainId}-${safe.address}-${emailAddress}-${signerAddress}-${timestamp}`;
     const signature = await signer.signMessage({ message });
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       switch (url) {
         case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
           return Promise.resolve({ data: chain, status: 200 });
@@ -211,6 +220,43 @@ describe('Email controller edit email tests', () => {
     ).toHaveBeenCalledTimes(0);
   });
 
+  it('returns 422 if Safe address is not a valid Ethereum address', async () => {
+    const chain = chainBuilder().build();
+    const emailAddress = faker.internet.email();
+    const timestamp = jest.now();
+    const privateKey = generatePrivateKey();
+    const signer = privateKeyToAccount(privateKey);
+    const signerAddress = signer.address;
+    const invalidSafeAddress = faker.word.sample();
+    const message = `email-edit-${chain.chainId}-${invalidSafeAddress}-${emailAddress}-${signerAddress}-${timestamp}`;
+    const signature = await signer.signMessage({ message });
+    accountDataSource.getAccount.mockResolvedValue({
+      emailAddress: new EmailAddress(emailAddress),
+    } as Account);
+
+    await request(app.getHttpServer())
+      .put(
+        `/v1/chains/${chain.chainId}/safes/${invalidSafeAddress}/emails/${signer.address}`,
+      )
+      .set('Safe-Wallet-Signature', signature)
+      .set('Safe-Wallet-Signature-Timestamp', timestamp.toString())
+      .send({
+        emailAddress,
+      })
+      .expect(422)
+      .expect({
+        message: `Address "${invalidSafeAddress}" is invalid.`,
+        error: 'Unprocessable Entity',
+        statusCode: 422,
+      });
+
+    expect(accountDataSource.updateAccountEmail).toHaveBeenCalledTimes(0);
+    expect(accountDataSource.setEmailVerificationCode).toHaveBeenCalledTimes(0);
+    expect(
+      accountDataSource.setEmailVerificationSentDate,
+    ).toHaveBeenCalledTimes(0);
+  });
+
   it('should return 404 if trying to edit a non-existent email entry', async () => {
     const chain = chainBuilder().build();
     const emailAddress = faker.internet.email();
@@ -221,7 +267,7 @@ describe('Email controller edit email tests', () => {
     const safe = safeBuilder().build();
     const message = `email-edit-${chain.chainId}-${safe.address}-${emailAddress}-${signerAddress}-${timestamp}`;
     const signature = await signer.signMessage({ message });
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       switch (url) {
         case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
           return Promise.resolve({ data: chain, status: 200 });
@@ -268,7 +314,7 @@ describe('Email controller edit email tests', () => {
     const safe = safeBuilder().build();
     const message = `email-edit-${chain.chainId}-${safe.address}-${emailAddress}-${signerAddress}-${timestamp}`;
     const signature = await signer.signMessage({ message });
-    networkService.get.mockImplementation((url) => {
+    networkService.get.mockImplementation(({ url }) => {
       switch (url) {
         case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
           return Promise.resolve({ data: chain, status: 200 });

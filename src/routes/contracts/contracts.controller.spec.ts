@@ -27,7 +27,7 @@ describe('Contracts controller', () => {
   let networkService: jest.MockedObjectDeep<INetworkService>;
 
   beforeEach(async () => {
-    jest.clearAllMocks();
+    jest.resetAllMocks();
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(configuration)],
@@ -58,7 +58,7 @@ describe('Contracts controller', () => {
     it('Success', async () => {
       const chain = chainBuilder().build();
       const contract = contractBuilder().build();
-      networkService.get.mockImplementation((url) => {
+      networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
             return Promise.resolve({ data: chain, status: 200 });
@@ -78,7 +78,7 @@ describe('Contracts controller', () => {
     it('Failure: Config API fails', async () => {
       const chain = chainBuilder().build();
       const contract = contractBuilder().build();
-      networkService.get.mockImplementation((url) => {
+      networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
             return Promise.reject(new Error());
@@ -96,7 +96,7 @@ describe('Contracts controller', () => {
       const chain = chainBuilder().build();
       const contract = contractBuilder().build();
       const transactionServiceUrl = `${chain.transactionService}/api/v1/contracts/${contract.address}`;
-      networkService.get.mockImplementation((url) => {
+      networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
             return Promise.resolve({ data: chain, status: 200 });
@@ -119,7 +119,7 @@ describe('Contracts controller', () => {
     it('should get a validation error', async () => {
       const chain = chainBuilder().build();
       const contract = contractBuilder().build();
-      networkService.get.mockImplementation((url) => {
+      networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
             return Promise.resolve({ data: chain, status: 200 });
@@ -137,9 +137,8 @@ describe('Contracts controller', () => {
         .get(`/v1/chains/${chain.chainId}/contracts/${contract.address}`)
         .expect(500)
         .expect({
-          message: 'Validation failed',
-          code: 42,
-          arguments: [],
+          statusCode: 500,
+          message: 'Internal server error',
         });
     });
   });
