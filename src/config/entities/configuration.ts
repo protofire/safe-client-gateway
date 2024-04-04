@@ -89,6 +89,7 @@ export default () => ({
             1729: { nativeCoin: 'ethereum', chainName: 'reya' },
             810180: { nativeCoin: 'ethereum', chainName: 'zklink' },
             810182: { nativeCoin: 'ethereum', chainName: 'zklink' },
+            4157: { nativeCoin: 'crossfi-2', chainName: 'crossfi-2' },
           },
         },
       },
