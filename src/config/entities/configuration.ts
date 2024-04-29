@@ -96,6 +96,8 @@ export default () => ({
             123420111: { nativeCoin: 'ethereum', chainName: 'opcelestia-raspberry' },
             88153591557: { nativeCoin: 'ethereum', chainName: 'arb-blueberry' },
             94204209: { nativeCoin: 'ethereum', chainName: 'polygon-blackberry' },
+            690: { nativeCoin: 'ethereum', chainName: 'redstone-mainnet' },
+            17069: { nativeCoin: 'ethereum', chainName: 'redstone-garnet' },
           },
         },
       },
