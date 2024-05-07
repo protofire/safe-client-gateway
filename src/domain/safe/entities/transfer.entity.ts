@@ -1,62 +1,21 @@
-export interface Transfer {
-  blockNumber: number;
-  executionDate: Date;
-  from: string;
-  to: string;
-  transactionHash: string;
-  transferId: string;
-}
+import { buildPageSchema } from '@/domain/entities/schemas/page.schema.factory';
+import { Erc20TransferSchema } from '@/domain/safe/entities/schemas/erc20-transfer.schema';
+import { Erc721TransferSchema } from '@/domain/safe/entities/schemas/erc721-transfer.schema';
+import { NativeTokenTransferSchema } from '@/domain/safe/entities/schemas/native-token-transfer.schema';
+import { z } from 'zod';
 
-const hasTokenAddress = (
-  transfer: Transfer,
-): transfer is Transfer & {
-  tokenAddress: (ERC20Transfer | ERC721Transfer)['tokenAddress'];
-} => {
-  return 'tokenAddress' in transfer && transfer.tokenAddress != null;
-};
+export type Transfer = z.infer<typeof TransferSchema>;
 
-const hasValue = (
-  transfer: Transfer,
-): transfer is Transfer & {
-  value: (ERC20Transfer | NativeTokenTransfer)['value'];
-} => {
-  return 'value' in transfer && transfer.value != null;
-};
+export const TransferSchema = z.discriminatedUnion('type', [
+  NativeTokenTransferSchema,
+  Erc20TransferSchema,
+  Erc721TransferSchema,
+]);
 
-const hasTokenId = (
-  transfer: Transfer,
-): transfer is Transfer & {
-  tokenId: ERC721Transfer['tokenId'];
-} => {
-  return 'tokenId' in transfer && transfer.tokenId != null;
-};
+export const TransferPageSchema = buildPageSchema(TransferSchema);
 
-export interface ERC20Transfer extends Transfer {
-  tokenAddress: string;
-  value: string;
-}
+export type ERC20Transfer = z.infer<typeof Erc20TransferSchema>;
 
-export function isERC20Transfer(transfer: Transfer): transfer is ERC20Transfer {
-  return hasTokenAddress(transfer) && hasValue(transfer);
-}
+export type ERC721Transfer = z.infer<typeof Erc721TransferSchema>;
 
-export interface ERC721Transfer extends Transfer {
-  tokenAddress: string;
-  tokenId: string;
-}
-
-export function isERC721Transfer(
-  transfer: Transfer,
-): transfer is ERC721Transfer {
-  return hasTokenAddress(transfer) && hasTokenId(transfer);
-}
-
-export interface NativeTokenTransfer extends Transfer {
-  value: string;
-}
-
-export function isNativeTokenTransfer(
-  transfer: Transfer,
-): transfer is NativeTokenTransfer {
-  return !hasTokenAddress(transfer) && hasValue(transfer);
-}
+export type NativeTokenTransfer = z.infer<typeof NativeTokenTransferSchema>;

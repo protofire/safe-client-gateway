@@ -60,6 +60,8 @@ import {
 import { TransactionItem } from '@/routes/transactions/entities/transaction-item.entity';
 import { NetworkResponseError } from '@/datasources/network/entities/network.error.entity';
 import { getAddress } from 'viem';
+import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
+import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 
 describe('Transactions History Controller (Unit)', () => {
   let app: INestApplication;
@@ -72,6 +74,7 @@ describe('Transactions History Controller (Unit)', () => {
     const testConfiguration: typeof configuration = () => ({
       ...configuration(),
       mappings: {
+        ...configuration().mappings,
         history: {
           maxNestedTransfers: 5,
         },
@@ -89,6 +92,8 @@ describe('Transactions History Controller (Unit)', () => {
       .useModule(TestLoggingModule)
       .overrideModule(NetworkModule)
       .useModule(TestNetworkModule)
+      .overrideModule(QueuesApiModule)
+      .useModule(TestQueuesApiModule)
       .compile();
 
     const configurationService = moduleFixture.get(IConfigurationService);
@@ -177,11 +182,7 @@ describe('Transactions History Controller (Unit)', () => {
         `/v1/chains/${chain.chainId}/safes/${safeAddress}/transactions/history/`,
       )
       .expect(500)
-      .expect({
-        message: 'Validation failed',
-        code: 42,
-        arguments: [],
-      });
+      .expect({ statusCode: 500, message: 'Internal server error' });
   });
 
   it('Should return only creation transaction', async () => {

@@ -5,7 +5,6 @@ import * as request from 'supertest';
 import { TestAppProvider } from '@/__tests__/test-app.provider';
 import { TestCacheModule } from '@/datasources/cache/__tests__/test.cache.module';
 import { TestNetworkModule } from '@/datasources/network/__tests__/test.network.module';
-import { DomainModule } from '@/domain.module';
 import { chainBuilder } from '@/domain/chains/entities/__tests__/chain.builder';
 import { contractBuilder } from '@/domain/contracts/entities/__tests__/contract.builder';
 import { safeAppBuilder } from '@/domain/safe-apps/entities/__tests__/safe-app.builder';
@@ -16,7 +15,6 @@ import {
 } from '@/domain/safe/entities/__tests__/multisig-transaction.builder';
 import { safeBuilder } from '@/domain/safe/entities/__tests__/safe.builder';
 import { TestLoggingModule } from '@/logging/__tests__/test.logging.module';
-import { ValidationModule } from '@/validation/validation.module';
 import { TransactionsModule } from '@/routes/transactions/transactions.module';
 import { ConfigurationModule } from '@/config/configuration.module';
 import configuration from '@/config/entities/__tests__/configuration';
@@ -43,12 +41,10 @@ describe('Add transaction confirmations - Transactions Controller (Unit)', () =>
         // feature
         TransactionsModule,
         // common
-        DomainModule,
         TestCacheModule,
         ConfigurationModule.register(configuration),
         TestLoggingModule,
         TestNetworkModule,
-        ValidationModule,
       ],
     }).compile();
 

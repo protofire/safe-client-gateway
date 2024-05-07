@@ -5,7 +5,6 @@ import * as request from 'supertest';
 import { TestAppProvider } from '@/__tests__/test-app.provider';
 import { TestCacheModule } from '@/datasources/cache/__tests__/test.cache.module';
 import { TestNetworkModule } from '@/datasources/network/__tests__/test.network.module';
-import { DomainModule } from '@/domain.module';
 import { chainBuilder } from '@/domain/chains/entities/__tests__/chain.builder';
 import { contractBuilder } from '@/domain/contracts/entities/__tests__/contract.builder';
 import { safeAppBuilder } from '@/domain/safe-apps/entities/__tests__/safe-app.builder';
@@ -16,7 +15,6 @@ import {
 } from '@/domain/safe/entities/__tests__/multisig-transaction.builder';
 import { safeBuilder } from '@/domain/safe/entities/__tests__/safe.builder';
 import { TestLoggingModule } from '@/logging/__tests__/test.logging.module';
-import { ValidationModule } from '@/validation/validation.module';
 import { TransactionsModule } from '@/routes/transactions/transactions.module';
 import { ConfigurationModule } from '@/config/configuration.module';
 import configuration from '@/config/entities/__tests__/configuration';
@@ -41,12 +39,10 @@ describe('List queued transactions by Safe - Transactions Controller (Unit)', ()
         // feature
         TransactionsModule,
         // common
-        DomainModule,
         TestCacheModule,
         ConfigurationModule.register(configuration),
         TestLoggingModule,
         TestNetworkModule,
-        ValidationModule,
       ],
     }).compile();
 
@@ -89,11 +85,7 @@ describe('List queued transactions by Safe - Transactions Controller (Unit)', ()
     await request(app.getHttpServer())
       .get(`/v1/chains/${chainId}/safes/${safe.address}/transactions/queued`)
       .expect(500)
-      .expect({
-        message: 'Validation failed',
-        code: 42,
-        arguments: [],
-      });
+      .expect({ statusCode: 500, message: 'Internal server error' });
   });
 
   it('should get a transactions queue with labels and conflict headers', async () => {
@@ -117,7 +109,7 @@ describe('List queued transactions by Safe - Transactions Controller (Unit)', ()
         multisigTransactionBuilder()
           .with('safe', safeAddress)
           .with('isExecuted', false)
-          .with('safeTxHash', faker.finance.ethereumAddress())
+          .with('safeTxHash', faker.string.hexadecimal() as `0x${string}`)
           .with('nonce', 1)
           .with('dataDecoded', null)
           .build(),
@@ -126,7 +118,7 @@ describe('List queued transactions by Safe - Transactions Controller (Unit)', ()
         multisigTransactionBuilder()
           .with('safe', safeAddress)
           .with('isExecuted', false)
-          .with('safeTxHash', faker.finance.ethereumAddress())
+          .with('safeTxHash', faker.string.hexadecimal() as `0x${string}`)
           .with('nonce', 1)
           .with('dataDecoded', null)
           .build(),
@@ -135,7 +127,7 @@ describe('List queued transactions by Safe - Transactions Controller (Unit)', ()
         multisigTransactionBuilder()
           .with('safe', safeAddress)
           .with('nonce', 2)
-          .with('safeTxHash', faker.finance.ethereumAddress())
+          .with('safeTxHash', faker.string.hexadecimal() as `0x${string}`)
           .with('isExecuted', false)
           .with('dataDecoded', null)
           .build(),
@@ -144,7 +136,7 @@ describe('List queued transactions by Safe - Transactions Controller (Unit)', ()
         multisigTransactionBuilder()
           .with('safe', safeAddress)
           .with('nonce', 2)
-          .with('safeTxHash', faker.finance.ethereumAddress())
+          .with('safeTxHash', faker.string.hexadecimal() as `0x${string}`)
           .with('isExecuted', false)
           .with('dataDecoded', null)
           .build(),
@@ -153,7 +145,7 @@ describe('List queued transactions by Safe - Transactions Controller (Unit)', ()
         multisigTransactionBuilder()
           .with('safe', safeAddress)
           .with('nonce', 3)
-          .with('safeTxHash', faker.finance.ethereumAddress())
+          .with('safeTxHash', faker.string.hexadecimal() as `0x${string}`)
           .with('isExecuted', false)
           .with('dataDecoded', null)
           .build(),
@@ -162,7 +154,7 @@ describe('List queued transactions by Safe - Transactions Controller (Unit)', ()
         multisigTransactionBuilder()
           .with('safe', safeAddress)
           .with('nonce', 4)
-          .with('safeTxHash', faker.finance.ethereumAddress())
+          .with('safeTxHash', faker.string.hexadecimal() as `0x${string}`)
           .with('isExecuted', false)
           .with('dataDecoded', null)
           .build(),
@@ -294,7 +286,7 @@ describe('List queued transactions by Safe - Transactions Controller (Unit)', ()
         multisigTransactionBuilder()
           .with('safe', safeAddress)
           .with('isExecuted', false)
-          .with('safeTxHash', faker.finance.ethereumAddress())
+          .with('safeTxHash', faker.string.hexadecimal() as `0x${string}`)
           .with('nonce', 1)
           .with('dataDecoded', null)
           .build(),
@@ -303,7 +295,7 @@ describe('List queued transactions by Safe - Transactions Controller (Unit)', ()
         multisigTransactionBuilder()
           .with('safe', safeAddress)
           .with('isExecuted', false)
-          .with('safeTxHash', faker.finance.ethereumAddress())
+          .with('safeTxHash', faker.string.hexadecimal() as `0x${string}`)
           .with('nonce', 1)
           .with('dataDecoded', null)
           .build(),
@@ -312,7 +304,7 @@ describe('List queued transactions by Safe - Transactions Controller (Unit)', ()
         multisigTransactionBuilder()
           .with('safe', safeAddress)
           .with('isExecuted', false)
-          .with('safeTxHash', faker.finance.ethereumAddress())
+          .with('safeTxHash', faker.string.hexadecimal() as `0x${string}`)
           .with('nonce', 1)
           .with('dataDecoded', null)
           .build(),
@@ -321,7 +313,7 @@ describe('List queued transactions by Safe - Transactions Controller (Unit)', ()
         multisigTransactionBuilder()
           .with('safe', safeAddress)
           .with('isExecuted', false)
-          .with('safeTxHash', faker.finance.ethereumAddress())
+          .with('safeTxHash', faker.string.hexadecimal() as `0x${string}`)
           .with('nonce', 1)
           .with('dataDecoded', null)
           .build(),
@@ -330,7 +322,7 @@ describe('List queued transactions by Safe - Transactions Controller (Unit)', ()
         multisigTransactionBuilder()
           .with('safe', safeAddress)
           .with('nonce', 2)
-          .with('safeTxHash', faker.finance.ethereumAddress())
+          .with('safeTxHash', faker.string.hexadecimal() as `0x${string}`)
           .with('isExecuted', false)
           .with('dataDecoded', null)
           .build(),
@@ -339,7 +331,7 @@ describe('List queued transactions by Safe - Transactions Controller (Unit)', ()
         multisigTransactionBuilder()
           .with('safe', safeAddress)
           .with('nonce', 2)
-          .with('safeTxHash', faker.finance.ethereumAddress())
+          .with('safeTxHash', faker.string.hexadecimal() as `0x${string}`)
           .with('isExecuted', false)
           .with('dataDecoded', null)
           .build(),
@@ -348,7 +340,7 @@ describe('List queued transactions by Safe - Transactions Controller (Unit)', ()
         multisigTransactionBuilder()
           .with('safe', safeAddress)
           .with('nonce', 3)
-          .with('safeTxHash', faker.finance.ethereumAddress())
+          .with('safeTxHash', faker.string.hexadecimal() as `0x${string}`)
           .with('isExecuted', false)
           .with('dataDecoded', null)
           .build(),
@@ -357,7 +349,7 @@ describe('List queued transactions by Safe - Transactions Controller (Unit)', ()
         multisigTransactionBuilder()
           .with('safe', safeAddress)
           .with('nonce', 3)
-          .with('safeTxHash', faker.finance.ethereumAddress())
+          .with('safeTxHash', faker.string.hexadecimal() as `0x${string}`)
           .with('isExecuted', false)
           .with('dataDecoded', null)
           .build(),

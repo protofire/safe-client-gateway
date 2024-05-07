@@ -13,7 +13,6 @@ import { BalancesModule } from '@/routes/balances/balances.module';
 import { NetworkModule } from '@/datasources/network/network.module';
 import { ConfigurationModule } from '@/config/configuration.module';
 import { CacheModule } from '@/datasources/cache/cache.module';
-import { DomainModule } from '@/domain.module';
 import { CacheHooksModule } from '@/routes/cache-hooks/cache-hooks.module';
 import { CollectiblesModule } from '@/routes/collectibles/collectibles.module';
 import { ContractsModule } from '@/routes/contracts/contracts.module';
@@ -28,7 +27,6 @@ import { SafesModule } from '@/routes/safes/safes.module';
 import { NotificationsModule } from '@/routes/notifications/notifications.module';
 import { EstimationsModule } from '@/routes/estimations/estimations.module';
 import { MessagesModule } from '@/routes/messages/messages.module';
-import { ValidationModule } from '@/validation/validation.module';
 import { RequestScopedLoggingModule } from '@/logging/logging.module';
 import { RouteLoggerInterceptor } from '@/routes/common/interceptors/route-logger.interceptor';
 import { NotFoundLoggerMiddleware } from '@/middleware/not-found-logger.middleware';
@@ -44,6 +42,10 @@ import { RelayControllerModule } from '@/routes/relay/relay.controller.module';
 import { SubscriptionControllerModule } from '@/routes/subscriptions/subscription.module';
 import { LockingModule } from '@/routes/locking/locking.module';
 import { ZodErrorFilter } from '@/routes/common/filters/zod-error.filter';
+import { CacheControlInterceptor } from '@/routes/common/interceptors/cache-control.interceptor';
+import { AuthModule } from '@/routes/auth/auth.module';
+import { TransactionsViewControllerModule } from '@/routes/transactions/transactions-view.controller';
+import { DelegatesV2Module } from '@/routes/delegates/v2/delegates.v2.module';
 
 @Module({})
 export class AppModule implements NestModule {
@@ -52,9 +54,10 @@ export class AppModule implements NestModule {
   // which is not available at this stage.
   static register(configFactory = configuration): DynamicModule {
     const {
+      auth: isAuthFeatureEnabled,
       email: isEmailFeatureEnabled,
-      locking: isLockingFeatureEnabled,
-      relay: isRelayFeatureEnabled,
+      confirmationView: isConfirmationViewEnabled,
+      delegatesV2: isDelegatesV2Enabled,
     } = configFactory()['features'];
 
     return {
@@ -62,13 +65,16 @@ export class AppModule implements NestModule {
       imports: [
         // features
         AboutModule,
+        ...(isAuthFeatureEnabled ? [AuthModule] : []),
         BalancesModule,
         CacheHooksModule,
         ChainsModule,
         CollectiblesModule,
         ContractsModule,
         DataDecodedModule,
+        // TODO: delete/rename DelegatesModule when clients migration to v2 is completed.
         DelegatesModule,
+        ...(isDelegatesV2Enabled ? [DelegatesV2Module] : []),
         ...(isEmailFeatureEnabled
           ? [
               AlertsControllerModule,
@@ -79,15 +85,18 @@ export class AppModule implements NestModule {
           : []),
         EstimationsModule,
         HealthModule,
-        ...(isLockingFeatureEnabled ? [LockingModule] : []),
+        LockingModule,
         MessagesModule,
         NotificationsModule,
         OwnersModule,
-        ...(isRelayFeatureEnabled ? [RelayControllerModule] : []),
+        RelayControllerModule,
         RootModule,
         SafeAppsModule,
         SafesModule,
         TransactionsModule,
+        ...(isConfirmationViewEnabled
+          ? [TransactionsViewControllerModule]
+          : []),
         // common
         CacheModule,
         // Module for storing and reading from the async local storage
@@ -99,7 +108,6 @@ export class AppModule implements NestModule {
           },
         }),
         ConfigurationModule.register(configFactory),
-        DomainModule,
         NetworkModule,
         RequestScopedLoggingModule,
         ServeStaticModule.forRoot({
@@ -109,12 +117,15 @@ export class AppModule implements NestModule {
           // return 500 for files that do not exist instead of a 404
           exclude: ['/(.*)'],
         }),
-        ValidationModule,
       ],
       providers: [
         {
           provide: APP_INTERCEPTOR,
           useClass: RouteLoggerInterceptor,
+        },
+        {
+          provide: APP_INTERCEPTOR,
+          useClass: CacheControlInterceptor,
         },
         {
           provide: APP_FILTER,

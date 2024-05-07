@@ -37,6 +37,8 @@ import { NetworkResponseError } from '@/datasources/network/entities/network.err
 import { AccountDataSourceModule } from '@/datasources/account/account.datasource.module';
 import { TestAccountDataSourceModule } from '@/datasources/account/__tests__/test.account.datasource.module';
 import { getAddress } from 'viem';
+import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
+import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 
 describe('List incoming transfers by Safe - Transactions Controller (Unit)', () => {
   let app: INestApplication;
@@ -57,6 +59,8 @@ describe('List incoming transfers by Safe - Transactions Controller (Unit)', () 
       .useModule(TestLoggingModule)
       .overrideModule(NetworkModule)
       .useModule(TestNetworkModule)
+      .overrideModule(QueuesApiModule)
+      .useModule(TestQueuesApiModule)
       .compile();
 
     const configurationService = moduleFixture.get(IConfigurationService);
@@ -152,11 +156,7 @@ describe('List incoming transfers by Safe - Transactions Controller (Unit)', () 
     await request(app.getHttpServer())
       .get(`/v1/chains/${chainId}/safes/${safeAddress}/incoming-transfers`)
       .expect(500)
-      .expect({
-        message: 'Validation failed',
-        code: 42,
-        arguments: [],
-      });
+      .expect({ statusCode: 500, message: 'Internal server error' });
   });
 
   it('Failure: data page validation fails', async () => {
@@ -173,11 +173,7 @@ describe('List incoming transfers by Safe - Transactions Controller (Unit)', () 
       .get(
         `/v1/chains/${chain.chainId}/safes/${safe.address}/incoming-transfers/`,
       )
-      .expect({
-        message: 'Validation failed',
-        code: 42,
-        arguments: [],
-      });
+      .expect({ statusCode: 500, message: 'Internal server error' });
   });
 
   it('Should get a trusted ERC20 incoming transfer mapped to the expected format', async () => {

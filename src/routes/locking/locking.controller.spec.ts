@@ -29,6 +29,8 @@ import { AccountDataSourceModule } from '@/datasources/account/account.datasourc
 import { getAddress } from 'viem';
 import { rankBuilder } from '@/domain/locking/entities/__tests__/rank.builder';
 import { PaginationData } from '@/routes/common/pagination/pagination.data';
+import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
+import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 
 describe('Locking (Unit)', () => {
   let app: INestApplication;
@@ -38,17 +40,8 @@ describe('Locking (Unit)', () => {
   beforeEach(async () => {
     jest.resetAllMocks();
 
-    const defaultConfiguration = configuration();
-    const testConfiguration = (): typeof defaultConfiguration => ({
-      ...defaultConfiguration,
-      features: {
-        ...defaultConfiguration.features,
-        locking: true,
-      },
-    });
-
     const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule.register(testConfiguration)],
+      imports: [AppModule.register(configuration)],
     })
       .overrideModule(AccountDataSourceModule)
       .useModule(TestAccountDataSourceModule)
@@ -58,6 +51,8 @@ describe('Locking (Unit)', () => {
       .useModule(TestLoggingModule)
       .overrideModule(NetworkModule)
       .useModule(TestNetworkModule)
+      .overrideModule(QueuesApiModule)
+      .useModule(TestQueuesApiModule)
       .compile();
 
     const configurationService = moduleFixture.get(IConfigurationService);
@@ -85,7 +80,7 @@ describe('Locking (Unit)', () => {
       });
 
       await request(app.getHttpServer())
-        .get(`/v1/locking/leaderboard/${rank.holder}`)
+        .get(`/v1/locking/leaderboard/rank/${rank.holder}`)
         .expect(200)
         .expect(rank);
     });
@@ -94,13 +89,13 @@ describe('Locking (Unit)', () => {
       const safeAddress = faker.string.alphanumeric();
 
       await request(app.getHttpServer())
-        .get(`/v1/locking/leaderboard/${safeAddress}`)
+        .get(`/v1/locking/leaderboard/rank/${safeAddress}`)
         .expect(422)
         .expect({
           statusCode: 422,
           code: 'custom',
+          message: 'Invalid address',
           path: [],
-          message: 'Invalid input',
         });
     });
 
@@ -117,7 +112,7 @@ describe('Locking (Unit)', () => {
       });
 
       await request(app.getHttpServer())
-        .get(`/v1/locking/leaderboard/${safeAddress}`)
+        .get(`/v1/locking/leaderboard/rank/${safeAddress}`)
         .expect(500)
         .expect({
           statusCode: 500,
@@ -149,7 +144,7 @@ describe('Locking (Unit)', () => {
       });
 
       await request(app.getHttpServer())
-        .get(`/v1/locking/leaderboard/${safeAddress}`)
+        .get(`/v1/locking/leaderboard/rank/${safeAddress}`)
         .expect(statusCode)
         .expect({
           message: errorMessage,
@@ -397,8 +392,8 @@ describe('Locking (Unit)', () => {
         .expect({
           statusCode: 422,
           code: 'custom',
+          message: 'Invalid address',
           path: [],
-          message: 'Invalid input',
         });
     });
 

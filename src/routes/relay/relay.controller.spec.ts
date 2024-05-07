@@ -51,6 +51,8 @@ import {
 } from '@safe-global/safe-deployments';
 import { createProxyWithNonceEncoder } from '@/domain/relay/contracts/__tests__/encoders/proxy-factory-encoder.builder';
 import { getDeploymentVersionsByChainIds } from '@/__tests__/deployments.helper';
+import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
+import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 
 const supportedChainIds = Object.keys(configuration().relay.apiKey);
 
@@ -88,10 +90,6 @@ describe('Relay controller', () => {
     const defaultConfiguration = configuration();
     const testConfiguration = (): typeof defaultConfiguration => ({
       ...defaultConfiguration,
-      features: {
-        ...defaultConfiguration.features,
-        relay: true,
-      },
       relay: {
         ...defaultConfiguration.relay,
         limit: 5,
@@ -109,6 +107,8 @@ describe('Relay controller', () => {
       .useModule(TestLoggingModule)
       .overrideModule(NetworkModule)
       .useModule(TestNetworkModule)
+      .overrideModule(QueuesApiModule)
+      .useModule(TestQueuesApiModule)
       .compile();
 
     configurationService = moduleFixture.get(IConfigurationService);
@@ -1452,7 +1452,7 @@ describe('Relay controller', () => {
               statusCode: 422,
               code: 'custom',
               path: ['gasLimit'],
-              message: 'Invalid input',
+              message: 'Unable to parse value',
             });
         });
 

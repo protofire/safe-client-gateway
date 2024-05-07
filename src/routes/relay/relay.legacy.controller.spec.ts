@@ -13,6 +13,8 @@ import { AccountDataSourceModule } from '@/datasources/account/account.datasourc
 import { TestAccountDataSourceModule } from '@/datasources/account/__tests__/test.account.datasource.module';
 import { INestApplication } from '@nestjs/common';
 import { faker } from '@faker-js/faker';
+import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
+import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 
 describe('Relay controller', () => {
   let app: INestApplication;
@@ -20,17 +22,8 @@ describe('Relay controller', () => {
   beforeEach(async () => {
     jest.resetAllMocks();
 
-    const defaultConfiguration = configuration();
-    const testConfiguration = (): typeof defaultConfiguration => ({
-      ...defaultConfiguration,
-      features: {
-        ...defaultConfiguration.features,
-        relay: true,
-      },
-    });
-
     const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule.register(testConfiguration)],
+      imports: [AppModule.register(configuration)],
     })
       .overrideModule(AccountDataSourceModule)
       .useModule(TestAccountDataSourceModule)
@@ -40,6 +33,8 @@ describe('Relay controller', () => {
       .useModule(TestLoggingModule)
       .overrideModule(NetworkModule)
       .useModule(TestNetworkModule)
+      .overrideModule(QueuesApiModule)
+      .useModule(TestQueuesApiModule)
       .compile();
 
     app = await new TestAppProvider().provide(moduleFixture);

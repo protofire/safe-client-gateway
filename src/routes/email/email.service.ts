@@ -6,6 +6,7 @@ import {
 import { IAccountRepository } from '@/domain/account/account.repository.interface';
 import { Email } from '@/routes/email/entities/email.entity';
 import { InvalidAddressError } from 'viem';
+import { AuthPayload } from '@/domain/auth/entities/auth-payload.entity';
 
 @Injectable()
 export class EmailService {
@@ -24,7 +25,8 @@ export class EmailService {
     chainId: string;
     safeAddress: string;
     emailAddress: string;
-    signer: string;
+    signer: `0x${string}`;
+    authPayload: AuthPayload;
   }): Promise<void> {
     return this.repository
       .createAccount(args)
@@ -55,7 +57,8 @@ export class EmailService {
   async deleteEmail(args: {
     chainId: string;
     safeAddress: string;
-    signer: string;
+    signer: `0x${string}`;
+    authPayload: AuthPayload;
   }): Promise<void> {
     return this.repository
       .deleteAccount(args)
@@ -65,8 +68,9 @@ export class EmailService {
   async editEmail(args: {
     chainId: string;
     safeAddress: string;
-    signer: string;
+    signer: `0x${string}`;
     emailAddress: string;
+    authPayload: AuthPayload;
   }): Promise<void> {
     return this.repository
       .editEmail(args)
@@ -76,7 +80,8 @@ export class EmailService {
   async getEmail(args: {
     chainId: string;
     safeAddress: string;
-    signer: string;
+    signer: `0x${string}`;
+    authPayload: AuthPayload;
   }): Promise<Email> {
     const account = await this.repository
       .getAccount(args)

@@ -17,8 +17,11 @@ import { Erc721TransferMapper } from '@/routes/transactions/mappers/common/erc72
 import { HumanDescriptionMapper } from '@/routes/transactions/mappers/common/human-description.mapper';
 import { NativeCoinTransferMapper } from '@/routes/transactions/mappers/common/native-coin-transfer.mapper';
 import { SettingsChangeMapper } from '@/routes/transactions/mappers/common/settings-change.mapper';
-import { SetPreSignatureDecoder } from '@/domain/swaps/contracts/decoders/set-pre-signature-decoder.helper';
 import { SwapOrderMapper } from '@/routes/transactions/mappers/common/swap-order.mapper';
+import { isHex } from 'viem';
+import { ILoggingService, LoggingService } from '@/logging/logging.interface';
+import { SwapOrderTransactionInfo } from '@/routes/transactions/entities/swaps/swap-order-info.entity';
+import { SwapOrderHelper } from '@/routes/transactions/helpers/swap-order.helper';
 
 @Injectable()
 export class MultisigTransactionInfoMapper {
@@ -43,6 +46,7 @@ export class MultisigTransactionInfoMapper {
     @Inject(ITokenRepository) private readonly tokenRepository: TokenRepository,
     @Inject(IConfigurationService)
     private readonly configurationService: IConfigurationService,
+    @Inject(LoggingService) private readonly loggingService: ILoggingService,
     private readonly dataDecodedParamHelper: DataDecodedParamHelper,
     private readonly customTransactionMapper: CustomTransactionMapper,
     private readonly settingsChangeMapper: SettingsChangeMapper,
@@ -50,8 +54,8 @@ export class MultisigTransactionInfoMapper {
     private readonly erc20TransferMapper: Erc20TransferMapper,
     private readonly erc721TransferMapper: Erc721TransferMapper,
     private readonly humanDescriptionMapper: HumanDescriptionMapper,
-    private readonly setPreSignatureDecoder: SetPreSignatureDecoder,
     private readonly swapOrderMapper: SwapOrderMapper,
+    private readonly swapOrderHelper: SwapOrderHelper,
   ) {
     this.isRichFragmentsEnabled = this.configurationService.getOrThrow(
       'features.richFragments',
@@ -88,12 +92,11 @@ export class MultisigTransactionInfoMapper {
       ? richDecodedInfo
       : undefined;
 
-    if (this.isSwapsDecodingEnabled && this.isCoWSwapOrder(transaction)) {
-      return await this.swapOrderMapper.mapSwapOrder(
-        chainId,
-        transaction,
-        dataSize,
-      );
+    if (this.isSwapsDecodingEnabled) {
+      const swapOrder: SwapOrderTransactionInfo | null =
+        await this.mapSwapOrder(chainId, transaction);
+      // If the transaction is a swap order, we return it immediately
+      if (swapOrder) return swapOrder;
     }
 
     if (this.isCustomTransaction(value, dataSize, transaction.operation)) {
@@ -180,11 +183,39 @@ export class MultisigTransactionInfoMapper {
     );
   }
 
-  private isCoWSwapOrder(
+  /**
+   * Maps a swap order transaction.
+   * If the transaction is not a swap order, it returns null.
+   *
+   * @param chainId
+   * @param transaction
+   * @private
+   */
+  private async mapSwapOrder(
+    chainId: string,
     transaction: MultisigTransaction | ModuleTransaction,
-  ): boolean {
-    if (!transaction.data) return false;
-    return this.setPreSignatureDecoder.isSetPreSignature(transaction.data);
+  ): Promise<SwapOrderTransactionInfo | null> {
+    if (!transaction?.data || !isHex(transaction.data)) {
+      return null;
+    }
+
+    const orderData: `0x${string}` | null = this.swapOrderHelper.findSwapOrder(
+      transaction.data,
+    );
+
+    if (!orderData) {
+      return null;
+    }
+
+    try {
+      return await this.swapOrderMapper.mapSwapOrder(chainId, {
+        data: orderData,
+      });
+    } catch (error) {
+      // The transaction is a swap order, but we couldn't decode it successfully.
+      this.loggingService.warn(error);
+      return null;
+    }
   }
 
   private isCustomTransaction(
