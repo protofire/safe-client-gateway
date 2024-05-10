@@ -67,6 +67,7 @@ export default () => ({
             8453: { nativeCoin: 'ethereum', chainName: 'base' },
             84531: { nativeCoin: 'ethereum', chainName: 'base' },
             84532: { nativeCoin: 'ethereum', chainName: 'base' },
+            2810: { nativeCoin: 'ethereum', chainName: 'morph-holesky' },
           },
           highRefreshRateTokens:
             process.env.HIGH_REFRESH_RATE_TOKENS?.split(',') ?? [],
