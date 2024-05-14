@@ -80,7 +80,6 @@ export default () => ({
             31: { nativeCoin: 'rootstock', chainName: 'rootstock' },
             18233: { nativeCoin: 'ethereum', chainName: 'unreal' },
             111188: { nativeCoin: 'ethereum', chainName: 're-al' },
-            167008: { nativeCoin: 'ethereum', chainName: 'tko-katla' },
             713715: { nativeCoin: 'sei-network', chainName: 'sei-network' },
             4202: { nativeCoin: 'ethereum', chainName: 'lisksep' },
             81457: { nativeCoin: 'ethereum', chainName: 'blast' },
