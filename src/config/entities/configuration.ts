@@ -100,6 +100,7 @@ export default () => ({
             17069: { nativeCoin: 'ethereum', chainName: 'redstone-garnet' },
             7560: { nativeCoin: 'ethereum', chainName: 'cyber' },
             111557560: { nativeCoin: 'ethereum', chainName: 'cyber' },
+            167009: { nativeCoin: 'ethereum', chainName: 'tko-hekla' },
           },
         },
       },
