@@ -6,17 +6,29 @@ export default () => ({
     version: process.env.APPLICATION_VERSION || 'v1.30.0',
     buildNumber: process.env.APPLICATION_BUILD_NUMBER,
   },
-  alerts: {
-    baseUri:
-      process.env.ALERTS_PROVIDER_API_BASE_URI || 'https://api.tenderly.co',
-    signingKey: process.env.ALERTS_PROVIDER_SIGNING_KEY,
-    apiKey: process.env.ALERTS_PROVIDER_API_KEY,
-    account: process.env.ALERTS_PROVIDER_ACCOUNT,
-    project: process.env.ALERTS_PROVIDER_PROJECT,
+  amqp: {
+    url: process.env.AMQP_URL || 'amqp://localhost:5672',
+    exchange: {
+      name: process.env.AMQP_EXCHANGE_NAME || 'safe-transaction-service-events',
+      // The Safe Transaction Service AMQP Exchange mode defaults to 'fanout'.
+      // https://www.rabbitmq.com/tutorials/amqp-concepts#exchange-fanout
+      // A fanout exchange routes messages to all of the queues that are bound to it and the routing key is ignored.
+      mode: process.env.AMQP_EXCHANGE_MODE || 'fanout',
+    },
+    queue: process.env.AMQP_QUEUE || 'safe-client-gateway',
+    // The AMQP Prefetch value defaults to 0.
+    // Limits the number of unacknowledged messages delivered to a given channel/consumer.
+    prefetch:
+      process.env.AMQP_PREFETCH != null
+        ? parseInt(process.env.AMQP_PREFETCH)
+        : 100,
   },
   applicationPort: process.env.APPLICATION_PORT || '3000',
   auth: {
     token: process.env.AUTH_TOKEN,
+    nonceTtlSeconds: parseInt(
+      process.env.AUTH_NONCE_TTL_SECONDS ?? `${5 * 60}`,
+    ),
   },
   balances: {
     balancesTtlSeconds: parseInt(process.env.BALANCES_TTL_SECONDS ?? `${300}`),
@@ -30,6 +42,9 @@ export default () => ({
           pricesTtlSeconds: parseInt(
             process.env.PRICES_TTL_SECONDS ?? `${300}`,
           ),
+          nativeCoinPricesTtlSeconds: parseInt(
+            process.env.NATIVE_COINS_PRICES_TTL_SECONDS ?? `${100}`,
+          ),
           notFoundPriceTtlSeconds: parseInt(
             process.env.NOT_FOUND_PRICE_TTL_SECONDS ?? `${72 * 60 * 60}`,
           ),
@@ -41,11 +56,13 @@ export default () => ({
             11155111: { nativeCoin: 'ethereum', chainName: 'ethereum' },
             1313161554: { nativeCoin: 'ethereum', chainName: 'aurora' },
             137: { nativeCoin: 'matic-network', chainName: 'polygon-pos' },
+            196: { nativeCoin: 'okb', chainName: 'x1' },
             324: { nativeCoin: 'ethereum', chainName: 'zksync' },
             42161: { nativeCoin: 'ethereum', chainName: 'arbitrum-one' },
             42220: { nativeCoin: 'celo', chainName: 'celo' },
             43114: { nativeCoin: 'avalanche-2', chainName: 'avalanche' },
             5: { nativeCoin: 'ethereum', chainName: 'ethereum' },
+            534352: { nativeCoin: 'weth', chainName: 'scroll' },
             56: { nativeCoin: 'binancecoin', chainName: 'binance-smart-chain' },
             8453: { nativeCoin: 'ethereum', chainName: 'base' },
             84531: { nativeCoin: 'ethereum', chainName: 'base' },
@@ -101,6 +118,11 @@ export default () => ({
             7560: { nativeCoin: 'ethereum', chainName: 'cyber' },
             111557560: { nativeCoin: 'ethereum', chainName: 'cyber' },
           },
+          highRefreshRateTokens:
+            process.env.HIGH_REFRESH_RATE_TOKENS?.split(',') ?? [],
+          highRefreshRateTokensTtlSeconds: parseInt(
+            process.env.HIGH_REFRESH_RATE_TOKENS_TTL_SECONDS ?? `${30}`,
+          ),
         },
       },
       zerion: {
@@ -218,9 +240,14 @@ export default () => ({
     email: process.env.FF_EMAIL?.toLowerCase() === 'true',
     zerionBalancesChainIds:
       process.env.FF_ZERION_BALANCES_CHAIN_IDS?.split(',') ?? [],
-    locking: process.env.FF_LOCKING?.toLowerCase() === 'true',
-    relay: process.env.FF_RELAY?.toLowerCase() === 'true',
     swapsDecoding: process.env.FF_SWAPS_DECODING?.toLowerCase() === 'true',
+    historyDebugLogs:
+      process.env.FF_HISTORY_DEBUG_LOGS?.toLowerCase() === 'true',
+    auth: process.env.FF_AUTH?.toLowerCase() === 'true',
+    confirmationView:
+      process.env.FF_CONFIRMATION_VIEW?.toLowerCase() === 'true',
+    eventsQueue: process.env.FF_EVENTS_QUEUE?.toLowerCase() === 'true',
+    delegatesV2: process.env.FF_DELEGATES_V2?.toLowerCase() === 'true',
   },
   httpClient: {
     // Timeout in milliseconds to be used for the HTTP client.
@@ -230,8 +257,9 @@ export default () => ({
     ),
   },
   locking: {
-    // TODO: Add fallback value and requirement validation
-    baseUri: process.env.LOCKING_PROVIDER_API_BASE_URI || '',
+    baseUri:
+      process.env.LOCKING_PROVIDER_API_BASE_URI ||
+      'https://safe-locking.safe.global',
   },
   log: {
     level: process.env.LOG_LEVEL || 'debug',
@@ -246,6 +274,9 @@ export default () => ({
       maxNestedTransfers: parseInt(
         process.env.MAX_NESTED_TRANSFERS ?? `${100}`,
       ),
+    },
+    safe: {
+      maxOverviews: parseInt(process.env.MAX_SAFE_OVERVIEWS ?? `${10}`),
     },
   },
   redis: {
@@ -280,5 +311,15 @@ export default () => ({
       100: 'https://api.cow.fi/xdai',
       11155111: 'https://api.cow.fi/sepolia',
     },
+    explorerBaseUri:
+      process.env.SWAPS_EXPLORER_URI || 'https://explorer.cow.fi/',
+    // If set to true, it will restrict the Swap Feature to be used only
+    // with Apps contained in allowedApps
+    restrictApps: process.env.SWAPS_RESTRICT_APPS?.toLowerCase() === 'true',
+    // The comma-separated collection of allowed CoW Swap Apps.
+    // In order for this collection to take effect, restrictApps should be set to true
+    // The app names should match the "App Code" of the metadata provided to CoW Swap.
+    // See https://explorer.cow.fi/appdata?tab=encode
+    allowedApps: process.env.SWAPS_ALLOWED_APPS?.split(',') || [],
   },
 });

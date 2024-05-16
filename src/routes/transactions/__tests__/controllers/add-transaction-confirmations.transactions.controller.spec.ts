@@ -5,7 +5,6 @@ import * as request from 'supertest';
 import { TestAppProvider } from '@/__tests__/test-app.provider';
 import { TestCacheModule } from '@/datasources/cache/__tests__/test.cache.module';
 import { TestNetworkModule } from '@/datasources/network/__tests__/test.network.module';
-import { DomainModule } from '@/domain.module';
 import { chainBuilder } from '@/domain/chains/entities/__tests__/chain.builder';
 import { contractBuilder } from '@/domain/contracts/entities/__tests__/contract.builder';
 import { safeAppBuilder } from '@/domain/safe-apps/entities/__tests__/safe-app.builder';
@@ -16,7 +15,6 @@ import {
 } from '@/domain/safe/entities/__tests__/multisig-transaction.builder';
 import { safeBuilder } from '@/domain/safe/entities/__tests__/safe.builder';
 import { TestLoggingModule } from '@/logging/__tests__/test.logging.module';
-import { ValidationModule } from '@/validation/validation.module';
 import { TransactionsModule } from '@/routes/transactions/transactions.module';
 import { ConfigurationModule } from '@/config/configuration.module';
 import configuration from '@/config/entities/__tests__/configuration';
@@ -28,6 +26,7 @@ import {
   NetworkService,
 } from '@/datasources/network/network.service.interface';
 import { addConfirmationDtoBuilder } from '@/routes/transactions/__tests__/entities/add-confirmation.dto.builder';
+import { getAddress } from 'viem';
 
 describe('Add transaction confirmations - Transactions Controller (Unit)', () => {
   let app: INestApplication;
@@ -42,12 +41,10 @@ describe('Add transaction confirmations - Transactions Controller (Unit)', () =>
         // feature
         TransactionsModule,
         // common
-        DomainModule,
         TestCacheModule,
         ConfigurationModule.register(configuration),
         TestLoggingModule,
         TestNetworkModule,
-        ValidationModule,
       ],
     }).compile();
 
@@ -78,9 +75,13 @@ describe('Add transaction confirmations - Transactions Controller (Unit)', () =>
     const safeApps = [safeAppBuilder().build()];
     const contract = contractBuilder().build();
     const transaction = multisigToJson(
-      multisigTransactionBuilder().build(),
+      multisigTransactionBuilder()
+        .with('safe', getAddress(faker.finance.ethereumAddress()))
+        .build(),
     ) as MultisigTransaction;
-    const safe = safeBuilder().with('address', transaction.safe).build();
+    const safe = safeBuilder()
+      .with('address', getAddress(transaction.safe))
+      .build();
     const gasToken = tokenBuilder().build();
     const token = tokenBuilder().build();
     const rejectionTxsPage = pageBuilder().with('results', []).build();

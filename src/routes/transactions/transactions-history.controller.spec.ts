@@ -59,6 +59,9 @@ import {
 } from '@/domain/safe/entities/__tests__/erc721-transfer.builder';
 import { TransactionItem } from '@/routes/transactions/entities/transaction-item.entity';
 import { NetworkResponseError } from '@/datasources/network/entities/network.error.entity';
+import { getAddress } from 'viem';
+import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
+import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 
 describe('Transactions History Controller (Unit)', () => {
   let app: INestApplication;
@@ -71,6 +74,7 @@ describe('Transactions History Controller (Unit)', () => {
     const testConfiguration: typeof configuration = () => ({
       ...configuration(),
       mappings: {
+        ...configuration().mappings,
         history: {
           maxNestedTransfers: 5,
         },
@@ -88,6 +92,8 @@ describe('Transactions History Controller (Unit)', () => {
       .useModule(TestLoggingModule)
       .overrideModule(NetworkModule)
       .useModule(TestNetworkModule)
+      .overrideModule(QueuesApiModule)
+      .useModule(TestQueuesApiModule)
       .compile();
 
     const configurationService = moduleFixture.get(IConfigurationService);
@@ -176,11 +182,7 @@ describe('Transactions History Controller (Unit)', () => {
         `/v1/chains/${chain.chainId}/safes/${safeAddress}/transactions/history/`,
       )
       .expect(500)
-      .expect({
-        message: 'Validation failed',
-        code: 42,
-        arguments: [],
-      });
+      .expect({ statusCode: 500, message: 'Internal server error' });
   });
 
   it('Should return only creation transaction', async () => {
@@ -249,10 +251,12 @@ describe('Transactions History Controller (Unit)', () => {
         .with('executionDate', new Date('2022-12-25T00:00:00Z'))
         .build(),
     );
-    const nativeTokenTransfer = nativeTokenTransferBuilder().build();
+    const nativeTokenTransfer = nativeTokenTransferBuilder()
+      .with('executionDate', new Date('2022-12-31T00:00:00Z'))
+      .build();
     const incomingTransaction = ethereumTransactionToJson(
       ethereumTransactionBuilder()
-        .with('executionDate', new Date('2022-12-31T00:00:00Z'))
+        .with('executionDate', nativeTokenTransfer.executionDate)
         .with('transfers', [
           nativeTokenTransferToJson(nativeTokenTransfer) as Transfer,
         ])
@@ -428,7 +432,7 @@ describe('Transactions History Controller (Unit)', () => {
     const safe = safeBuilder().build();
     const moduleTransaction = moduleTransactionBuilder()
       .with('executionDate', new Date('2022-12-14T13:19:12Z'))
-      .with('safe', safe.address)
+      .with('safe', getAddress(safe.address))
       .with('isSuccessful', true)
       .with('data', null)
       .with('operation', 0)
@@ -485,7 +489,7 @@ describe('Transactions History Controller (Unit)', () => {
       .build();
     const tokenResponse = tokenBuilder()
       .with('type', TokenType.Erc20)
-      .with('address', multisigTransaction.to)
+      .with('address', getAddress(multisigTransaction.to))
       .build();
     networkService.get.mockImplementation(({ url }) => {
       const getChainUrl = `${safeConfigUrl}/api/v1/chains/${chain.chainId}`;
@@ -569,7 +573,7 @@ describe('Transactions History Controller (Unit)', () => {
                   direction: 'OUTGOING',
                   transferInfo: {
                     type: 'ERC20',
-                    tokenAddress: multisigTransaction.to,
+                    tokenAddress: getAddress(multisigTransaction.to),
                     tokenName: tokenResponse.name,
                     tokenSymbol: tokenResponse.symbol,
                     logoUri: tokenResponse.logoUri,
@@ -994,12 +998,14 @@ describe('Transactions History Controller (Unit)', () => {
                 erc20TransferBuilder()
                   .with('tokenAddress', untrustedToken.address)
                   .with('value', faker.string.numeric({ exclude: ['0'] }))
+                  .with('executionDate', date)
                   .build(),
               ) as Transfer,
               erc20TransferToJson(
                 erc20TransferBuilder()
                   .with('tokenAddress', trustedToken.address)
                   .with('value', faker.string.numeric({ exclude: ['0'] }))
+                  .with('executionDate', date)
                   .build(),
               ) as Transfer,
             ])
@@ -1013,12 +1019,14 @@ describe('Transactions History Controller (Unit)', () => {
                 erc20TransferBuilder()
                   .with('tokenAddress', untrustedToken.address)
                   .with('value', faker.string.numeric({ exclude: ['0'] }))
+                  .with('executionDate', oneDayAfter)
                   .build(),
               ) as Transfer,
               erc20TransferToJson(
                 erc20TransferBuilder()
                   .with('tokenAddress', untrustedToken.address)
                   .with('value', faker.string.numeric({ exclude: ['0'] }))
+                  .with('executionDate', oneDayAfter)
                   .build(),
               ) as Transfer,
             ])
@@ -1032,6 +1040,7 @@ describe('Transactions History Controller (Unit)', () => {
                 erc20TransferBuilder()
                   .with('tokenAddress', trustedToken.address)
                   .with('value', faker.string.numeric({ exclude: ['0'] }))
+                  .with('executionDate', twoDaysAfter)
                   .build(),
               ) as Transfer,
             ])

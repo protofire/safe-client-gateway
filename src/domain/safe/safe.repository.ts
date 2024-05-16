@@ -2,39 +2,41 @@ import { Inject, Injectable } from '@nestjs/common';
 import { isEmpty } from 'lodash';
 import { Page } from '@/domain/entities/page.entity';
 import { ITransactionApiManager } from '@/domain/interfaces/transaction-api.manager.interface';
-import { CreationTransactionValidator } from '@/domain/safe/creation-transaction.validator';
 import { CreationTransaction } from '@/domain/safe/entities/creation-transaction.entity';
 import { ModuleTransaction } from '@/domain/safe/entities/module-transaction.entity';
 import { MultisigTransaction } from '@/domain/safe/entities/multisig-transaction.entity';
 import { SafeList } from '@/domain/safe/entities/safe-list.entity';
 import { Safe } from '@/domain/safe/entities/safe.entity';
 import { Transaction } from '@/domain/safe/entities/transaction.entity';
-import { Transfer } from '@/domain/safe/entities/transfer.entity';
-import { ModuleTransactionValidator } from '@/domain/safe/module-transaction.validator';
-import { MultisigTransactionValidator } from '@/domain/safe/multisig-transaction.validator';
-import { SafeListValidator } from '@/domain/safe/safe-list.validator';
+import {
+  Transfer,
+  TransferPageSchema,
+  TransferSchema,
+} from '@/domain/safe/entities/transfer.entity';
+import {
+  ModuleTransactionPageSchema,
+  ModuleTransactionSchema,
+} from '@/domain/safe/entities/module-transaction.entity';
+import {
+  MultisigTransactionPageSchema,
+  MultisigTransactionSchema,
+} from '@/domain/safe/entities/multisig-transaction.entity';
+import { SafeListSchema } from '@/domain/safe/entities/schemas/safe-list.schema';
 import { ISafeRepository } from '@/domain/safe/safe.repository.interface';
-import { SafeValidator } from '@/domain/safe/safe.validator';
-import { TransactionTypeValidator } from '@/domain/safe/transaction-type.validator';
-import { TransferValidator } from '@/domain/safe/transfer.validator';
+import { TransactionTypePageSchema } from '@/domain/safe/entities/schemas/transaction-type.schema';
 import { AddConfirmationDto } from '@/domain/transactions/entities/add-confirmation.dto.entity';
 import { ProposeTransactionDto } from '@/domain/transactions/entities/propose-transaction.dto.entity';
 import { getAddress } from 'viem';
 import { ILoggingService, LoggingService } from '@/logging/logging.interface';
 import { IChainsRepository } from '@/domain/chains/chains.repository.interface';
+import { CreationTransactionSchema } from '@/domain/safe/entities/schemas/creation-transaction.schema';
+import { SafeSchema } from '@/domain/safe/entities/schemas/safe.schema';
 
 @Injectable()
 export class SafeRepository implements ISafeRepository {
   constructor(
     @Inject(ITransactionApiManager)
     private readonly transactionApiManager: ITransactionApiManager,
-    private readonly multisigTransactionValidator: MultisigTransactionValidator,
-    private readonly safeListValidator: SafeListValidator,
-    private readonly safeValidator: SafeValidator,
-    private readonly transactionTypeValidator: TransactionTypeValidator,
-    private readonly transferValidator: TransferValidator,
-    private readonly moduleTransactionValidator: ModuleTransactionValidator,
-    private readonly creationTransactionValidator: CreationTransactionValidator,
     @Inject(LoggingService) private readonly loggingService: ILoggingService,
     @Inject(IChainsRepository)
     private readonly chainsRepository: IChainsRepository,
@@ -43,8 +45,8 @@ export class SafeRepository implements ISafeRepository {
   async getSafe(args: { chainId: string; address: string }): Promise<Safe> {
     const transactionService =
       await this.transactionApiManager.getTransactionApi(args.chainId);
-    const safe: Safe = await transactionService.getSafe(args.address);
-    return this.safeValidator.validate(safe);
+    const safe = await transactionService.getSafe(args.address);
+    return SafeSchema.parse(safe);
   }
 
   async clearSafe(args: { chainId: string; address: string }): Promise<void> {
@@ -80,7 +82,7 @@ export class SafeRepository implements ISafeRepository {
       ...args,
       onlyErc721: true,
     });
-    return this.transferValidator.validatePage(page);
+    return TransferPageSchema.parse(page);
   }
 
   async clearTransfers(args: {
@@ -107,7 +109,7 @@ export class SafeRepository implements ISafeRepository {
     const transactionService =
       await this.transactionApiManager.getTransactionApi(args.chainId);
     const page = await transactionService.getIncomingTransfers(args);
-    return this.transferValidator.validatePage(page);
+    return TransferPageSchema.parse(page);
   }
 
   async clearIncomingTransfers(args: {
@@ -139,7 +141,7 @@ export class SafeRepository implements ISafeRepository {
     const moduleTransaction = await transactionService.getModuleTransaction(
       args.moduleTransactionId,
     );
-    return this.moduleTransactionValidator.validate(moduleTransaction);
+    return ModuleTransactionSchema.parse(moduleTransaction);
   }
 
   async getModuleTransactions(args: {
@@ -153,7 +155,7 @@ export class SafeRepository implements ISafeRepository {
     const transactionService =
       await this.transactionApiManager.getTransactionApi(args.chainId);
     const page = await transactionService.getModuleTransactions(args);
-    return this.moduleTransactionValidator.validatePage(page);
+    return ModuleTransactionPageSchema.parse(page);
   }
 
   async clearModuleTransactions(args: {
@@ -208,7 +210,7 @@ export class SafeRepository implements ISafeRepository {
         executed: false,
         nonceGte: args.safe.nonce,
       });
-    return this.multisigTransactionValidator.validatePage(page);
+    return MultisigTransactionPageSchema.parse(page);
   }
 
   async getCreationTransaction(args: {
@@ -220,7 +222,7 @@ export class SafeRepository implements ISafeRepository {
     const createTransaction = await transactionService.getCreationTransaction(
       args.safeAddress,
     );
-    return this.creationTransactionValidator.validate(createTransaction);
+    return CreationTransactionSchema.parse(createTransaction);
   }
 
   async getTransactionHistory(args: {
@@ -248,7 +250,7 @@ export class SafeRepository implements ISafeRepository {
         queued: false,
       },
     );
-    return this.transactionTypeValidator.validatePage(page);
+    return TransactionTypePageSchema.parse(page);
   }
 
   async clearAllExecutedTransactions(args: {
@@ -282,7 +284,7 @@ export class SafeRepository implements ISafeRepository {
       args.safeTransactionHash,
     );
 
-    return this.multisigTransactionValidator.validate(multiSigTransaction);
+    return MultisigTransactionSchema.parse(multiSigTransaction);
   }
 
   async deleteTransaction(args: {
@@ -337,7 +339,7 @@ export class SafeRepository implements ISafeRepository {
       ordering: '-nonce',
       trusted: true,
     });
-    return this.multisigTransactionValidator.validatePage(page);
+    return MultisigTransactionPageSchema.parse(page);
   }
 
   async getTransfer(args: {
@@ -347,7 +349,7 @@ export class SafeRepository implements ISafeRepository {
     const transactionService =
       await this.transactionApiManager.getTransactionApi(args.chainId);
     const transfer = await transactionService.getTransfer(args.transferId);
-    return this.transferValidator.validate(transfer);
+    return TransferSchema.parse(transfer);
   }
 
   async getTransfers(args: {
@@ -358,7 +360,7 @@ export class SafeRepository implements ISafeRepository {
     const transactionService =
       await this.transactionApiManager.getTransactionApi(args.chainId);
     const page = await transactionService.getTransfers(args);
-    return this.transferValidator.validatePage(page);
+    return TransferPageSchema.parse(page);
   }
 
   async getSafesByOwner(args: {
@@ -371,7 +373,7 @@ export class SafeRepository implements ISafeRepository {
       args.ownerAddress,
     );
 
-    return this.safeListValidator.validate(safeList);
+    return SafeListSchema.parse(safeList);
   }
 
   async getAllSafesByOwner(args: {
@@ -418,7 +420,7 @@ export class SafeRepository implements ISafeRepository {
 
     return isEmpty(page.results)
       ? null
-      : this.multisigTransactionValidator.validate(page.results[0]);
+      : MultisigTransactionSchema.parse(page.results[0]);
   }
 
   async proposeTransaction(args: {
@@ -469,6 +471,6 @@ export class SafeRepository implements ISafeRepository {
       args.moduleAddress,
     );
 
-    return this.safeListValidator.validate(safesByModule);
+    return SafeListSchema.parse(safesByModule);
   }
 }

@@ -39,6 +39,9 @@ import { NetworkModule } from '@/datasources/network/network.module';
 import { NetworkResponseError } from '@/datasources/network/entities/network.error.entity';
 import { AccountDataSourceModule } from '@/datasources/account/account.datasource.module';
 import { TestAccountDataSourceModule } from '@/datasources/account/__tests__/test.account.datasource.module';
+import { getAddress } from 'viem';
+import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
+import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 
 describe('Get by id - Transactions Controller (Unit)', () => {
   let app: INestApplication;
@@ -59,6 +62,8 @@ describe('Get by id - Transactions Controller (Unit)', () => {
       .useModule(TestLoggingModule)
       .overrideModule(NetworkModule)
       .useModule(TestNetworkModule)
+      .overrideModule(QueuesApiModule)
+      .useModule(TestQueuesApiModule)
       .compile();
 
     const configurationService = moduleFixture.get(IConfigurationService);
@@ -108,7 +113,7 @@ describe('Get by id - Transactions Controller (Unit)', () => {
       switch (url) {
         case getChainUrl:
           return Promise.resolve({ data: chain, status: 200 });
-        case getModuleTransactionUrl:
+        case getModuleTransactionUrl: {
           const error = new NetworkResponseError(
             new URL(getModuleTransactionUrl),
             {
@@ -116,6 +121,7 @@ describe('Get by id - Transactions Controller (Unit)', () => {
             } as Response,
           );
           return Promise.reject(error);
+        }
         default:
           return Promise.reject(new Error(`Could not match ${url}`));
       }
@@ -152,7 +158,7 @@ describe('Get by id - Transactions Controller (Unit)', () => {
           return Promise.resolve({ data: chain, status: 200 });
         case getSafeUrl:
           return Promise.resolve({ data: safe, status: 200 });
-        case getModuleTransactionUrl:
+        case getModuleTransactionUrl: {
           const error = new NetworkResponseError(
             new URL(getModuleTransactionUrl),
             {
@@ -160,6 +166,7 @@ describe('Get by id - Transactions Controller (Unit)', () => {
             } as Response,
           );
           return Promise.reject(error);
+        }
         default:
           return Promise.reject(new Error(`Could not match ${url}`));
       }
@@ -185,7 +192,7 @@ describe('Get by id - Transactions Controller (Unit)', () => {
       .build();
     const moduleTransactionId = faker.string.uuid();
     const moduleTransaction = moduleTransactionBuilder()
-      .with('safe', safe.address)
+      .with('safe', getAddress(safe.address))
       .with('data', null)
       .with('value', '0xf')
       .with('operation', Operation.CALL)
@@ -401,8 +408,8 @@ describe('Get by id - Transactions Controller (Unit)', () => {
     const chainId = faker.string.numeric();
     const chain = chainBuilder().with('chainId', chainId).build();
     const safeOwners = [
-      faker.finance.ethereumAddress(),
-      faker.finance.ethereumAddress(),
+      getAddress(faker.finance.ethereumAddress()),
+      getAddress(faker.finance.ethereumAddress()),
     ];
     const safe = safeBuilder().with('owners', safeOwners).build();
     const contract = contractBuilder().build();
@@ -417,7 +424,7 @@ describe('Get by id - Transactions Controller (Unit)', () => {
     const tx = multisigTransactionBuilder()
       .with('safe', safe.address)
       .with('operation', 0)
-      .with('data', faker.string.hexadecimal({ length: 32 }))
+      .with('data', faker.string.hexadecimal({ length: 32 }) as `0x${string}`)
       .with('isExecuted', true)
       .with('isSuccessful', true)
       .with('executionDate', executionDate)
@@ -566,8 +573,8 @@ describe('Get by id - Transactions Controller (Unit)', () => {
     const chainId = faker.string.numeric();
     const chain = chainBuilder().with('chainId', chainId).build();
     const safeOwners = [
-      faker.finance.ethereumAddress(),
-      faker.finance.ethereumAddress(),
+      getAddress(faker.finance.ethereumAddress()),
+      getAddress(faker.finance.ethereumAddress()),
     ];
     const safe = safeBuilder().with('owners', safeOwners).build();
     const contract = contractBuilder().build();
@@ -582,7 +589,7 @@ describe('Get by id - Transactions Controller (Unit)', () => {
     const tx = multisigTransactionBuilder()
       .with('safe', safe.address)
       .with('operation', 0)
-      .with('data', faker.string.hexadecimal({ length: 32 }))
+      .with('data', faker.string.hexadecimal({ length: 32 }) as `0x${string}`)
       .with('isExecuted', true)
       .with('isSuccessful', true)
       .with('executionDate', executionDate)
@@ -731,8 +738,8 @@ describe('Get by id - Transactions Controller (Unit)', () => {
     const chainId = faker.string.numeric();
     const chain = chainBuilder().with('chainId', chainId).build();
     const safeOwners = [
-      faker.finance.ethereumAddress(),
-      faker.finance.ethereumAddress(),
+      getAddress(faker.finance.ethereumAddress()),
+      getAddress(faker.finance.ethereumAddress()),
     ];
     const safe = safeBuilder()
       .with('owners', safeOwners)
@@ -751,7 +758,7 @@ describe('Get by id - Transactions Controller (Unit)', () => {
       .with('safe', safe.address)
       .with('operation', 0)
       .with('nonce', 4)
-      .with('data', faker.string.hexadecimal({ length: 32 }))
+      .with('data', faker.string.hexadecimal({ length: 32 }) as `0x${string}`)
       .with('isExecuted', false)
       .with('isSuccessful', null)
       .with('executionDate', executionDate)

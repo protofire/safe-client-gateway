@@ -9,7 +9,6 @@ import { AddressSchema } from '@/validation/entities/schemas/address.schema';
 import { ValidationPipe } from '@/validation/pipes/validation.pipe';
 import { Controller, Get, Param } from '@nestjs/common';
 import { ApiOkResponse, ApiQuery, ApiTags } from '@nestjs/swagger';
-import { z } from 'zod';
 
 @ApiTags('locking')
 @Controller({
@@ -20,10 +19,10 @@ export class LockingController {
   constructor(private readonly lockingService: LockingService) {}
 
   @ApiOkResponse({ type: Rank })
-  @Get('/leaderboard/:safeAddress')
+  @Get('/leaderboard/rank/:safeAddress')
   async getRank(
     @Param('safeAddress', new ValidationPipe(AddressSchema))
-    safeAddress: z.infer<typeof AddressSchema>,
+    safeAddress: `0x${string}`,
   ): Promise<Rank> {
     return this.lockingService.getRank(safeAddress);
   }
@@ -51,7 +50,7 @@ export class LockingController {
   @Get('/:safeAddress/history')
   async getLockingHistory(
     @Param('safeAddress', new ValidationPipe(AddressSchema))
-    safeAddress: z.infer<typeof AddressSchema>,
+    safeAddress: `0x${string}`,
     @RouteUrlDecorator() routeUrl: URL,
     @PaginationDataDecorator() paginationData: PaginationData,
   ): Promise<LockingEventPage> {

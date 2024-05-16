@@ -12,20 +12,22 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { EmailService } from '@/routes/email/email.service';
-import { EmailRegistrationGuard } from '@/routes/email/guards/email-registration.guard';
-import { EmailDeletionGuard } from '@/routes/email/guards/email-deletion.guard';
-import { TimestampGuard } from '@/routes/email/guards/timestamp.guard';
-import { OnlySafeOwnerGuard } from '@/routes/common/guards/only-safe-owner.guard';
-import { SaveEmailDto } from '@/routes/email/entities/save-email-dto.entity';
+import {
+  SaveEmailDto,
+  SaveEmailDtoSchema,
+} from '@/routes/email/entities/save-email-dto.entity';
 import { ApiExcludeController, ApiTags } from '@nestjs/swagger';
 import { VerifyEmailDto } from '@/routes/email/entities/verify-email-dto.entity';
 import { AccountDoesNotExistExceptionFilter } from '@/routes/email/exception-filters/account-does-not-exist.exception-filter';
 import { EditEmailDto } from '@/routes/email/entities/edit-email-dto.entity';
-import { EmailEditGuard } from '@/routes/email/guards/email-edit.guard';
 import { EmailEditMatchesExceptionFilter } from '@/routes/email/exception-filters/email-edit-matches.exception-filter';
-import { EmailRetrievalGuard } from '@/routes/email/guards/email-retrieval.guard';
+import { AuthGuard } from '@/routes/auth/guards/auth.guard';
 import { Email } from '@/routes/email/entities/email.entity';
 import { UnauthenticatedExceptionFilter } from '@/routes/email/exception-filters/unauthenticated.exception-filter';
+import { Auth } from '@/routes/auth/decorators/auth.decorator';
+import { AuthPayload } from '@/domain/auth/entities/auth-payload.entity';
+import { ValidationPipe } from '@/validation/pipes/validation.pipe';
+import { AddressSchema } from '@/validation/entities/schemas/address.schema';
 
 @ApiTags('email')
 @Controller({
@@ -37,39 +39,36 @@ export class EmailController {
   constructor(private readonly service: EmailService) {}
 
   @Get(':signer')
-  @UseGuards(
-    EmailRetrievalGuard,
-    TimestampGuard(5 * 60 * 1000), // 5 minutes
-  )
+  @UseGuards(AuthGuard)
   @UseFilters(AccountDoesNotExistExceptionFilter)
   async getEmail(
     @Param('chainId') chainId: string,
     @Param('safeAddress') safeAddress: string,
-    @Param('signer') signer: string,
+    @Param('signer', new ValidationPipe(AddressSchema)) signer: `0x${string}`,
+    @Auth() authPayload: AuthPayload,
   ): Promise<Email> {
     return this.service.getEmail({
       chainId,
       safeAddress,
       signer,
+      authPayload,
     });
   }
 
   @Post('')
-  @UseGuards(
-    EmailRegistrationGuard,
-    TimestampGuard(5 * 60 * 1000), // 5 minutes
-    OnlySafeOwnerGuard,
-  )
+  @UseGuards(AuthGuard)
   async saveEmail(
     @Param('chainId') chainId: string,
     @Param('safeAddress') safeAddress: string,
-    @Body() saveEmailDto: SaveEmailDto,
+    @Body(new ValidationPipe(SaveEmailDtoSchema)) saveEmailDto: SaveEmailDto,
+    @Auth() authPayload: AuthPayload,
   ): Promise<void> {
     await this.service.saveEmail({
       chainId,
       emailAddress: saveEmailDto.emailAddress,
       safeAddress,
       signer: saveEmailDto.signer,
+      authPayload,
     });
   }
 
@@ -106,29 +105,25 @@ export class EmailController {
   }
 
   @Delete(':signer')
-  @UseGuards(
-    EmailDeletionGuard,
-    TimestampGuard(5 * 60 * 1000), // 5 minutes
-  )
+  @UseGuards(AuthGuard)
   @UseFilters(AccountDoesNotExistExceptionFilter)
   @HttpCode(HttpStatus.NO_CONTENT)
   async deleteEmail(
     @Param('chainId') chainId: string,
     @Param('safeAddress') safeAddress: string,
-    @Param('signer') signer: string,
+    @Param('signer', new ValidationPipe(AddressSchema)) signer: `0x${string}`,
+    @Auth() authPayload: AuthPayload,
   ): Promise<void> {
     await this.service.deleteEmail({
       chainId,
       safeAddress,
       signer,
+      authPayload,
     });
   }
 
   @Put(':signer')
-  @UseGuards(
-    EmailEditGuard,
-    TimestampGuard(5 * 60 * 1000), // 5 minutes
-  )
+  @UseGuards(AuthGuard)
   @UseFilters(
     EmailEditMatchesExceptionFilter,
     AccountDoesNotExistExceptionFilter,
@@ -137,14 +132,16 @@ export class EmailController {
   async editEmail(
     @Param('chainId') chainId: string,
     @Param('safeAddress') safeAddress: string,
-    @Param('signer') signer: string,
+    @Param('signer', new ValidationPipe(AddressSchema)) signer: `0x${string}`,
     @Body() editEmailDto: EditEmailDto,
+    @Auth() authPayload: AuthPayload,
   ): Promise<void> {
     await this.service.editEmail({
       chainId,
       safeAddress,
       signer,
       emailAddress: editEmailDto.emailAddress,
+      authPayload,
     });
   }
 }

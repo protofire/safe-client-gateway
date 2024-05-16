@@ -8,6 +8,8 @@ import { CacheModule } from '@/datasources/cache/cache.module';
 import * as request from 'supertest';
 import { AccountDataSourceModule } from '@/datasources/account/account.datasource.module';
 import { TestAccountDataSourceModule } from '@/datasources/account/__tests__/test.account.datasource.module';
+import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
+import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 
 describe('Root Controller tests', () => {
   let app: INestApplication;
@@ -20,17 +22,19 @@ describe('Root Controller tests', () => {
       .useModule(TestAccountDataSourceModule)
       .overrideModule(CacheModule)
       .useModule(TestCacheModule)
+      .overrideModule(QueuesApiModule)
+      .useModule(TestQueuesApiModule)
       .compile();
     app = await new TestAppProvider().provide(moduleFixture);
     await app.init();
   });
 
-  it('should redirect / to /index.html', async () => {
+  it('should redirect / to /api', async () => {
     await request(app.getHttpServer())
       .get(`/`)
       .expect(302)
       .expect((res) => {
-        expect(res.get('location')).toBe('/index.html');
+        expect(res.get('location')).toBe('/api');
       });
   });
 });

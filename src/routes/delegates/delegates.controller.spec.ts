@@ -27,6 +27,8 @@ import { NetworkResponseError } from '@/datasources/network/entities/network.err
 import { AccountDataSourceModule } from '@/datasources/account/account.datasource.module';
 import { TestAccountDataSourceModule } from '@/datasources/account/__tests__/test.account.datasource.module';
 import { getAddress } from 'viem';
+import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
+import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 
 describe('Delegates controller', () => {
   let app: INestApplication;
@@ -47,6 +49,8 @@ describe('Delegates controller', () => {
       .useModule(TestLoggingModule)
       .overrideModule(NetworkModule)
       .useModule(TestNetworkModule)
+      .overrideModule(QueuesApiModule)
+      .useModule(TestQueuesApiModule)
       .compile();
 
     const configurationService = moduleFixture.get(IConfigurationService);
@@ -475,8 +479,15 @@ describe('Delegates controller', () => {
           }/delegates/${deleteSafeDelegateDto.delegate}`,
         )
         .send({ ...deleteSafeDelegateDto, safe: faker.datatype.boolean() })
-        .expect(400)
-        .expect({ message: 'Validation failed', code: 42, arguments: [] });
+        .expect(422)
+        .expect({
+          statusCode: 422,
+          code: 'invalid_type',
+          expected: 'string',
+          received: 'boolean',
+          path: ['safe'],
+          message: 'Expected string, received boolean',
+        });
     });
   });
 });

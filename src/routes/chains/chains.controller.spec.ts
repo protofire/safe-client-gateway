@@ -29,6 +29,8 @@ import { PaginationData } from '@/routes/common/pagination/pagination.data';
 import { AccountDataSourceModule } from '@/datasources/account/account.datasource.module';
 import { TestAccountDataSourceModule } from '@/datasources/account/__tests__/test.account.datasource.module';
 import { getAddress } from 'viem';
+import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
+import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 
 describe('Chains Controller (Unit)', () => {
   let app: INestApplication;
@@ -63,6 +65,8 @@ describe('Chains Controller (Unit)', () => {
       .useModule(TestLoggingModule)
       .overrideModule(NetworkModule)
       .useModule(TestNetworkModule)
+      .overrideModule(QueuesApiModule)
+      .useModule(TestQueuesApiModule)
       .compile();
 
     const configurationService = moduleFixture.get(IConfigurationService);
@@ -88,8 +92,8 @@ describe('Chains Controller (Unit)', () => {
         .expect(200)
         .expect({
           count: chainsResponse.count,
-          next: null,
-          previous: null,
+          next: chainsResponse.next,
+          previous: chainsResponse.previous,
           results: [
             {
               chainId: chainsResponse.results[0].chainId,
@@ -108,7 +112,9 @@ describe('Chains Controller (Unit)', () => {
               transactionService: chainsResponse.results[0].transactionService,
               theme: chainsResponse.results[0].theme,
               gasPrice: chainsResponse.results[0].gasPrice,
-              ensRegistryAddress: chainsResponse.results[0].ensRegistryAddress,
+              ensRegistryAddress: getAddress(
+                chainsResponse.results[0].ensRegistryAddress!,
+              ),
               disabledWallets: chainsResponse.results[0].disabledWallets,
               features: chainsResponse.results[0].features,
             },
@@ -129,7 +135,9 @@ describe('Chains Controller (Unit)', () => {
               transactionService: chainsResponse.results[1].transactionService,
               theme: chainsResponse.results[1].theme,
               gasPrice: chainsResponse.results[1].gasPrice,
-              ensRegistryAddress: chainsResponse.results[1].ensRegistryAddress,
+              ensRegistryAddress: getAddress(
+                chainsResponse.results[1].ensRegistryAddress!,
+              ),
               disabledWallets: chainsResponse.results[1].disabledWallets,
               features: chainsResponse.results[1].features,
             },
@@ -511,9 +519,8 @@ describe('Chains Controller (Unit)', () => {
         .get('/v1/chains/1/about/master-copies')
         .expect(500)
         .expect({
-          message: 'Validation failed',
-          code: 42,
-          arguments: [],
+          statusCode: 500,
+          message: 'Internal server error',
         });
     });
   });

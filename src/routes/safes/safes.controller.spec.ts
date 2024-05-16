@@ -41,6 +41,8 @@ import { NULL_ADDRESS } from '@/routes/common/constants';
 import { AccountDataSourceModule } from '@/datasources/account/account.datasource.module';
 import { TestAccountDataSourceModule } from '@/datasources/account/__tests__/test.account.datasource.module';
 import { getAddress } from 'viem';
+import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
+import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 
 describe('Safes Controller (Unit)', () => {
   let app: INestApplication;
@@ -61,6 +63,8 @@ describe('Safes Controller (Unit)', () => {
       .useModule(TestLoggingModule)
       .overrideModule(NetworkModule)
       .useModule(TestNetworkModule)
+      .overrideModule(QueuesApiModule)
+      .useModule(TestQueuesApiModule)
       .compile();
 
     const configurationService = moduleFixture.get(IConfigurationService);
@@ -76,7 +80,7 @@ describe('Safes Controller (Unit)', () => {
     const chain = chainBuilder()
       .with('recommendedMasterCopyVersion', masterCopyVersion)
       .build();
-    const owner = faker.finance.ethereumAddress();
+    const owner = getAddress(faker.finance.ethereumAddress());
     const singleton = faker.finance.ethereumAddress();
     const singletons = [
       singletonBuilder()
@@ -93,11 +97,9 @@ describe('Safes Controller (Unit)', () => {
       .with('version', masterCopyVersion)
       .build();
     const fallbackHandlerInfo = contractBuilder()
-      .with('address', getAddress(safeInfo.fallbackHandler))
+      .with('address', safeInfo.fallbackHandler)
       .build();
-    const guardInfo = contractBuilder()
-      .with('address', getAddress(safeInfo.guard))
-      .build();
+    const guardInfo = contractBuilder().with('address', safeInfo.guard).build();
 
     const moduleTransactions = pageBuilder()
       .with('results', [
@@ -381,7 +383,9 @@ describe('Safes Controller (Unit)', () => {
     const chain = chainBuilder().build();
     const supportedMasterCopy = faker.finance.ethereumAddress();
     const singletons = [
-      singletonBuilder().with('address', supportedMasterCopy).build(),
+      singletonBuilder()
+        .with('address', getAddress(supportedMasterCopy))
+        .build(),
     ];
     const singletonInfo = contractBuilder().build();
     const safeInfo = safeBuilder()
@@ -438,7 +442,7 @@ describe('Safes Controller (Unit)', () => {
     const chain = chainBuilder()
       .with('recommendedMasterCopyVersion', '5.0.0')
       .build();
-    const supportedMasterCopy = faker.finance.ethereumAddress();
+    const supportedMasterCopy = getAddress(faker.finance.ethereumAddress());
     const singletons = [
       singletonBuilder().with('address', supportedMasterCopy).build(),
     ];
@@ -448,11 +452,9 @@ describe('Safes Controller (Unit)', () => {
       .with('version', '4.0.0')
       .build();
     const fallbackHandlerInfo = contractBuilder()
-      .with('address', getAddress(safeInfo.fallbackHandler))
+      .with('address', safeInfo.fallbackHandler)
       .build();
-    const guardInfo = contractBuilder()
-      .with('address', getAddress(safeInfo.guard))
-      .build();
+    const guardInfo = contractBuilder().with('address', safeInfo.guard).build();
     const collectibleTransfers = pageBuilder().build();
     const queuedTransactions = pageBuilder().build();
     const moduleTransactions = pageBuilder().build();
@@ -1521,28 +1523,20 @@ describe('Safes Controller (Unit)', () => {
     const chain = chainBuilder().build();
     const singletons = [singletonBuilder().build()];
     const singletonInfo = contractBuilder().build();
-    const module1 = faker.finance.ethereumAddress();
-    const module2 = faker.finance.ethereumAddress();
-    const module3 = faker.finance.ethereumAddress();
+    const module1 = getAddress(faker.finance.ethereumAddress());
+    const module2 = getAddress(faker.finance.ethereumAddress());
+    const module3 = getAddress(faker.finance.ethereumAddress());
     const safeInfo = safeBuilder()
       .with('masterCopy', singletonInfo.address)
       .with('modules', [module1, module2, module3])
       .build();
-    const moduleInfo1 = contractBuilder()
-      .with('address', getAddress(module1))
-      .build();
-    const moduleInfo2 = contractBuilder()
-      .with('address', getAddress(module2))
-      .build();
-    const moduleInfo3 = contractBuilder()
-      .with('address', getAddress(module3))
-      .build();
+    const moduleInfo1 = contractBuilder().with('address', module1).build();
+    const moduleInfo2 = contractBuilder().with('address', module2).build();
+    const moduleInfo3 = contractBuilder().with('address', module3).build();
     const fallbackHandlerInfo = contractBuilder()
-      .with('address', getAddress(safeInfo.fallbackHandler))
+      .with('address', safeInfo.fallbackHandler)
       .build();
-    const guardInfo = contractBuilder()
-      .with('address', getAddress(safeInfo.guard))
-      .build();
+    const guardInfo = contractBuilder().with('address', safeInfo.guard).build();
     const collectibleTransfers = pageBuilder().build();
     const queuedTransactions = pageBuilder().build();
     const moduleTransactions = pageBuilder().build();

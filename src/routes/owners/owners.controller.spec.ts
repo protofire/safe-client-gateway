@@ -20,6 +20,10 @@ import { NetworkModule } from '@/datasources/network/network.module';
 import { NetworkResponseError } from '@/datasources/network/entities/network.error.entity';
 import { AccountDataSourceModule } from '@/datasources/account/account.datasource.module';
 import { TestAccountDataSourceModule } from '@/datasources/account/__tests__/test.account.datasource.module';
+import { getAddress } from 'viem';
+import { pageBuilder } from '@/domain/entities/__tests__/page.builder';
+import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
+import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 
 describe('Owners Controller (Unit)', () => {
   let app: INestApplication;
@@ -40,6 +44,8 @@ describe('Owners Controller (Unit)', () => {
       .useModule(TestLoggingModule)
       .overrideModule(NetworkModule)
       .useModule(TestNetworkModule)
+      .overrideModule(QueuesApiModule)
+      .useModule(TestQueuesApiModule)
       .compile();
 
     const configurationService = moduleFixture.get(IConfigurationService);
@@ -78,7 +84,12 @@ describe('Owners Controller (Unit)', () => {
       await request(app.getHttpServer())
         .get(`/v1/chains/${chainId}/owners/${ownerAddress}/safes`)
         .expect(200)
-        .expect(transactionApiSafeListResponse);
+        .expect({
+          // Validation schema checksums addresses
+          safes: transactionApiSafeListResponse.safes.map((safe) =>
+            getAddress(safe),
+          ),
+        });
     });
 
     it('Failure: Config API fails', async () => {
@@ -167,9 +178,8 @@ describe('Owners Controller (Unit)', () => {
         .get(`/v1/chains/${chainId}/owners/${ownerAddress}/safes`)
         .expect(500)
         .expect({
-          message: 'Validation failed',
-          code: 42,
-          arguments: [],
+          statusCode: 500,
+          message: 'Internal server error',
         });
     });
   });
@@ -199,9 +209,7 @@ describe('Owners Controller (Unit)', () => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains`: {
             return Promise.resolve({
-              data: {
-                results: [chain1, chain2],
-              },
+              data: pageBuilder().with('results', [chain1, chain2]).build(),
               status: 200,
             });
           }
@@ -244,8 +252,9 @@ describe('Owners Controller (Unit)', () => {
         .get(`/v1/owners/${ownerAddress}/safes`)
         .expect(200)
         .expect({
-          [chainId1]: safesOnChain1,
-          [chainId2]: safesOnChain2,
+          // Validation schema checksums addresses
+          [chainId1]: safesOnChain1.map((safe) => getAddress(safe)),
+          [chainId2]: safesOnChain2.map((safe) => getAddress(safe)),
         });
     });
 
@@ -328,9 +337,8 @@ describe('Owners Controller (Unit)', () => {
         .get(`/v1/owners/${ownerAddress}/safes`)
         .expect(500)
         .expect({
-          message: 'Validation failed',
-          code: 42,
-          arguments: [],
+          statusCode: 500,
+          message: 'Internal server error',
         });
     });
   });

@@ -1,242 +1,76 @@
-import { Inject, Injectable, Module } from '@nestjs/common';
-import { MultisigTransaction } from '@/domain/safe/entities/multisig-transaction.entity';
-import { ModuleTransaction } from '@/domain/safe/entities/module-transaction.entity';
+import { Injectable, Module } from '@nestjs/common';
 import { SetPreSignatureDecoder } from '@/domain/swaps/contracts/decoders/set-pre-signature-decoder.helper';
-import { isHex } from 'viem';
+import { SwapOrderTransactionInfo } from '@/routes/transactions/entities/swaps/swap-order-info.entity';
+import { TokenInfo } from '@/routes/transactions/entities/swaps/token-info.entity';
 import {
-  DefaultSwapOrderTransactionInfo,
-  FulfilledSwapOrderTransactionInfo,
-  SwapOrderTransactionInfo,
-  TokenInfo,
-} from '@/routes/transactions/entities/swap-order-info.entity';
-import { ITokenRepository } from '@/domain/tokens/token.repository.interface';
-import { CustomTransactionMapper } from '@/routes/transactions/mappers/common/custom-transaction.mapper';
-import { CustomTransactionInfo } from '@/routes/transactions/entities/custom-transaction.entity';
-import { Token } from '@/domain/tokens/entities/token.entity';
-import { SwapsRepository } from '@/domain/swaps/swaps.repository';
-import { SwapsModule } from '@/domain/swaps/swaps.module';
-import { AddressInfoModule } from '@/routes/common/address-info/address-info.module';
-import { Order } from '@/domain/swaps/entities/order.entity';
-import { ILoggingService, LoggingService } from '@/logging/logging.interface';
-
-/**
- * Represents the amount of a token in a swap order.
- */
-class TokenAmount {
-  readonly token: Token & {
-    decimals: number;
-  };
-  private readonly amount: bigint;
-  private readonly executedAmount: bigint;
-
-  constructor(args: { token: Token; amount: bigint; executedAmount: bigint }) {
-    if (args.token.decimals === null)
-      throw new Error(`Token ${args.token.address} has no decimals set.`);
-
-    this.token = { ...args.token, decimals: args.token.decimals };
-    this.amount = args.amount;
-    this.executedAmount = args.executedAmount;
-  }
-
-  getAmount(): number {
-    return asDecimal(this.amount, this.token.decimals);
-  }
-
-  getExecutedAmount(): number {
-    return asDecimal(this.executedAmount, this.token.decimals);
-  }
-
-  toTokenInfo(): TokenInfo {
-    return new TokenInfo({
-      amount: this.getAmount().toString(),
-      symbol: this.token.symbol,
-      logo: this.token.logoUri,
-    });
-  }
-}
-
-function asDecimal(amount: number | bigint, decimals: number): number {
-  return Number(amount) / 10 ** decimals;
-}
+  SwapOrderHelper,
+  SwapOrderHelperModule,
+} from '@/routes/transactions/helpers/swap-order.helper';
 
 @Injectable()
 export class SwapOrderMapper {
   constructor(
-    private readonly swapsRepository: SwapsRepository,
     private readonly setPreSignatureDecoder: SetPreSignatureDecoder,
-    @Inject(ITokenRepository)
-    private readonly tokenRepository: ITokenRepository,
-    private readonly customTransactionMapper: CustomTransactionMapper,
-    @Inject(LoggingService) private readonly loggingService: ILoggingService,
+    private readonly swapOrderHelper: SwapOrderHelper,
   ) {}
 
   async mapSwapOrder(
     chainId: string,
-    transaction: MultisigTransaction | ModuleTransaction,
-    dataSize: number,
-  ): Promise<SwapOrderTransactionInfo | CustomTransactionInfo> {
-    if (!isHex(transaction.data)) {
-      return this._mapUnknownOrderStatus(chainId, transaction, dataSize);
-    }
-
+    transaction: { data: `0x${string}` },
+  ): Promise<SwapOrderTransactionInfo> {
     const orderUid: `0x${string}` | null =
       this.setPreSignatureDecoder.getOrderUid(transaction.data);
     if (!orderUid) {
-      return this._mapUnknownOrderStatus(chainId, transaction, dataSize);
+      throw new Error('Order UID not found in transaction data');
     }
 
-    try {
-      const order = await this.swapsRepository.getOrder(chainId, orderUid);
-      const [buyToken, sellToken] = await Promise.all([
-        this.tokenRepository.getToken({
-          chainId,
-          address: order.buyToken,
-        }),
-        this.tokenRepository.getToken({
-          chainId,
-          address: order.sellToken,
-        }),
-      ]);
-
-      const buyTokenAmount = new TokenAmount({
-        token: buyToken,
-        amount: order.buyAmount,
-        executedAmount: order.executedBuyAmount,
-      });
-      const sellTokenAmount = new TokenAmount({
-        token: sellToken,
-        amount: order.sellAmount,
-        executedAmount: order.executedSellAmount,
-      });
-
-      switch (order.status) {
-        case 'fulfilled':
-          return this._mapFulfilledOrderStatus({
-            buyToken: buyTokenAmount,
-            sellToken: sellTokenAmount,
-            order,
-          });
-        case 'open':
-        case 'cancelled':
-        case 'expired':
-          return this._mapDefaultOrderStatus({
-            buyToken: buyTokenAmount,
-            sellToken: sellTokenAmount,
-            order,
-          });
-        default:
-          return this._mapUnknownOrderStatus(chainId, transaction, dataSize);
-      }
-    } catch (e) {
-      this.loggingService.warn(e);
-      return this.customTransactionMapper.mapCustomTransaction(
-        transaction,
-        dataSize,
-        chainId,
-        null,
-        null,
-      );
-    }
-  }
-
-  private _mapUnknownOrderStatus(
-    chainId: string,
-    transaction: MultisigTransaction | ModuleTransaction,
-    dataSize: number,
-  ): Promise<CustomTransactionInfo> {
-    return this.customTransactionMapper.mapCustomTransaction(
-      transaction,
-      dataSize,
+    const { order, sellToken, buyToken } = await this.swapOrderHelper.getOrder({
       chainId,
-      null,
-      null,
-    );
-  }
-
-  private _getExecutionPriceLabel(
-    sellToken: TokenAmount,
-    buyToken: TokenAmount,
-  ): string {
-    const ratio = sellToken.getExecutedAmount() / buyToken.getExecutedAmount();
-    return `1 ${sellToken.token.symbol} = ${ratio} ${buyToken.token.symbol}`;
-  }
-
-  private _getLimitPriceLabel(
-    sellToken: TokenAmount,
-    buyToken: TokenAmount,
-  ): string {
-    const ratio = sellToken.getAmount() / buyToken.getAmount();
-    return `1 ${sellToken.token.symbol} = ${ratio} ${buyToken.token.symbol}`;
-  }
-
-  private _mapFulfilledOrderStatus(args: {
-    buyToken: TokenAmount;
-    sellToken: TokenAmount;
-    order: Order;
-  }): SwapOrderTransactionInfo {
-    if (args.order.kind === 'unknown') {
-      throw new Error('Unknown order kind');
-    }
-    const surplusFeeLabel: string | null = args.order.executedSurplusFee
-      ? this._getExecutedSurplusFeeLabel(
-          args.order.executedSurplusFee,
-          args.buyToken.token,
-        )
-      : null;
-
-    return new FulfilledSwapOrderTransactionInfo({
-      orderKind: args.order.kind,
-      sellToken: args.sellToken.toTokenInfo(),
-      buyToken: args.buyToken.toTokenInfo(),
-      expiresTimestamp: args.order.validTo,
-      surplusFeeLabel: surplusFeeLabel,
-      executionPriceLabel: this._getExecutionPriceLabel(
-        args.sellToken,
-        args.buyToken,
-      ),
+      orderUid,
     });
-  }
 
-  private _getExecutedSurplusFeeLabel(
-    executedSurplusFee: bigint,
-    token: Token & { decimals: number },
-  ): string {
-    const surplus = asDecimal(executedSurplusFee, token.decimals);
-    return `${surplus} ${token.symbol}`;
-  }
-
-  private _mapDefaultOrderStatus(args: {
-    buyToken: TokenAmount;
-    sellToken: TokenAmount;
-    order: Order;
-  }): SwapOrderTransactionInfo {
-    if (args.order.kind === 'unknown') {
-      throw new Error('Unknown order kind');
+    if (!this.swapOrderHelper.isAppAllowed(order)) {
+      throw new Error(`Unsupported App: ${order.fullAppData?.appCode}`);
     }
-    if (
-      args.order.status === 'fulfilled' ||
-      args.order.status === 'presignaturePending' ||
-      args.order.status === 'unknown'
-    )
-      throw new Error(
-        `${args.order.status} orders should not be mapped as default orders. Order UID = ${args.order.uid}`,
-      );
-    return new DefaultSwapOrderTransactionInfo({
-      status: args.order.status,
-      orderKind: args.order.kind,
-      sellToken: args.sellToken.toTokenInfo(),
-      buyToken: args.buyToken.toTokenInfo(),
-      expiresTimestamp: args.order.validTo,
-      limitPriceLabel: this._getLimitPriceLabel(args.sellToken, args.buyToken),
+
+    return new SwapOrderTransactionInfo({
+      uid: order.uid,
+      orderStatus: order.status,
+      kind: order.kind,
+      class: order.class,
+      validUntil: order.validTo,
+      sellAmount: order.sellAmount.toString(),
+      buyAmount: order.buyAmount.toString(),
+      executedSellAmount: order.executedSellAmount.toString(),
+      executedBuyAmount: order.executedBuyAmount.toString(),
+      sellToken: new TokenInfo({
+        address: sellToken.address,
+        decimals: sellToken.decimals,
+        logoUri: sellToken.logoUri,
+        name: sellToken.name,
+        symbol: sellToken.symbol,
+        trusted: sellToken.trusted,
+      }),
+      buyToken: new TokenInfo({
+        address: buyToken.address,
+        decimals: buyToken.decimals,
+        logoUri: buyToken.logoUri,
+        name: buyToken.name,
+        symbol: buyToken.symbol,
+        trusted: buyToken.trusted,
+      }),
+      explorerUrl: this.swapOrderHelper.getOrderExplorerUrl(order),
+      executedSurplusFee: order.executedSurplusFee?.toString() ?? null,
+      receiver: order.receiver,
+      owner: order.owner,
+      fullAppData: order.fullAppData,
     });
   }
 }
 
 @Module({
-  // TODO AddressInfoModule is not needed in this module but it is required by the CustomTransactionMapper.
-  //  The CustomTransactionMapper (module to be created) should be the one providing it instead.
-  imports: [SwapsModule, AddressInfoModule],
-  providers: [SwapOrderMapper, SetPreSignatureDecoder, CustomTransactionMapper],
+  imports: [SwapOrderHelperModule],
+  providers: [SwapOrderMapper, SetPreSignatureDecoder],
   exports: [SwapOrderMapper],
 })
 export class SwapOrderMapperModule {}

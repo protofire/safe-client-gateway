@@ -1,4 +1,7 @@
 import { Balance } from '@/domain/balances/entities/balance.entity';
+import { Module } from '@nestjs/common';
+import { BalancesRepository } from '@/domain/balances/balances.repository';
+import { BalancesApiModule } from '@/datasources/balances-api/balances-api.module';
 
 export const IBalancesRepository = Symbol('IBalancesRepository');
 
@@ -10,6 +13,7 @@ export interface IBalancesRepository {
   getBalances(args: {
     chainId: string;
     safeAddress: string;
+    fiatCode: string;
     trusted?: boolean;
     excludeSpam?: boolean;
   }): Promise<Balance[]>;
@@ -25,3 +29,15 @@ export interface IBalancesRepository {
    */
   getFiatCodes(): Promise<string[]>;
 }
+
+@Module({
+  imports: [BalancesApiModule],
+  providers: [
+    {
+      provide: IBalancesRepository,
+      useClass: BalancesRepository,
+    },
+  ],
+  exports: [IBalancesRepository],
+})
+export class BalancesRepositoryModule {}

@@ -15,7 +15,7 @@ It provides UI-oriented mappings and data structures for easier integration with
 
 ## Requirements
 
-- Node 20.11.1 – https://nodejs.org/en/
+- Node.js LTS (Iron) ([Node.js Release Schedule](https://nodejs.org/en/about/previous-releases)) – https://nodejs.org/en/
 - Docker Compose – https://docs.docker.com/compose/
 
 ## Installation
@@ -78,7 +78,7 @@ docker compose up -d db-test
 yarn run test
 
 # e2e tests
-yarn run test:e2e
+docker-compose up -d redis rabbitmq && yarn run test:e2e
 
 # test coverage
 yarn run test:cov
