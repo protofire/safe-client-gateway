@@ -73,7 +73,6 @@ export default () => ({
             59144: { nativeCoin: 'ethereum', chainName: 'linea' },
             59140: { nativeCoin: 'ethereum', chainName: 'linea' },
             245022934: { nativeCoin: 'neon', chainName: 'neon-evm' },
-            534352: { nativeCoin: 'ethereum', chainName: 'scroll' },
             534351: { nativeCoin: 'ethereum', chainName: 'scroll' },
             80085: { nativeCoin: 'berachain-bera', chainName: 'berachain' },
             17000: { nativeCoin: 'ethereum', chainName: 'ethereum' },
