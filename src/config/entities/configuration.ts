@@ -3,7 +3,7 @@
 export default () => ({
   about: {
     name: 'safe-client-gateway',
-    version: process.env.APPLICATION_VERSION || 'v1.30.0',
+    version: process.env.APPLICATION_VERSION || 'v1.39.0',
     buildNumber: process.env.APPLICATION_BUILD_NUMBER,
   },
   amqp: {
