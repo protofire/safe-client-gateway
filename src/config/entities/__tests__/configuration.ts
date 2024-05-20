@@ -185,6 +185,7 @@ export default (): ReturnType<typeof configuration> => ({
     zerionBalancesChainIds: ['137'],
     swapsDecoding: true,
     historyDebugLogs: false,
+    imitationMapping: false,
     auth: false,
     confirmationView: false,
     eventsQueue: false,
@@ -199,6 +200,10 @@ export default (): ReturnType<typeof configuration> => ({
     silent: process.env.LOG_SILENT?.toLowerCase() === 'true',
   },
   mappings: {
+    imitation: {
+      prefixLength: faker.number.int(),
+      suffixLength: faker.number.int(),
+    },
     history: {
       maxNestedTransfers: faker.number.int({ min: 1, max: 5 }),
     },

@@ -25,6 +25,7 @@ import { TransactionsHistoryMapper } from '@/routes/transactions/mappers/transac
 import { TransferDetailsMapper } from '@/routes/transactions/mappers/transfers/transfer-details.mapper';
 import { TransferInfoMapper } from '@/routes/transactions/mappers/transfers/transfer-info.mapper';
 import { TransferMapper } from '@/routes/transactions/mappers/transfers/transfer.mapper';
+import { TransferImitationMapper } from '@/routes/transactions/mappers/transfers/transfer-imitation.mapper';
 import { TransactionsController } from '@/routes/transactions/transactions.controller';
 import { TransactionsService } from '@/routes/transactions/transactions.service';
 import { SwapOrderMapperModule } from '@/routes/transactions/mappers/common/swap-order.mapper';
@@ -77,6 +78,7 @@ import { SwapOrderHelperModule } from '@/routes/transactions/helpers/swap-order.
     TransactionsService,
     TransferDetailsMapper,
     TransferInfoMapper,
+    TransferImitationMapper,
     HumanDescriptionMapper,
   ],
 })

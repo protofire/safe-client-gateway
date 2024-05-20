@@ -16,19 +16,26 @@ import { ModuleTransactionMapper } from '@/routes/transactions/mappers/module-tr
 import { MultisigTransactionMapper } from '@/routes/transactions/mappers/multisig-transactions/multisig-transaction.mapper';
 import { TransferMapper } from '@/routes/transactions/mappers/transfers/transfer.mapper';
 import { IConfigurationService } from '@/config/configuration.service.interface';
+import { TransferImitationMapper } from '@/routes/transactions/mappers/transfers/transfer-imitation.mapper';
 
 @Injectable()
 export class TransactionsHistoryMapper {
+  private readonly isImitationMappingEnabled: boolean;
   private readonly maxNestedTransfers: number;
 
   constructor(
-    @Inject(IConfigurationService) configurationService: IConfigurationService,
+    @Inject(IConfigurationService)
+    private readonly configurationService: IConfigurationService,
     private readonly multisigTransactionMapper: MultisigTransactionMapper,
     private readonly moduleTransactionMapper: ModuleTransactionMapper,
     private readonly transferMapper: TransferMapper,
+    private readonly transferImitationMapper: TransferImitationMapper,
     private readonly creationTransactionMapper: CreationTransactionMapper,
   ) {
-    this.maxNestedTransfers = configurationService.getOrThrow(
+    this.isImitationMappingEnabled = this.configurationService.getOrThrow(
+      'features.imitationMapping',
+    );
+    this.maxNestedTransfers = this.configurationService.getOrThrow(
       'mappings.history.maxNestedTransfers',
     );
   }
@@ -40,6 +47,7 @@ export class TransactionsHistoryMapper {
     offset: number,
     timezoneOffset: number,
     onlyTrusted: boolean,
+    showImitations: boolean,
   ): Promise<Array<TransactionItem | DateLabel>> {
     if (transactionsDomain.length == 0) {
       return [];
@@ -53,17 +61,20 @@ export class TransactionsHistoryMapper {
       onlyTrusted,
     });
 
-    const mappedTransactions = await Promise.all(
-      transactionsDomain.map((transaction) => {
-        return this.mapTransaction(transaction, chainId, safe, onlyTrusted);
-      }),
-    );
-    const transactions = mappedTransactions
-      .filter(<T>(x: T): x is NonNullable<T> => x != null)
-      .flat();
+    const mappedTransactions = await this.getMappedTransactions({
+      transactionsDomain,
+      chainId,
+      safe,
+      previousTransaction,
+      onlyTrusted,
+      showImitations,
+    });
 
     // The groups respect timezone offset – this was done for grouping only.
-    const transactionsByDay = this.groupByDay(transactions, timezoneOffset);
+    const transactionsByDay = this.groupByDay(
+      mappedTransactions,
+      timezoneOffset,
+    );
     return transactionsByDay.reduce<Array<TransactionItem | DateLabel>>(
       (transactionList, transactionsOnDay) => {
         // The actual value of the group should be in the UTC timezone instead
@@ -109,6 +120,39 @@ export class TransactionsHistoryMapper {
       ? // All transfers should have same execution date but the last is "true" previous
         mappedPreviousTransaction.at(-1)
       : mappedPreviousTransaction;
+  }
+
+  private async getMappedTransactions(args: {
+    transactionsDomain: TransactionDomain[];
+    chainId: string;
+    safe: Safe;
+    previousTransaction: TransactionItem | undefined;
+    onlyTrusted: boolean;
+    showImitations: boolean;
+  }): Promise<TransactionItem[]> {
+    const mappedTransactions = await Promise.all(
+      args.transactionsDomain.map((transaction) => {
+        return this.mapTransaction(
+          transaction,
+          args.chainId,
+          args.safe,
+          args.onlyTrusted,
+        );
+      }),
+    );
+    const transactionItems = mappedTransactions
+      .filter(<T>(x: T): x is NonNullable<T> => x != null)
+      .flat();
+
+    if (!this.isImitationMappingEnabled) {
+      return transactionItems;
+    }
+
+    return this.transferImitationMapper.mapImitations({
+      transactions: transactionItems,
+      previousTransaction: args.previousTransaction,
+      showImitations: args.showImitations,
+    });
   }
 
   private groupByDay(

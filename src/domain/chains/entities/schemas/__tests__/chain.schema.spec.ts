@@ -3,6 +3,7 @@ import { gasPriceFixedEIP1559Builder } from '@/domain/chains/entities/__tests__/
 import { gasPriceFixedBuilder } from '@/domain/chains/entities/__tests__/gas-price-fixed.builder';
 import { gasPriceOracleBuilder } from '@/domain/chains/entities/__tests__/gas-price-oracle.builder';
 import { nativeCurrencyBuilder } from '@/domain/chains/entities/__tests__/native.currency.builder';
+import { pricesProviderBuilder } from '@/domain/chains/entities/__tests__/prices-provider.builder';
 import { rpcUriBuilder } from '@/domain/chains/entities/__tests__/rpc-uri.builder';
 import { themeBuilder } from '@/domain/chains/entities/__tests__/theme.builder';
 import {
@@ -12,6 +13,7 @@ import {
   GasPriceOracleSchema,
   GasPriceSchema,
   NativeCurrencySchema,
+  PricesProviderSchema,
   RpcUriSchema,
   ThemeSchema,
 } from '@/domain/chains/entities/schemas/chain.schema';
@@ -302,9 +304,68 @@ describe('Chain schemas', () => {
     });
   });
 
+  describe('PricesProviderSchema', () => {
+    it('should validate a valid prices provider', () => {
+      const pricesProvider = pricesProviderBuilder().build();
+
+      const result = PricesProviderSchema.safeParse(pricesProvider);
+
+      expect(result.success).toBe(true);
+    });
+
+    it('should not validate an invalid prices provider chainName', () => {
+      const pricesProvider = {
+        chainName: 1,
+      };
+
+      const result = PricesProviderSchema.safeParse(pricesProvider);
+
+      expect(!result.success && result.error).toStrictEqual(
+        new ZodError([
+          {
+            code: 'invalid_type',
+            expected: 'string',
+            received: 'number',
+            path: ['chainName'],
+            message: 'Expected string, received number',
+          },
+        ]),
+      );
+    });
+
+    it('should not validate an invalid prices provider nativeCoin', () => {
+      const pricesProvider = {
+        nativeCoin: 1,
+      };
+
+      const result = PricesProviderSchema.safeParse(pricesProvider);
+
+      expect(!result.success && result.error).toStrictEqual(
+        new ZodError([
+          {
+            code: 'invalid_type',
+            expected: 'string',
+            received: 'number',
+            path: ['nativeCoin'],
+            message: 'Expected string, received number',
+          },
+        ]),
+      );
+    });
+  });
+
   describe('ChainSchema', () => {
     it('should validate a valid chain', () => {
       const chain = chainBuilder().build();
+
+      const result = ChainSchema.safeParse(chain);
+
+      expect(result.success).toBe(true);
+    });
+
+    // TODO: remove when fully migrated.
+    it('should allow optional pricesProvider', () => {
+      const chain = chainBuilder().with('pricesProvider', undefined).build();
 
       const result = ChainSchema.safeParse(chain);
 

@@ -242,6 +242,8 @@ export default () => ({
     swapsDecoding: process.env.FF_SWAPS_DECODING?.toLowerCase() === 'true',
     historyDebugLogs:
       process.env.FF_HISTORY_DEBUG_LOGS?.toLowerCase() === 'true',
+    imitationMapping:
+      process.env.FF_IMITATION_MAPPING?.toLowerCase() === 'true',
     auth: process.env.FF_AUTH?.toLowerCase() === 'true',
     confirmationView:
       process.env.FF_CONFIRMATION_VIEW?.toLowerCase() === 'true',
@@ -269,6 +271,10 @@ export default () => ({
     ownersTtlSeconds: parseInt(process.env.OWNERS_TTL_SECONDS ?? `${0}`),
   },
   mappings: {
+    imitation: {
+      prefixLength: parseInt(process.env.IMITATION_PREFIX_LENGTH ?? `${3}`),
+      suffixLength: parseInt(process.env.IMITATION_SUFFIX_LENGTH ?? `${4}`),
+    },
     history: {
       maxNestedTransfers: parseInt(
         process.env.MAX_NESTED_TRANSFERS ?? `${100}`,
