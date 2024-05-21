@@ -109,19 +109,12 @@ describe('Safes Controller Overview (Unit)', () => {
           .with('token', balanceTokenBuilder().with('decimals', 17).build())
           .build(),
       ];
-      const nativeCoinId = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain.chainId}.nativeCoin`,
-        );
-      const chainName = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain.chainId}.chainName`,
-        );
       const currency = faker.finance.currencyCode();
       const nativeCoinPriceProviderResponse = {
-        [nativeCoinId]: { [currency.toLowerCase()]: 1536.75 },
+        // @ts-expect-error - TODO: remove after migration
+        [chain.pricesProvider.nativeCoin!]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
       };
       const tokenPriceProviderResponse = {
         [tokenAddress]: { [currency.toLowerCase()]: 12.5 },
@@ -131,6 +124,7 @@ describe('Safes Controller Overview (Unit)', () => {
       const multisigTransactions = [
         multisigTransactionToJson(
           multisigTransactionBuilder()
+            .with('confirmationsRequired', 0)
             .with('confirmations', [
               // Signature provided
               confirmationBuilder().with('owner', walletAddress).build(),
@@ -164,7 +158,8 @@ describe('Safes Controller Overview (Unit)', () => {
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName}`: {
+          // @ts-expect-error - TODO: remove after migration
+          case `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
@@ -209,27 +204,25 @@ describe('Safes Controller Overview (Unit)', () => {
           ]),
         );
 
-      expect(networkService.get.mock.calls.length).toBe(7);
+      expect(networkService.get.mock.calls.length).toBe(6);
 
       expect(networkService.get.mock.calls[0][0].url).toBe(
         `${safeConfigUrl}/api/v1/chains/${chain.chainId}`,
       );
       expect(networkService.get.mock.calls[1][0].url).toBe(
-        `${safeConfigUrl}/api/v1/chains/${chain.chainId}`,
-      );
-      expect(networkService.get.mock.calls[2][0].url).toBe(
         `${chain.transactionService}/api/v1/safes/${safeInfo.address}`,
       );
-      expect(networkService.get.mock.calls[3][0].url).toBe(
+      expect(networkService.get.mock.calls[2][0].url).toBe(
         `${chain.transactionService}/api/v1/safes/${safeInfo.address}/balances/`,
       );
-      expect(networkService.get.mock.calls[3][0].networkRequest).toStrictEqual({
+      expect(networkService.get.mock.calls[2][0].networkRequest).toStrictEqual({
         params: { trusted: false, exclude_spam: true },
       });
-      expect(networkService.get.mock.calls[4][0].url).toBe(
-        `${pricesProviderUrl}/simple/token_price/${chainName}`,
+      expect(networkService.get.mock.calls[3][0].url).toBe(
+        // @ts-expect-error - TODO: remove after migration
+        `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`,
       );
-      expect(networkService.get.mock.calls[4][0].networkRequest).toStrictEqual({
+      expect(networkService.get.mock.calls[3][0].networkRequest).toStrictEqual({
         headers: { 'x-cg-pro-api-key': pricesApiKey },
         params: {
           vs_currencies: currency.toLowerCase(),
@@ -239,14 +232,191 @@ describe('Safes Controller Overview (Unit)', () => {
           ].join(','),
         },
       });
-      expect(networkService.get.mock.calls[5][0].url).toBe(
+      expect(networkService.get.mock.calls[4][0].url).toBe(
         `${pricesProviderUrl}/simple/price`,
       );
-      expect(networkService.get.mock.calls[5][0].networkRequest).toStrictEqual({
+      expect(networkService.get.mock.calls[4][0].networkRequest).toStrictEqual({
         headers: { 'x-cg-pro-api-key': pricesApiKey },
-        params: { ids: nativeCoinId, vs_currencies: currency.toLowerCase() },
+        params: {
+          // @ts-expect-error - TODO: remove after migration
+          ids: chain.pricesProvider.nativeCoin,
+          vs_currencies: currency.toLowerCase(),
+        },
       });
-      expect(networkService.get.mock.calls[6][0].url).toBe(
+      expect(networkService.get.mock.calls[5][0].url).toBe(
+        `${chain.transactionService}/api/v1/safes/${safeInfo.address}/multisig-transactions/`,
+      );
+    });
+
+    it('should not return awaiting confirmations if no more confirmations are required', async () => {
+      const chain = chainBuilder().with('chainId', '10').build();
+      const safeInfo = safeBuilder().build();
+      const tokenAddress = faker.finance.ethereumAddress();
+      const secondTokenAddress = faker.finance.ethereumAddress();
+      const transactionApiBalancesResponse = [
+        balanceBuilder()
+          .with('tokenAddress', null)
+          .with('balance', '3000000000000000000')
+          .with('token', null)
+          .build(),
+        balanceBuilder()
+          .with('tokenAddress', getAddress(tokenAddress))
+          .with('balance', '4000000000000000000')
+          .with('token', balanceTokenBuilder().with('decimals', 17).build())
+          .build(),
+        balanceBuilder()
+          .with('tokenAddress', getAddress(secondTokenAddress))
+          .with('balance', '3000000000000000000')
+          .with('token', balanceTokenBuilder().with('decimals', 17).build())
+          .build(),
+      ];
+      const currency = faker.finance.currencyCode();
+      const nativeCoinPriceProviderResponse = {
+        // @ts-expect-error - TODO: remove after migration
+        [chain.pricesProvider.nativeCoin!]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
+      };
+      const tokenPriceProviderResponse = {
+        [tokenAddress]: { [currency.toLowerCase()]: 12.5 },
+        [secondTokenAddress]: { [currency.toLowerCase()]: 10 },
+      };
+      const walletAddress = getAddress(faker.finance.ethereumAddress());
+      const multisigTransactions = [
+        multisigTransactionToJson(
+          multisigTransactionBuilder()
+            .with('confirmationsRequired', 0)
+            .with('confirmations', [
+              // Not wallet address
+              confirmationBuilder()
+                .with('owner', getAddress(faker.finance.ethereumAddress()))
+                .build(),
+            ])
+            .build(),
+        ),
+        multisigTransactionToJson(
+          multisigTransactionBuilder()
+            .with('confirmationsRequired', 0)
+            .with('confirmations', [
+              // Not wallet address
+              confirmationBuilder()
+                .with('owner', getAddress(faker.finance.ethereumAddress()))
+                .build(),
+            ])
+            .build(),
+        ),
+      ];
+      const queuedTransactions = pageBuilder()
+        .with('results', multisigTransactions)
+        .with('count', multisigTransactions.length)
+        .build();
+
+      networkService.get.mockImplementation(({ url }) => {
+        switch (url) {
+          case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`: {
+            return Promise.resolve({ data: chain, status: 200 });
+          }
+          case `${chain.transactionService}/api/v1/safes/${safeInfo.address}`: {
+            return Promise.resolve({ data: safeInfo, status: 200 });
+          }
+          case `${chain.transactionService}/api/v1/safes/${safeInfo.address}/balances/`: {
+            return Promise.resolve({
+              data: transactionApiBalancesResponse,
+              status: 200,
+            });
+          }
+          case `${pricesProviderUrl}/simple/price`: {
+            return Promise.resolve({
+              data: nativeCoinPriceProviderResponse,
+              status: 200,
+            });
+          }
+          // @ts-expect-error - TODO: remove after migration
+          case `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`: {
+            return Promise.resolve({
+              data: tokenPriceProviderResponse,
+              status: 200,
+            });
+          }
+          case `${chain.transactionService}/api/v1/safes/${safeInfo.address}/multisig-transactions/`: {
+            return Promise.resolve({
+              data: queuedTransactions,
+              status: 200,
+            });
+          }
+          default: {
+            return Promise.reject(`No matching rule for url: ${url}`);
+          }
+        }
+      });
+
+      await request(app.getHttpServer())
+        .get(
+          `/v1/safes?currency=${currency}&safes=${chain.chainId}:${safeInfo.address}&wallet_address=${walletAddress}`,
+        )
+        .expect(200)
+        .expect(({ body }) =>
+          expect(body).toMatchObject([
+            {
+              address: {
+                value: safeInfo.address,
+                name: null,
+                logoUri: null,
+              },
+              chainId: chain.chainId,
+              threshold: safeInfo.threshold,
+              owners: safeInfo.owners.map((owner) => ({
+                value: owner,
+                name: null,
+                logoUri: null,
+              })),
+              fiatTotal: '5410.25',
+              queued: 2,
+              awaitingConfirmation: 0,
+            },
+          ]),
+        );
+
+      expect(networkService.get.mock.calls.length).toBe(6);
+
+      expect(networkService.get.mock.calls[0][0].url).toBe(
+        `${safeConfigUrl}/api/v1/chains/${chain.chainId}`,
+      );
+      expect(networkService.get.mock.calls[1][0].url).toBe(
+        `${chain.transactionService}/api/v1/safes/${safeInfo.address}`,
+      );
+      expect(networkService.get.mock.calls[2][0].url).toBe(
+        `${chain.transactionService}/api/v1/safes/${safeInfo.address}/balances/`,
+      );
+      expect(networkService.get.mock.calls[2][0].networkRequest).toStrictEqual({
+        params: { trusted: false, exclude_spam: true },
+      });
+      expect(networkService.get.mock.calls[3][0].url).toBe(
+        // @ts-expect-error - TODO: remove after migration
+        `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`,
+      );
+      expect(networkService.get.mock.calls[3][0].networkRequest).toStrictEqual({
+        headers: { 'x-cg-pro-api-key': pricesApiKey },
+        params: {
+          vs_currencies: currency.toLowerCase(),
+          contract_addresses: [
+            tokenAddress.toLowerCase(),
+            secondTokenAddress.toLowerCase(),
+          ].join(','),
+        },
+      });
+      expect(networkService.get.mock.calls[4][0].url).toBe(
+        `${pricesProviderUrl}/simple/price`,
+      );
+      expect(networkService.get.mock.calls[4][0].networkRequest).toStrictEqual({
+        headers: { 'x-cg-pro-api-key': pricesApiKey },
+        params: {
+          // @ts-expect-error - TODO: remove after migration
+          ids: chain.pricesProvider.nativeCoin,
+          vs_currencies: currency.toLowerCase(),
+        },
+      });
+      expect(networkService.get.mock.calls[5][0].url).toBe(
         `${chain.transactionService}/api/v1/safes/${safeInfo.address}/multisig-transactions/`,
       );
     });
@@ -313,30 +483,16 @@ describe('Safes Controller Overview (Unit)', () => {
           .with('token', balanceTokenBuilder().with('decimals', 17).build())
           .build(),
       ];
-      const nativeCoinId1 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain1.chainId}.nativeCoin`,
-        );
-      const nativeCoinId2 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain2.chainId}.nativeCoin`,
-        );
-      const chainName1 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain1.chainId}.chainName`,
-        );
-      const chainName2 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain2.chainId}.chainName`,
-        );
       const currency = faker.finance.currencyCode();
       const nativeCoinPriceProviderResponse = {
-        [nativeCoinId1]: { [currency.toLowerCase()]: 1536.75 },
-        [nativeCoinId2]: { [currency.toLowerCase()]: 1536.75 },
+        // @ts-expect-error - TODO: remove after migration
+        [chain1.pricesProvider.nativeCoin!]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
+        // @ts-expect-error - TODO: remove after migration
+        [chain2.pricesProvider.nativeCoin!]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
       };
       const tokenPriceProviderResponse = {
         [tokenAddress1]: { [currency.toLowerCase()]: 12.5 },
@@ -390,13 +546,15 @@ describe('Safes Controller Overview (Unit)', () => {
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName1}`: {
+          // @ts-expect-error - TODO: remove after migration
+          case `${pricesProviderUrl}/simple/token_price/${chain1.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName2}`: {
+          // @ts-expect-error - TODO: remove after migration
+          case `${pricesProviderUrl}/simple/token_price/${chain2.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
@@ -552,30 +710,16 @@ describe('Safes Controller Overview (Unit)', () => {
           .with('token', balanceTokenBuilder().with('decimals', 17).build())
           .build(),
       ];
-      const nativeCoinId1 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain1.chainId}.nativeCoin`,
-        );
-      const nativeCoinId2 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain2.chainId}.nativeCoin`,
-        );
-      const chainName1 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain1.chainId}.chainName`,
-        );
-      const chainName2 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain2.chainId}.chainName`,
-        );
       const currency = faker.finance.currencyCode();
       const nativeCoinPriceProviderResponse = {
-        [nativeCoinId1]: { [currency.toLowerCase()]: 1536.75 },
-        [nativeCoinId2]: { [currency.toLowerCase()]: 1536.75 },
+        // @ts-expect-error - TODO: remove after migration
+        [chain1.pricesProvider.nativeCoin!]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
+        // @ts-expect-error - TODO: remove after migration
+        [chain2.pricesProvider.nativeCoin!]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
       };
       const tokenPriceProviderResponse = {
         [tokenAddress1]: { [currency.toLowerCase()]: 12.5 },
@@ -629,13 +773,15 @@ describe('Safes Controller Overview (Unit)', () => {
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName1}`: {
+          // @ts-expect-error - TODO: remove after migration
+          case `${pricesProviderUrl}/simple/token_price/${chain1.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName2}`: {
+          // @ts-expect-error - TODO: remove after migration
+          case `${pricesProviderUrl}/simple/token_price/${chain2.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
@@ -749,19 +895,12 @@ describe('Safes Controller Overview (Unit)', () => {
           .with('token', balanceTokenBuilder().with('decimals', 17).build())
           .build(),
       ];
-      const nativeCoinId = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain.chainId}.nativeCoin`,
-        );
-      const chainName = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain.chainId}.chainName`,
-        );
       const currency = faker.finance.currencyCode();
       const nativeCoinPriceProviderResponse = {
-        [nativeCoinId]: { [currency.toLowerCase()]: 1536.75 },
+        // @ts-expect-error - TODO: remove after migration
+        [chain.pricesProvider.nativeCoin!]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
       };
       const tokenPriceProviderResponse = {
         [tokenAddress]: { [currency.toLowerCase()]: 12.5 },
@@ -796,7 +935,8 @@ describe('Safes Controller Overview (Unit)', () => {
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName}`: {
+          // @ts-expect-error - TODO: remove after migration
+          case `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
@@ -840,27 +980,25 @@ describe('Safes Controller Overview (Unit)', () => {
           },
         ]);
 
-      expect(networkService.get.mock.calls.length).toBe(7);
+      expect(networkService.get.mock.calls.length).toBe(6);
 
       expect(networkService.get.mock.calls[0][0].url).toBe(
         `${safeConfigUrl}/api/v1/chains/${chain.chainId}`,
       );
       expect(networkService.get.mock.calls[1][0].url).toBe(
-        `${safeConfigUrl}/api/v1/chains/${chain.chainId}`,
-      );
-      expect(networkService.get.mock.calls[2][0].url).toBe(
         `${chain.transactionService}/api/v1/safes/${safeInfo.address}`,
       );
-      expect(networkService.get.mock.calls[3][0].url).toBe(
+      expect(networkService.get.mock.calls[2][0].url).toBe(
         `${chain.transactionService}/api/v1/safes/${safeInfo.address}/balances/`,
       );
-      expect(networkService.get.mock.calls[3][0].networkRequest).toStrictEqual({
+      expect(networkService.get.mock.calls[2][0].networkRequest).toStrictEqual({
         params: { trusted: false, exclude_spam: true },
       });
-      expect(networkService.get.mock.calls[4][0].url).toBe(
-        `${pricesProviderUrl}/simple/token_price/${chainName}`,
+      expect(networkService.get.mock.calls[3][0].url).toBe(
+        // @ts-expect-error - TODO: remove after migration
+        `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`,
       );
-      expect(networkService.get.mock.calls[4][0].networkRequest).toStrictEqual({
+      expect(networkService.get.mock.calls[3][0].networkRequest).toStrictEqual({
         headers: { 'x-cg-pro-api-key': pricesApiKey },
         params: {
           vs_currencies: currency.toLowerCase(),
@@ -870,19 +1008,23 @@ describe('Safes Controller Overview (Unit)', () => {
           ].join(','),
         },
       });
-      expect(networkService.get.mock.calls[5][0].url).toBe(
+      expect(networkService.get.mock.calls[4][0].url).toBe(
         `${pricesProviderUrl}/simple/price`,
       );
-      expect(networkService.get.mock.calls[5][0].networkRequest).toStrictEqual({
+      expect(networkService.get.mock.calls[4][0].networkRequest).toStrictEqual({
         headers: { 'x-cg-pro-api-key': pricesApiKey },
-        params: { ids: nativeCoinId, vs_currencies: currency.toLowerCase() },
+        params: {
+          // @ts-expect-error - TODO: remove after migration
+          ids: chain.pricesProvider.nativeCoin,
+          vs_currencies: currency.toLowerCase(),
+        },
       });
-      expect(networkService.get.mock.calls[6][0].url).toBe(
+      expect(networkService.get.mock.calls[5][0].url).toBe(
         `${chain.transactionService}/api/v1/safes/${safeInfo.address}/multisig-transactions/`,
       );
     });
 
-    it('forwards trusted and exlude spam queries', async () => {
+    it('forwards trusted and exclude spam queries', async () => {
       const chain = chainBuilder().with('chainId', '10').build();
       const safeInfo = safeBuilder().build();
       const tokenAddress = faker.finance.ethereumAddress();
@@ -904,19 +1046,12 @@ describe('Safes Controller Overview (Unit)', () => {
           .with('token', balanceTokenBuilder().with('decimals', 17).build())
           .build(),
       ];
-      const nativeCoinId = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain.chainId}.nativeCoin`,
-        );
-      const chainName = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain.chainId}.chainName`,
-        );
       const currency = faker.finance.currencyCode();
       const nativeCoinPriceProviderResponse = {
-        [nativeCoinId]: { [currency.toLowerCase()]: 1536.75 },
+        // @ts-expect-error - TODO: remove after migration
+        [chain.pricesProvider.nativeCoin!]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
       };
       const tokenPriceProviderResponse = {
         [tokenAddress]: { [currency.toLowerCase()]: 12.5 },
@@ -952,7 +1087,8 @@ describe('Safes Controller Overview (Unit)', () => {
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName}`: {
+          // @ts-expect-error - TODO: remove after migration
+          case `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
@@ -995,28 +1131,26 @@ describe('Safes Controller Overview (Unit)', () => {
           },
         ]);
 
-      expect(networkService.get.mock.calls.length).toBe(7);
+      expect(networkService.get.mock.calls.length).toBe(6);
 
       expect(networkService.get.mock.calls[0][0].url).toBe(
         `${safeConfigUrl}/api/v1/chains/${chain.chainId}`,
       );
       expect(networkService.get.mock.calls[1][0].url).toBe(
-        `${safeConfigUrl}/api/v1/chains/${chain.chainId}`,
-      );
-      expect(networkService.get.mock.calls[2][0].url).toBe(
         `${chain.transactionService}/api/v1/safes/${safeInfo.address}`,
       );
-      expect(networkService.get.mock.calls[3][0].url).toBe(
+      expect(networkService.get.mock.calls[2][0].url).toBe(
         `${chain.transactionService}/api/v1/safes/${safeInfo.address}/balances/`,
       );
-      expect(networkService.get.mock.calls[3][0].networkRequest).toStrictEqual({
+      expect(networkService.get.mock.calls[2][0].networkRequest).toStrictEqual({
         // Forwarded params
         params: { trusted: true, exclude_spam: false },
       });
-      expect(networkService.get.mock.calls[4][0].url).toBe(
-        `${pricesProviderUrl}/simple/token_price/${chainName}`,
+      expect(networkService.get.mock.calls[3][0].url).toBe(
+        // @ts-expect-error - TODO: remove after migration
+        `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`,
       );
-      expect(networkService.get.mock.calls[4][0].networkRequest).toStrictEqual({
+      expect(networkService.get.mock.calls[3][0].networkRequest).toStrictEqual({
         headers: { 'x-cg-pro-api-key': pricesApiKey },
         params: {
           vs_currencies: currency.toLowerCase(),
@@ -1026,14 +1160,18 @@ describe('Safes Controller Overview (Unit)', () => {
           ].join(','),
         },
       });
-      expect(networkService.get.mock.calls[5][0].url).toBe(
+      expect(networkService.get.mock.calls[4][0].url).toBe(
         `${pricesProviderUrl}/simple/price`,
       );
-      expect(networkService.get.mock.calls[5][0].networkRequest).toStrictEqual({
+      expect(networkService.get.mock.calls[4][0].networkRequest).toStrictEqual({
         headers: { 'x-cg-pro-api-key': pricesApiKey },
-        params: { ids: nativeCoinId, vs_currencies: currency.toLowerCase() },
+        params: {
+          // @ts-expect-error - TODO: remove after migration
+          ids: chain.pricesProvider.nativeCoin,
+          vs_currencies: currency.toLowerCase(),
+        },
       });
-      expect(networkService.get.mock.calls[6][0].url).toBe(
+      expect(networkService.get.mock.calls[5][0].url).toBe(
         `${chain.transactionService}/api/v1/safes/${safeInfo.address}/multisig-transactions/`,
       );
     });
@@ -1102,30 +1240,16 @@ describe('Safes Controller Overview (Unit)', () => {
           .with('token', balanceTokenBuilder().with('decimals', 17).build())
           .build(),
       ];
-      const nativeCoinId1 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain1.chainId}.nativeCoin`,
-        );
-      const nativeCoinId2 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain2.chainId}.nativeCoin`,
-        );
-      const chainName1 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain1.chainId}.chainName`,
-        );
-      const chainName2 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain2.chainId}.chainName`,
-        );
       const currency = faker.finance.currencyCode();
       const nativeCoinPriceProviderResponse = {
-        [nativeCoinId1]: { [currency.toLowerCase()]: 1536.75 },
-        [nativeCoinId2]: { [currency.toLowerCase()]: 1536.75 },
+        // @ts-expect-error - TODO: remove after migration
+        [chain1.pricesProvider.nativeCoin!]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
+        // @ts-expect-error - TODO: remove after migration
+        [chain2.pricesProvider.nativeCoin!]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
       };
       const tokenPriceProviderResponse = {
         [tokenAddress1]: { [currency.toLowerCase()]: 12.5 },
@@ -1185,13 +1309,15 @@ describe('Safes Controller Overview (Unit)', () => {
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName1}`: {
+          // @ts-expect-error - TODO: remove after migration
+          case `${pricesProviderUrl}/simple/token_price/${chain1.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName2}`: {
+          // @ts-expect-error - TODO: remove after migration
+          case `${pricesProviderUrl}/simple/token_price/${chain2.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
@@ -1312,30 +1438,16 @@ describe('Safes Controller Overview (Unit)', () => {
           .with('token', balanceTokenBuilder().with('decimals', 17).build())
           .build(),
       ];
-      const nativeCoinId1 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain1.chainId}.nativeCoin`,
-        );
-      const nativeCoinId2 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain2.chainId}.nativeCoin`,
-        );
-      const chainName1 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain1.chainId}.chainName`,
-        );
-      const chainName2 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain2.chainId}.chainName`,
-        );
       const currency = faker.finance.currencyCode();
       const nativeCoinPriceProviderResponse = {
-        [nativeCoinId1]: { [currency.toLowerCase()]: 1536.75 },
-        [nativeCoinId2]: { [currency.toLowerCase()]: 1536.75 },
+        // @ts-expect-error - TODO: remove after migration
+        [chain1.pricesProvider.nativeCoin!]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
+        // @ts-expect-error - TODO: remove after migration
+        [chain2.pricesProvider.nativeCoin!]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
       };
       const tokenPriceProviderResponse = {
         [tokenAddress1]: { [currency.toLowerCase()]: 12.5 },
@@ -1390,13 +1502,15 @@ describe('Safes Controller Overview (Unit)', () => {
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName1}`: {
+          // @ts-expect-error - TODO: remove after migration
+          case `${pricesProviderUrl}/simple/token_price/${chain1.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName2}`: {
+          // @ts-expect-error - TODO: remove after migration
+          case `${pricesProviderUrl}/simple/token_price/${chain2.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
@@ -1528,30 +1642,16 @@ describe('Safes Controller Overview (Unit)', () => {
           .with('token', balanceTokenBuilder().with('decimals', 17).build())
           .build(),
       ];
-      const nativeCoinId1 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain1.chainId}.nativeCoin`,
-        );
-      const nativeCoinId2 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain2.chainId}.nativeCoin`,
-        );
-      const chainName1 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain1.chainId}.chainName`,
-        );
-      const chainName2 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain2.chainId}.chainName`,
-        );
       const currency = faker.finance.currencyCode();
       const nativeCoinPriceProviderResponse = {
-        [nativeCoinId1]: { [currency.toLowerCase()]: 1536.75 },
-        [nativeCoinId2]: { [currency.toLowerCase()]: 1536.75 },
+        // @ts-expect-error - TODO: remove after migration
+        [chain1.pricesProvider.nativeCoin!]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
+        // @ts-expect-error - TODO: remove after migration
+        [chain2.pricesProvider.nativeCoin!]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
       };
       const tokenPriceProviderResponse = {
         [tokenAddress1]: { [currency.toLowerCase()]: 12.5 },
@@ -1605,13 +1705,15 @@ describe('Safes Controller Overview (Unit)', () => {
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName1}`: {
+          // @ts-expect-error - TODO: remove after migration
+          case `${pricesProviderUrl}/simple/token_price/${chain1.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName2}`: {
+          // @ts-expect-error - TODO: remove after migration
+          case `${pricesProviderUrl}/simple/token_price/${chain2.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,

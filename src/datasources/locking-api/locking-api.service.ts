@@ -6,6 +6,8 @@ import {
 } from '@/datasources/network/network.service.interface';
 import { Page } from '@/domain/entities/page.entity';
 import { ILockingApi } from '@/domain/interfaces/locking-api.interface';
+import { Campaign } from '@/domain/locking/entities/campaign.entity';
+import { Holder } from '@/domain/locking/entities/holder.entity';
 import { LockingEvent } from '@/domain/locking/entities/locking-event.entity';
 import { Rank } from '@/domain/locking/entities/rank.entity';
 import { Inject } from '@nestjs/common';
@@ -22,6 +24,37 @@ export class LockingApi implements ILockingApi {
   ) {
     this.baseUri =
       this.configurationService.getOrThrow<string>('locking.baseUri');
+  }
+
+  async getCampaignById(campaignId: string): Promise<Campaign> {
+    try {
+      const url = `${this.baseUri}/api/v1/campaigns/${campaignId}`;
+      const { data } = await this.networkService.get<Campaign>({ url });
+      return data;
+    } catch (error) {
+      throw this.httpErrorFactory.from(error);
+    }
+  }
+
+  async getCampaigns(args: {
+    limit?: number;
+    offset?: number;
+  }): Promise<Page<Campaign>> {
+    try {
+      const url = `${this.baseUri}/api/v1/campaigns`;
+      const { data } = await this.networkService.get<Page<Campaign>>({
+        url,
+        networkRequest: {
+          params: {
+            limit: args.limit,
+            offset: args.offset,
+          },
+        },
+      });
+      return data;
+    } catch (error) {
+      throw this.httpErrorFactory.from(error);
+    }
   }
 
   async getRank(safeAddress: `0x${string}`): Promise<Rank> {
@@ -41,6 +74,28 @@ export class LockingApi implements ILockingApi {
     try {
       const url = `${this.baseUri}/api/v1/leaderboard`;
       const { data } = await this.networkService.get<Page<Rank>>({
+        url,
+        networkRequest: {
+          params: {
+            limit: args.limit,
+            offset: args.offset,
+          },
+        },
+      });
+      return data;
+    } catch (error) {
+      throw this.httpErrorFactory.from(error);
+    }
+  }
+
+  async getLeaderboardV2(args: {
+    campaignId: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<Page<Holder>> {
+    try {
+      const url = `${this.baseUri}/api/v2/leaderboard/${args.campaignId}`;
+      const { data } = await this.networkService.get<Page<Holder>>({
         url,
         networkRequest: {
           params: {

@@ -132,19 +132,20 @@ export class SafesService {
     addresses: Array<{ chainId: string; address: string }>;
     trusted: boolean;
     excludeSpam: boolean;
-    walletAddress?: string;
+    walletAddress?: `0x${string}`;
   }): Promise<Array<SafeOverview>> {
     const limitedSafes = args.addresses.slice(0, this.maxOverviews);
 
     const settledOverviews = await Promise.allSettled(
       limitedSafes.map(async ({ chainId, address }) => {
+        const chain = await this.chainsRepository.getChain(chainId);
         const [safe, balances] = await Promise.all([
           this.safeRepository.getSafe({
             chainId,
             address,
           }),
           this.balancesRepository.getBalances({
-            chainId,
+            chain,
             safeAddress: address,
             trusted: args.trusted,
             fiatCode: args.currency,
@@ -204,14 +205,24 @@ export class SafesService {
 
   private computeAwaitingConfirmation(args: {
     transactions: Array<MultisigTransaction>;
-    walletAddress: string;
+    walletAddress: `0x${string}`;
   }): number {
-    return args.transactions.reduce((acc, { confirmations }) => {
-      const isConfirmed = !!confirmations?.some((confirmation) => {
-        return confirmation.owner === args.walletAddress;
-      });
-      return isConfirmed ? acc - 1 : acc;
-    }, args.transactions.length);
+    return args.transactions.reduce(
+      (acc, { confirmationsRequired, confirmations }) => {
+        const isConfirmed =
+          !!confirmations && confirmations.length >= confirmationsRequired;
+        const isSignable =
+          !isConfirmed &&
+          !confirmations?.some((confirmation) => {
+            return confirmation.owner === args.walletAddress;
+          });
+        if (isSignable) {
+          acc++;
+        }
+        return acc;
+      },
+      0,
+    );
   }
 
   private toUnixTimestampInSecondsOrNull(date: Date | null): string | null {
