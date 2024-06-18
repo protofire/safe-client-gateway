@@ -1,6 +1,6 @@
 import { SiweApiModule } from '@/datasources/siwe-api/siwe-api.module';
+import { BlockchainApiManagerModule } from '@/domain/interfaces/blockchain-api.manager.interface';
 import { SiweRepository } from '@/domain/siwe/siwe.repository';
-import { VerifyAuthMessageDto } from '@/routes/auth/entities/verify-auth-message.dto.entity';
 import { Module } from '@nestjs/common';
 
 export const ISiweRepository = Symbol('ISiweRepository');
@@ -8,11 +8,14 @@ export const ISiweRepository = Symbol('ISiweRepository');
 export interface ISiweRepository {
   generateNonce(): Promise<{ nonce: string }>;
 
-  isValidMessage(args: VerifyAuthMessageDto): Promise<boolean>;
+  isValidMessage(args: {
+    message: string;
+    signature: `0x${string}`;
+  }): Promise<boolean>;
 }
 
 @Module({
-  imports: [SiweApiModule],
+  imports: [SiweApiModule, BlockchainApiManagerModule],
   providers: [
     {
       provide: ISiweRepository,

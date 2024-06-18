@@ -5,6 +5,7 @@ import { ICollectiblesRepository } from '@/domain/collectibles/collectibles.repo
 import { IMessagesRepository } from '@/domain/messages/messages.repository.interface';
 import { ISafeAppsRepository } from '@/domain/safe-apps/safe-apps.repository.interface';
 import { ISafeRepository } from '@/domain/safe/safe.repository.interface';
+import { ITransactionsRepository } from '@/domain/transactions/transactions.repository.interface';
 import { EventType } from '@/routes/cache-hooks/entities/event-type.entity';
 import { LoggingService, ILoggingService } from '@/logging/logging.interface';
 import { Event } from '@/routes/cache-hooks/entities/event.entity';
@@ -12,6 +13,7 @@ import { IConfigurationService } from '@/config/configuration.service.interface'
 import { IQueuesRepository } from '@/domain/queues/queues-repository.interface';
 import { ConsumeMessage } from 'amqplib';
 import { WebHookSchema } from '@/routes/cache-hooks/entities/schemas/web-hook.schema';
+import { IBlockchainRepository } from '@/domain/blockchain/blockchain.repository.interface';
 
 @Injectable()
 export class CacheHooksService implements OnModuleInit {
@@ -21,6 +23,8 @@ export class CacheHooksService implements OnModuleInit {
   constructor(
     @Inject(IBalancesRepository)
     private readonly balancesRepository: IBalancesRepository,
+    @Inject(IBlockchainRepository)
+    private readonly blockchainRepository: IBlockchainRepository,
     @Inject(IChainsRepository)
     private readonly chainsRepository: IChainsRepository,
     @Inject(ICollectiblesRepository)
@@ -31,6 +35,8 @@ export class CacheHooksService implements OnModuleInit {
     private readonly safeAppsRepository: ISafeAppsRepository,
     @Inject(ISafeRepository)
     private readonly safeRepository: ISafeRepository,
+    @Inject(ITransactionsRepository)
+    private readonly transactionsRepository: ITransactionsRepository,
     @Inject(LoggingService)
     private readonly loggingService: ILoggingService,
     @Inject(IQueuesRepository)
@@ -314,15 +320,23 @@ export class CacheHooksService implements OnModuleInit {
         this._logMessageEvent(event);
         break;
       case EventType.CHAIN_UPDATE:
-        promises.push(this.chainsRepository.clearChain(event.chainId));
+        promises.push(
+          this.chainsRepository.clearChain(event.chainId).then(() => {
+            // RPC may have changed
+            this.blockchainRepository.clearApi(event.chainId);
+            // Transaction Service may have changed
+            this.transactionsRepository.clearApi(event.chainId);
+            this.balancesRepository.clearApi(event.chainId);
+          }),
+        );
         this._logEvent(event);
         break;
       case EventType.SAFE_APPS_UPDATE:
         promises.push(this.safeAppsRepository.clearSafeApps(event.chainId));
         this._logEvent(event);
         break;
-      // A new Safe created does not trigger any action
       case EventType.SAFE_CREATED:
+        promises.push(this.safeRepository.clearIsSafe(event));
         break;
     }
     return Promise.all(promises);

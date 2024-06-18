@@ -22,6 +22,7 @@ export class CacheRouter {
   private static readonly SAFE_APPS_KEY = 'safe_apps';
   private static readonly SAFE_BALANCES_KEY = 'safe_balances';
   private static readonly SAFE_COLLECTIBLES_KEY = 'safe_collectibles';
+  private static readonly SAFE_EXISTS_KEY = 'safe_exists';
   private static readonly SAFE_FIAT_CODES_KEY = 'safe_fiat_codes';
   private static readonly SAFE_KEY = 'safe';
   private static readonly SINGLETONS_KEY = 'singletons';
@@ -44,14 +45,14 @@ export class CacheRouter {
 
   static getBalancesCacheKey(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
   }): string {
     return `${args.chainId}_${CacheRouter.SAFE_BALANCES_KEY}_${args.safeAddress}`;
   }
 
   static getBalancesCacheDir(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
     trusted?: boolean;
     excludeSpam?: boolean;
   }): CacheDir {
@@ -63,14 +64,14 @@ export class CacheRouter {
 
   static getZerionBalancesCacheKey(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
   }): string {
     return `${args.chainId}_${CacheRouter.ZERION_BALANCES_KEY}_${args.safeAddress}`;
   }
 
   static getZerionBalancesCacheDir(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
     fiatCode: string;
   }): CacheDir {
     return new CacheDir(
@@ -81,14 +82,14 @@ export class CacheRouter {
 
   static getZerionCollectiblesCacheKey(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
   }): string {
     return `${args.chainId}_${CacheRouter.ZERION_COLLECTIBLES_KEY}_${args.safeAddress}`;
   }
 
   static getZerionCollectiblesCacheDir(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
     limit?: number;
     offset?: number;
   }): CacheDir {
@@ -104,21 +105,35 @@ export class CacheRouter {
 
   static getSafeCacheDir(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
   }): CacheDir {
     return new CacheDir(CacheRouter.getSafeCacheKey(args), '');
   }
 
   static getSafeCacheKey(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
   }): string {
     return `${args.chainId}_${CacheRouter.SAFE_KEY}_${args.safeAddress}`;
   }
 
+  static getIsSafeCacheDir(args: {
+    chainId: string;
+    safeAddress: `0x${string}`;
+  }): CacheDir {
+    return new CacheDir(CacheRouter.getIsSafeCacheKey(args), '');
+  }
+
+  static getIsSafeCacheKey(args: {
+    chainId: string;
+    safeAddress: `0x${string}`;
+  }): string {
+    return `${args.chainId}_${CacheRouter.SAFE_EXISTS_KEY}_${args.safeAddress}`;
+  }
+
   static getContractCacheDir(args: {
     chainId: string;
-    contractAddress: string;
+    contractAddress: `0x${string}`;
   }): CacheDir {
     return new CacheDir(
       `${args.chainId}_${CacheRouter.CONTRACT_KEY}_${args.contractAddress}`,
@@ -136,7 +151,7 @@ export class CacheRouter {
 
   static getCollectiblesCacheDir(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
     limit?: number;
     offset?: number;
     trusted?: boolean;
@@ -150,16 +165,16 @@ export class CacheRouter {
 
   static getCollectiblesKey(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
   }): string {
     return `${args.chainId}_${CacheRouter.SAFE_COLLECTIBLES_KEY}_${args.safeAddress}`;
   }
 
   static getDelegatesCacheDir(args: {
     chainId: string;
-    safeAddress?: string;
-    delegate?: string;
-    delegator?: string;
+    safeAddress?: `0x${string}`;
+    delegate?: `0x${string}`;
+    delegator?: `0x${string}`;
     label?: string;
     limit?: number;
     offset?: number;
@@ -213,21 +228,22 @@ export class CacheRouter {
 
   static getModuleTransactionsCacheDir(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
     to?: string;
+    txHash?: string;
     module?: string;
     limit?: number;
     offset?: number;
   }): CacheDir {
     return new CacheDir(
       CacheRouter.getModuleTransactionsCacheKey(args),
-      `${args.to}_${args.module}_${args.limit}_${args.offset}`,
+      `${args.to}_${args.module}_${args.txHash}_${args.limit}_${args.offset}`,
     );
   }
 
   static getModuleTransactionsCacheKey(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
   }): string {
     return `${args.chainId}_${CacheRouter.MODULE_TRANSACTIONS_KEY}_${args.safeAddress}`;
   }
@@ -300,7 +316,7 @@ export class CacheRouter {
 
   static getCreationTransactionCacheDir(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
   }): CacheDir {
     return new CacheDir(
       `${args.chainId}_${CacheRouter.CREATION_TRANSACTION_KEY}_${args.safeAddress}`,
@@ -310,7 +326,7 @@ export class CacheRouter {
 
   static getAllTransactionsCacheDir(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
     ordering?: string;
     executed?: boolean;
     queued?: boolean;
@@ -325,7 +341,7 @@ export class CacheRouter {
 
   static getAllTransactionsKey(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
   }): string {
     return `${args.chainId}_${CacheRouter.ALL_TRANSACTIONS_KEY}_${args.safeAddress}`;
   }
@@ -357,7 +373,7 @@ export class CacheRouter {
 
   static getSafesByOwnerCacheDir(args: {
     chainId: string;
-    ownerAddress: string;
+    ownerAddress: `0x${string}`;
   }): CacheDir {
     return new CacheDir(
       `${args.chainId}_${CacheRouter.OWNERS_SAFE_KEY}_${args.ownerAddress}`,
@@ -381,14 +397,14 @@ export class CacheRouter {
 
   static getMessagesBySafeCacheKey(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
   }): string {
     return `${args.chainId}_${CacheRouter.MESSAGES_KEY}_${args.safeAddress}`;
   }
 
   static getMessagesBySafeCacheDir(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
     limit?: number;
     offset?: number;
   }): CacheDir {
@@ -420,13 +436,16 @@ export class CacheRouter {
     return new CacheDir(CacheRouter.getChainCacheKey(chainId), '');
   }
 
-  static getRelayKey(args: { chainId: string; address: string }): string {
+  static getRelayKey(args: {
+    chainId: string;
+    address: `0x${string}`;
+  }): string {
     return `${args.chainId}_${CacheRouter.RELAY_KEY}_${args.address}`;
   }
 
   static getRelayCacheDir(args: {
     chainId: string;
-    address: string;
+    address: `0x${string}`;
   }): CacheDir {
     return new CacheDir(CacheRouter.getRelayKey(args), '');
   }

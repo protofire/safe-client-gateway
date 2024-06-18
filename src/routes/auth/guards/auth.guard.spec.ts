@@ -10,7 +10,7 @@ import { AuthGuard } from '@/routes/auth/guards/auth.guard';
 import { faker } from '@faker-js/faker';
 import { Controller, Get, INestApplication, UseGuards } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import * as request from 'supertest';
+import request from 'supertest';
 import { AuthRepositoryModule } from '@/domain/auth/auth.repository.interface';
 import { getSecondsUntil } from '@/domain/common/utils/time';
 import {
@@ -18,18 +18,19 @@ import {
   JwtConfigurationModule,
 } from '@/datasources/jwt/configuration/jwt.configuration.module';
 import jwtConfiguration from '@/datasources/jwt/configuration/__tests__/jwt.configuration';
+import { Server } from 'net';
 
 @Controller()
 class TestController {
   @Get('valid')
   @UseGuards(AuthGuard)
-  async validRoute(): Promise<{ secret: string }> {
+  validRoute(): { secret: string } {
     return { secret: 'This is a secret message' };
   }
 }
 
 describe('AuthGuard', () => {
-  let app: INestApplication;
+  let app: INestApplication<Server>;
   let jwtService: IJwtService;
 
   beforeEach(async () => {

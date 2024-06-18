@@ -21,16 +21,19 @@ export class BalancesService {
 
   async getBalances(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
     fiatCode: string;
     trusted: boolean;
     excludeSpam: boolean;
   }): Promise<Balances> {
     const { chainId } = args;
-    const domainBalances = await this.balancesRepository.getBalances(args);
-    const { nativeCurrency } = await this.chainsRepository.getChain(chainId);
+    const chain = await this.chainsRepository.getChain(chainId);
+    const domainBalances = await this.balancesRepository.getBalances({
+      ...args,
+      chain,
+    });
     const balances: Balance[] = domainBalances.map((balance) =>
-      this._mapBalance(balance, nativeCurrency),
+      this._mapBalance(balance, chain.nativeCurrency),
     );
     const fiatTotal = balances
       .filter((b) => b.fiatBalance !== null)

@@ -6,8 +6,6 @@ import {
 import configuration from '@/config/entities/__tests__/configuration';
 import { Test, TestingModule } from '@nestjs/testing';
 import { AppModule } from '@/app.module';
-import { AccountDataSourceModule } from '@/datasources/account/account.datasource.module';
-import { TestAccountDataSourceModule } from '@/datasources/account/__tests__/test.account.datasource.module';
 import { CacheModule } from '@/datasources/cache/cache.module';
 import { TestCacheModule } from '@/datasources/cache/__tests__/test.cache.module';
 import { RequestScopedLoggingModule } from '@/logging/logging.module';
@@ -16,7 +14,7 @@ import { NetworkModule } from '@/datasources/network/network.module';
 import { TestNetworkModule } from '@/datasources/network/__tests__/test.network.module';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import { TestAppProvider } from '@/__tests__/test-app.provider';
-import * as request from 'supertest';
+import request from 'supertest';
 import { safeBuilder } from '@/domain/safe/entities/__tests__/safe.builder';
 import { chainBuilder } from '@/domain/chains/entities/__tests__/chain.builder';
 import { dataDecodedBuilder } from '@/domain/data-decoder/entities/__tests__/data-decoded.builder';
@@ -26,9 +24,10 @@ import { setPreSignatureEncoder } from '@/domain/swaps/contracts/__tests__/encod
 import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
 import { faker } from '@faker-js/faker';
+import { Server } from 'net';
 
 describe('TransactionsViewController tests', () => {
-  let app: INestApplication;
+  let app: INestApplication<Server>;
   let safeConfigUrl: string;
   let swapsApiUrl: string;
   let networkService: jest.MockedObjectDeep<INetworkService>;
@@ -54,8 +53,6 @@ describe('TransactionsViewController tests', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(testConfiguration)],
     })
-      .overrideModule(AccountDataSourceModule)
-      .useModule(TestAccountDataSourceModule)
       .overrideModule(CacheModule)
       .useModule(TestCacheModule)
       .overrideModule(RequestScopedLoggingModule)
@@ -66,9 +63,11 @@ describe('TransactionsViewController tests', () => {
       .useModule(TestQueuesApiModule)
       .compile();
 
-    const configurationService = moduleFixture.get(IConfigurationService);
-    safeConfigUrl = configurationService.get('safeConfig.baseUri');
-    swapsApiUrl = configurationService.get('swaps.api.1');
+    const configurationService = moduleFixture.get<IConfigurationService>(
+      IConfigurationService,
+    );
+    safeConfigUrl = configurationService.getOrThrow('safeConfig.baseUri');
+    swapsApiUrl = configurationService.getOrThrow('swaps.api.1');
     networkService = moduleFixture.get(NetworkService);
 
     app = await new TestAppProvider().provide(moduleFixture);
@@ -194,7 +193,7 @@ describe('TransactionsViewController tests', () => {
           },
           receiver: order.receiver,
           owner: order.owner,
-          fullAppData: JSON.parse(order.fullAppData),
+          fullAppData: JSON.parse(order.fullAppData as string),
         }),
       );
   });
@@ -361,7 +360,8 @@ describe('TransactionsViewController tests', () => {
     const preSignature = preSignatureEncoder.build();
     const order = orderBuilder()
       .with('uid', preSignature.orderUid)
-      .with('fullAppData', `{ "appCode": "${faker.company.buzzNoun()}" }`)
+      // We don't use buzzNoun here as it can generate the same value as verifiedApp
+      .with('fullAppData', `{ "appCode": "restrited app code" }`)
       .build();
     const buyToken = tokenBuilder().with('address', order.buyToken).build();
     const sellToken = tokenBuilder().with('address', order.sellToken).build();

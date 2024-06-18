@@ -2,7 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import { TestCacheModule } from '@/datasources/cache/__tests__/test.cache.module';
 import { Test, TestingModule } from '@nestjs/testing';
 import { TestNetworkModule } from '@/datasources/network/__tests__/test.network.module';
-import * as request from 'supertest';
+import request from 'supertest';
 import { chainBuilder } from '@/domain/chains/entities/__tests__/chain.builder';
 import { safeBuilder } from '@/domain/safe/entities/__tests__/safe.builder';
 import { pageBuilder } from '@/domain/entities/__tests__/page.builder';
@@ -18,8 +18,6 @@ import {
   INetworkService,
   NetworkService,
 } from '@/datasources/network/network.service.interface';
-import { AccountDataSourceModule } from '@/datasources/account/account.datasource.module';
-import { TestAccountDataSourceModule } from '@/datasources/account/__tests__/test.account.datasource.module';
 import { faker } from '@faker-js/faker';
 import { balanceBuilder } from '@/domain/balances/entities/__tests__/balance.builder';
 import { balanceTokenBuilder } from '@/domain/balances/entities/__tests__/balance.token.builder';
@@ -32,9 +30,10 @@ import { NetworkResponseError } from '@/datasources/network/entities/network.err
 import { getAddress } from 'viem';
 import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
 import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
+import { Server } from 'net';
 
 describe('Safes Controller Overview (Unit)', () => {
-  let app: INestApplication;
+  let app: INestApplication<Server>;
   let safeConfigUrl: string;
   let networkService: jest.MockedObjectDeep<INetworkService>;
   let pricesProviderUrl: string;
@@ -51,13 +50,15 @@ describe('Safes Controller Overview (Unit)', () => {
           maxOverviews: 3,
         },
       },
+      features: {
+        ...configuration().features,
+        counterfactualBalances: true,
+      },
     });
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(testConfiguration)],
     })
-      .overrideModule(AccountDataSourceModule)
-      .useModule(TestAccountDataSourceModule)
       .overrideModule(CacheModule)
       .useModule(TestCacheModule)
       .overrideModule(RequestScopedLoggingModule)
@@ -68,7 +69,9 @@ describe('Safes Controller Overview (Unit)', () => {
       .useModule(TestQueuesApiModule)
       .compile();
 
-    const configurationService = moduleFixture.get(IConfigurationService);
+    const configurationService = moduleFixture.get<IConfigurationService>(
+      IConfigurationService,
+    );
     safeConfigUrl = configurationService.getOrThrow('safeConfig.baseUri');
     pricesProviderUrl = configurationService.getOrThrow(
       'balances.providers.safe.prices.baseUri',
@@ -109,19 +112,11 @@ describe('Safes Controller Overview (Unit)', () => {
           .with('token', balanceTokenBuilder().with('decimals', 17).build())
           .build(),
       ];
-      const nativeCoinId = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain.chainId}.nativeCoin`,
-        );
-      const chainName = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain.chainId}.chainName`,
-        );
       const currency = faker.finance.currencyCode();
       const nativeCoinPriceProviderResponse = {
-        [nativeCoinId]: { [currency.toLowerCase()]: 1536.75 },
+        [chain.pricesProvider.nativeCoin]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
       };
       const tokenPriceProviderResponse = {
         [tokenAddress]: { [currency.toLowerCase()]: 12.5 },
@@ -165,7 +160,7 @@ describe('Safes Controller Overview (Unit)', () => {
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName}`: {
+          case `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
@@ -216,7 +211,7 @@ describe('Safes Controller Overview (Unit)', () => {
         `${safeConfigUrl}/api/v1/chains/${chain.chainId}`,
       );
       expect(networkService.get.mock.calls[1][0].url).toBe(
-        `${safeConfigUrl}/api/v1/chains/${chain.chainId}`,
+        `${chain.transactionService}/api/v1/safes/${safeInfo.address}`,
       );
       expect(networkService.get.mock.calls[2][0].url).toBe(
         `${chain.transactionService}/api/v1/safes/${safeInfo.address}`,
@@ -228,7 +223,7 @@ describe('Safes Controller Overview (Unit)', () => {
         params: { trusted: false, exclude_spam: true },
       });
       expect(networkService.get.mock.calls[4][0].url).toBe(
-        `${pricesProviderUrl}/simple/token_price/${chainName}`,
+        `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`,
       );
       expect(networkService.get.mock.calls[4][0].networkRequest).toStrictEqual({
         headers: { 'x-cg-pro-api-key': pricesApiKey },
@@ -245,7 +240,10 @@ describe('Safes Controller Overview (Unit)', () => {
       );
       expect(networkService.get.mock.calls[5][0].networkRequest).toStrictEqual({
         headers: { 'x-cg-pro-api-key': pricesApiKey },
-        params: { ids: nativeCoinId, vs_currencies: currency.toLowerCase() },
+        params: {
+          ids: chain.pricesProvider.nativeCoin,
+          vs_currencies: currency.toLowerCase(),
+        },
       });
       expect(networkService.get.mock.calls[6][0].url).toBe(
         `${chain.transactionService}/api/v1/safes/${safeInfo.address}/multisig-transactions/`,
@@ -274,19 +272,11 @@ describe('Safes Controller Overview (Unit)', () => {
           .with('token', balanceTokenBuilder().with('decimals', 17).build())
           .build(),
       ];
-      const nativeCoinId = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain.chainId}.nativeCoin`,
-        );
-      const chainName = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain.chainId}.chainName`,
-        );
       const currency = faker.finance.currencyCode();
       const nativeCoinPriceProviderResponse = {
-        [nativeCoinId]: { [currency.toLowerCase()]: 1536.75 },
+        [chain.pricesProvider.nativeCoin]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
       };
       const tokenPriceProviderResponse = {
         [tokenAddress]: { [currency.toLowerCase()]: 12.5 },
@@ -342,7 +332,7 @@ describe('Safes Controller Overview (Unit)', () => {
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName}`: {
+          case `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
@@ -393,7 +383,7 @@ describe('Safes Controller Overview (Unit)', () => {
         `${safeConfigUrl}/api/v1/chains/${chain.chainId}`,
       );
       expect(networkService.get.mock.calls[1][0].url).toBe(
-        `${safeConfigUrl}/api/v1/chains/${chain.chainId}`,
+        `${chain.transactionService}/api/v1/safes/${safeInfo.address}`,
       );
       expect(networkService.get.mock.calls[2][0].url).toBe(
         `${chain.transactionService}/api/v1/safes/${safeInfo.address}`,
@@ -405,7 +395,7 @@ describe('Safes Controller Overview (Unit)', () => {
         params: { trusted: false, exclude_spam: true },
       });
       expect(networkService.get.mock.calls[4][0].url).toBe(
-        `${pricesProviderUrl}/simple/token_price/${chainName}`,
+        `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`,
       );
       expect(networkService.get.mock.calls[4][0].networkRequest).toStrictEqual({
         headers: { 'x-cg-pro-api-key': pricesApiKey },
@@ -422,7 +412,10 @@ describe('Safes Controller Overview (Unit)', () => {
       );
       expect(networkService.get.mock.calls[5][0].networkRequest).toStrictEqual({
         headers: { 'x-cg-pro-api-key': pricesApiKey },
-        params: { ids: nativeCoinId, vs_currencies: currency.toLowerCase() },
+        params: {
+          ids: chain.pricesProvider.nativeCoin,
+          vs_currencies: currency.toLowerCase(),
+        },
       });
       expect(networkService.get.mock.calls[6][0].url).toBe(
         `${chain.transactionService}/api/v1/safes/${safeInfo.address}/multisig-transactions/`,
@@ -491,30 +484,14 @@ describe('Safes Controller Overview (Unit)', () => {
           .with('token', balanceTokenBuilder().with('decimals', 17).build())
           .build(),
       ];
-      const nativeCoinId1 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain1.chainId}.nativeCoin`,
-        );
-      const nativeCoinId2 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain2.chainId}.nativeCoin`,
-        );
-      const chainName1 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain1.chainId}.chainName`,
-        );
-      const chainName2 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain2.chainId}.chainName`,
-        );
       const currency = faker.finance.currencyCode();
       const nativeCoinPriceProviderResponse = {
-        [nativeCoinId1]: { [currency.toLowerCase()]: 1536.75 },
-        [nativeCoinId2]: { [currency.toLowerCase()]: 1536.75 },
+        [chain1.pricesProvider.nativeCoin]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
+        [chain2.pricesProvider.nativeCoin]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
       };
       const tokenPriceProviderResponse = {
         [tokenAddress1]: { [currency.toLowerCase()]: 12.5 },
@@ -568,13 +545,14 @@ describe('Safes Controller Overview (Unit)', () => {
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName1}`: {
+
+          case `${pricesProviderUrl}/simple/token_price/${chain1.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName2}`: {
+          case `${pricesProviderUrl}/simple/token_price/${chain2.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
@@ -730,30 +708,14 @@ describe('Safes Controller Overview (Unit)', () => {
           .with('token', balanceTokenBuilder().with('decimals', 17).build())
           .build(),
       ];
-      const nativeCoinId1 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain1.chainId}.nativeCoin`,
-        );
-      const nativeCoinId2 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain2.chainId}.nativeCoin`,
-        );
-      const chainName1 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain1.chainId}.chainName`,
-        );
-      const chainName2 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain2.chainId}.chainName`,
-        );
       const currency = faker.finance.currencyCode();
       const nativeCoinPriceProviderResponse = {
-        [nativeCoinId1]: { [currency.toLowerCase()]: 1536.75 },
-        [nativeCoinId2]: { [currency.toLowerCase()]: 1536.75 },
+        [chain1.pricesProvider.nativeCoin]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
+        [chain2.pricesProvider.nativeCoin]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
       };
       const tokenPriceProviderResponse = {
         [tokenAddress1]: { [currency.toLowerCase()]: 12.5 },
@@ -807,13 +769,13 @@ describe('Safes Controller Overview (Unit)', () => {
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName1}`: {
+          case `${pricesProviderUrl}/simple/token_price/${chain1.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName2}`: {
+          case `${pricesProviderUrl}/simple/token_price/${chain2.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
@@ -927,19 +889,11 @@ describe('Safes Controller Overview (Unit)', () => {
           .with('token', balanceTokenBuilder().with('decimals', 17).build())
           .build(),
       ];
-      const nativeCoinId = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain.chainId}.nativeCoin`,
-        );
-      const chainName = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain.chainId}.chainName`,
-        );
       const currency = faker.finance.currencyCode();
       const nativeCoinPriceProviderResponse = {
-        [nativeCoinId]: { [currency.toLowerCase()]: 1536.75 },
+        [chain.pricesProvider.nativeCoin]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
       };
       const tokenPriceProviderResponse = {
         [tokenAddress]: { [currency.toLowerCase()]: 12.5 },
@@ -974,7 +928,7 @@ describe('Safes Controller Overview (Unit)', () => {
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName}`: {
+          case `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
@@ -1024,7 +978,7 @@ describe('Safes Controller Overview (Unit)', () => {
         `${safeConfigUrl}/api/v1/chains/${chain.chainId}`,
       );
       expect(networkService.get.mock.calls[1][0].url).toBe(
-        `${safeConfigUrl}/api/v1/chains/${chain.chainId}`,
+        `${chain.transactionService}/api/v1/safes/${safeInfo.address}`,
       );
       expect(networkService.get.mock.calls[2][0].url).toBe(
         `${chain.transactionService}/api/v1/safes/${safeInfo.address}`,
@@ -1036,7 +990,7 @@ describe('Safes Controller Overview (Unit)', () => {
         params: { trusted: false, exclude_spam: true },
       });
       expect(networkService.get.mock.calls[4][0].url).toBe(
-        `${pricesProviderUrl}/simple/token_price/${chainName}`,
+        `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`,
       );
       expect(networkService.get.mock.calls[4][0].networkRequest).toStrictEqual({
         headers: { 'x-cg-pro-api-key': pricesApiKey },
@@ -1053,14 +1007,17 @@ describe('Safes Controller Overview (Unit)', () => {
       );
       expect(networkService.get.mock.calls[5][0].networkRequest).toStrictEqual({
         headers: { 'x-cg-pro-api-key': pricesApiKey },
-        params: { ids: nativeCoinId, vs_currencies: currency.toLowerCase() },
+        params: {
+          ids: chain.pricesProvider.nativeCoin,
+          vs_currencies: currency.toLowerCase(),
+        },
       });
       expect(networkService.get.mock.calls[6][0].url).toBe(
         `${chain.transactionService}/api/v1/safes/${safeInfo.address}/multisig-transactions/`,
       );
     });
 
-    it('forwards trusted and exlude spam queries', async () => {
+    it('forwards trusted and exclude spam queries', async () => {
       const chain = chainBuilder().with('chainId', '10').build();
       const safeInfo = safeBuilder().build();
       const tokenAddress = faker.finance.ethereumAddress();
@@ -1082,19 +1039,11 @@ describe('Safes Controller Overview (Unit)', () => {
           .with('token', balanceTokenBuilder().with('decimals', 17).build())
           .build(),
       ];
-      const nativeCoinId = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain.chainId}.nativeCoin`,
-        );
-      const chainName = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain.chainId}.chainName`,
-        );
       const currency = faker.finance.currencyCode();
       const nativeCoinPriceProviderResponse = {
-        [nativeCoinId]: { [currency.toLowerCase()]: 1536.75 },
+        [chain.pricesProvider.nativeCoin]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
       };
       const tokenPriceProviderResponse = {
         [tokenAddress]: { [currency.toLowerCase()]: 12.5 },
@@ -1130,7 +1079,7 @@ describe('Safes Controller Overview (Unit)', () => {
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName}`: {
+          case `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
@@ -1179,7 +1128,7 @@ describe('Safes Controller Overview (Unit)', () => {
         `${safeConfigUrl}/api/v1/chains/${chain.chainId}`,
       );
       expect(networkService.get.mock.calls[1][0].url).toBe(
-        `${safeConfigUrl}/api/v1/chains/${chain.chainId}`,
+        `${chain.transactionService}/api/v1/safes/${safeInfo.address}`,
       );
       expect(networkService.get.mock.calls[2][0].url).toBe(
         `${chain.transactionService}/api/v1/safes/${safeInfo.address}`,
@@ -1192,7 +1141,7 @@ describe('Safes Controller Overview (Unit)', () => {
         params: { trusted: true, exclude_spam: false },
       });
       expect(networkService.get.mock.calls[4][0].url).toBe(
-        `${pricesProviderUrl}/simple/token_price/${chainName}`,
+        `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`,
       );
       expect(networkService.get.mock.calls[4][0].networkRequest).toStrictEqual({
         headers: { 'x-cg-pro-api-key': pricesApiKey },
@@ -1209,7 +1158,10 @@ describe('Safes Controller Overview (Unit)', () => {
       );
       expect(networkService.get.mock.calls[5][0].networkRequest).toStrictEqual({
         headers: { 'x-cg-pro-api-key': pricesApiKey },
-        params: { ids: nativeCoinId, vs_currencies: currency.toLowerCase() },
+        params: {
+          ids: chain.pricesProvider.nativeCoin,
+          vs_currencies: currency.toLowerCase(),
+        },
       });
       expect(networkService.get.mock.calls[6][0].url).toBe(
         `${chain.transactionService}/api/v1/safes/${safeInfo.address}/multisig-transactions/`,
@@ -1280,30 +1232,14 @@ describe('Safes Controller Overview (Unit)', () => {
           .with('token', balanceTokenBuilder().with('decimals', 17).build())
           .build(),
       ];
-      const nativeCoinId1 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain1.chainId}.nativeCoin`,
-        );
-      const nativeCoinId2 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain2.chainId}.nativeCoin`,
-        );
-      const chainName1 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain1.chainId}.chainName`,
-        );
-      const chainName2 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain2.chainId}.chainName`,
-        );
       const currency = faker.finance.currencyCode();
       const nativeCoinPriceProviderResponse = {
-        [nativeCoinId1]: { [currency.toLowerCase()]: 1536.75 },
-        [nativeCoinId2]: { [currency.toLowerCase()]: 1536.75 },
+        [chain1.pricesProvider.nativeCoin]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
+        [chain2.pricesProvider.nativeCoin]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
       };
       const tokenPriceProviderResponse = {
         [tokenAddress1]: { [currency.toLowerCase()]: 12.5 },
@@ -1363,13 +1299,13 @@ describe('Safes Controller Overview (Unit)', () => {
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName1}`: {
+          case `${pricesProviderUrl}/simple/token_price/${chain1.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName2}`: {
+          case `${pricesProviderUrl}/simple/token_price/${chain2.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
@@ -1490,30 +1426,14 @@ describe('Safes Controller Overview (Unit)', () => {
           .with('token', balanceTokenBuilder().with('decimals', 17).build())
           .build(),
       ];
-      const nativeCoinId1 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain1.chainId}.nativeCoin`,
-        );
-      const nativeCoinId2 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain2.chainId}.nativeCoin`,
-        );
-      const chainName1 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain1.chainId}.chainName`,
-        );
-      const chainName2 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain2.chainId}.chainName`,
-        );
       const currency = faker.finance.currencyCode();
       const nativeCoinPriceProviderResponse = {
-        [nativeCoinId1]: { [currency.toLowerCase()]: 1536.75 },
-        [nativeCoinId2]: { [currency.toLowerCase()]: 1536.75 },
+        [chain1.pricesProvider.nativeCoin]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
+        [chain2.pricesProvider.nativeCoin]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
       };
       const tokenPriceProviderResponse = {
         [tokenAddress1]: { [currency.toLowerCase()]: 12.5 },
@@ -1568,13 +1488,13 @@ describe('Safes Controller Overview (Unit)', () => {
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName1}`: {
+          case `${pricesProviderUrl}/simple/token_price/${chain1.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName2}`: {
+          case `${pricesProviderUrl}/simple/token_price/${chain2.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
@@ -1706,30 +1626,14 @@ describe('Safes Controller Overview (Unit)', () => {
           .with('token', balanceTokenBuilder().with('decimals', 17).build())
           .build(),
       ];
-      const nativeCoinId1 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain1.chainId}.nativeCoin`,
-        );
-      const nativeCoinId2 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain2.chainId}.nativeCoin`,
-        );
-      const chainName1 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain1.chainId}.chainName`,
-        );
-      const chainName2 = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain2.chainId}.chainName`,
-        );
       const currency = faker.finance.currencyCode();
       const nativeCoinPriceProviderResponse = {
-        [nativeCoinId1]: { [currency.toLowerCase()]: 1536.75 },
-        [nativeCoinId2]: { [currency.toLowerCase()]: 1536.75 },
+        [chain1.pricesProvider.nativeCoin]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
+        [chain2.pricesProvider.nativeCoin]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
       };
       const tokenPriceProviderResponse = {
         [tokenAddress1]: { [currency.toLowerCase()]: 12.5 },
@@ -1783,13 +1687,13 @@ describe('Safes Controller Overview (Unit)', () => {
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName1}`: {
+          case `${pricesProviderUrl}/simple/token_price/${chain1.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
             });
           }
-          case `${pricesProviderUrl}/simple/token_price/${chainName2}`: {
+          case `${pricesProviderUrl}/simple/token_price/${chain2.pricesProvider.chainName}`: {
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
@@ -1876,16 +1780,8 @@ describe('Safes Controller Overview (Unit)', () => {
           .with('token', balanceTokenBuilder().with('decimals', 17).build())
           .build(),
       ];
-      const nativeCoinId = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain.chainId}.nativeCoin`,
-        );
-      const chainName = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain.chainId}.chainName`,
-        );
+      const nativeCoinId = chain.pricesProvider.nativeCoin;
+      const chainName = chain.pricesProvider.chainName;
       const currency = faker.finance.currencyCode();
       const nativeCoinPriceProviderResponse = {
         [nativeCoinId]: { [currency.toLowerCase()]: 1536.75 },

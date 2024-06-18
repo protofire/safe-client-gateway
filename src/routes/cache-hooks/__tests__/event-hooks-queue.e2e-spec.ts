@@ -12,15 +12,16 @@ import { Test } from '@nestjs/testing';
 import { ChannelWrapper } from 'amqp-connection-manager';
 import { RedisClientType } from 'redis';
 import { getAddress } from 'viem';
+import { Server } from 'net';
+import { TEST_SAFE } from '@/routes/common/__tests__/constants';
 
 describe('Events queue processing e2e tests', () => {
-  let app: INestApplication;
+  let app: INestApplication<Server>;
   let redisClient: RedisClientType;
   let channel: ChannelWrapper;
   let queueName: string;
   const cacheKeyPrefix = crypto.randomUUID();
   const queue = crypto.randomUUID();
-  const chainId = '1'; // Mainnet
 
   beforeAll(async () => {
     const defaultConfiguration = configuration();
@@ -46,7 +47,7 @@ describe('Events queue processing e2e tests', () => {
     app = await new TestAppProvider().provide(moduleRef);
     await app.init();
     redisClient = await redisClientFactory();
-    const amqpClient = await amqpClientFactory(queue);
+    const amqpClient = amqpClientFactory(queue);
     channel = amqpClient.channel;
     queueName = amqpClient.queueName;
   });
@@ -79,9 +80,8 @@ describe('Events queue processing e2e tests', () => {
       txHash: faker.string.hexadecimal({ length: 32 }),
     },
   ])('$type clears balances', async (payload) => {
-    const safeAddress = faker.finance.ethereumAddress();
     const cacheDir = new CacheDir(
-      `${chainId}_safe_balances_${getAddress(safeAddress)}`,
+      `${TEST_SAFE.chainId}_safe_balances_${getAddress(TEST_SAFE.address)}`,
       faker.string.alpha(),
     );
     await redisClient.hSet(
@@ -89,7 +89,11 @@ describe('Events queue processing e2e tests', () => {
       cacheDir.field,
       faker.string.alpha(),
     );
-    const data = { address: safeAddress, chainId, ...payload };
+    const data = {
+      address: TEST_SAFE.address,
+      chainId: TEST_SAFE.chainId,
+      ...payload,
+    };
 
     await channel.sendToQueue(queueName, data);
 
@@ -122,9 +126,8 @@ describe('Events queue processing e2e tests', () => {
       safeTxHash: faker.string.hexadecimal({ length: 32 }),
     },
   ])('$type clears multisig transactions', async (payload) => {
-    const safeAddress = faker.finance.ethereumAddress();
     const cacheDir = new CacheDir(
-      `${chainId}_multisig_transactions_${getAddress(safeAddress)}`,
+      `${TEST_SAFE.chainId}_multisig_transactions_${getAddress(TEST_SAFE.address)}`,
       faker.string.alpha(),
     );
     await redisClient.hSet(
@@ -132,7 +135,11 @@ describe('Events queue processing e2e tests', () => {
       cacheDir.field,
       faker.string.alpha(),
     );
-    const data = { address: safeAddress, chainId, ...payload };
+    const data = {
+      address: TEST_SAFE.address,
+      chainId: TEST_SAFE.chainId,
+      ...payload,
+    };
 
     await channel.sendToQueue(queueName, data);
 
@@ -165,9 +172,8 @@ describe('Events queue processing e2e tests', () => {
       safeTxHash: faker.string.hexadecimal({ length: 32 }),
     },
   ])('$type clears multisig transaction', async (payload) => {
-    const safeAddress = faker.finance.ethereumAddress();
     const cacheDir = new CacheDir(
-      `${chainId}_multisig_transaction_${payload.safeTxHash}`,
+      `${TEST_SAFE.chainId}_multisig_transaction_${payload.safeTxHash}`,
       faker.string.alpha(),
     );
     await redisClient.hSet(
@@ -175,7 +181,11 @@ describe('Events queue processing e2e tests', () => {
       cacheDir.field,
       faker.string.alpha(),
     );
-    const data = { address: safeAddress, chainId, ...payload };
+    const data = {
+      address: TEST_SAFE.address,
+      chainId: TEST_SAFE.chainId,
+      ...payload,
+    };
 
     await channel.sendToQueue(queueName, data);
 
@@ -200,9 +210,8 @@ describe('Events queue processing e2e tests', () => {
       txHash: faker.string.hexadecimal({ length: 32 }),
     },
   ])('$type clears safe info', async (payload) => {
-    const safeAddress = faker.finance.ethereumAddress();
     const cacheDir = new CacheDir(
-      `${chainId}_safe_${getAddress(safeAddress)}`,
+      `${TEST_SAFE.chainId}_safe_${getAddress(TEST_SAFE.address)}`,
       faker.string.alpha(),
     );
     await redisClient.hSet(
@@ -210,7 +219,11 @@ describe('Events queue processing e2e tests', () => {
       cacheDir.field,
       faker.string.alpha(),
     );
-    const data = { address: safeAddress, chainId, ...payload };
+    const data = {
+      address: TEST_SAFE.address,
+      chainId: TEST_SAFE.chainId,
+      ...payload,
+    };
 
     await channel.sendToQueue(queueName, data);
 
@@ -240,9 +253,8 @@ describe('Events queue processing e2e tests', () => {
       txHash: faker.string.hexadecimal({ length: 32 }),
     },
   ])('$type clears safe collectibles', async (payload) => {
-    const safeAddress = faker.finance.ethereumAddress();
     const cacheDir = new CacheDir(
-      `${chainId}_safe_collectibles_${getAddress(safeAddress)}`,
+      `${TEST_SAFE.chainId}_safe_collectibles_${getAddress(TEST_SAFE.address)}`,
       faker.string.alpha(),
     );
     await redisClient.hSet(
@@ -250,7 +262,11 @@ describe('Events queue processing e2e tests', () => {
       cacheDir.field,
       faker.string.alpha(),
     );
-    const data = { address: safeAddress, chainId, ...payload };
+    const data = {
+      address: TEST_SAFE.address,
+      chainId: TEST_SAFE.chainId,
+      ...payload,
+    };
 
     await channel.sendToQueue(queueName, data);
 
@@ -280,9 +296,8 @@ describe('Events queue processing e2e tests', () => {
       txHash: faker.string.hexadecimal({ length: 32 }),
     },
   ])('$type clears safe collectible transfers', async (payload) => {
-    const safeAddress = faker.finance.ethereumAddress();
     const cacheDir = new CacheDir(
-      `${chainId}_transfers_${getAddress(safeAddress)}`,
+      `${TEST_SAFE.chainId}_transfers_${getAddress(TEST_SAFE.address)}`,
       faker.string.alpha(),
     );
     await redisClient.hSet(
@@ -290,7 +305,11 @@ describe('Events queue processing e2e tests', () => {
       cacheDir.field,
       faker.string.alpha(),
     );
-    const data = { address: safeAddress, chainId, ...payload };
+    const data = {
+      address: TEST_SAFE.address,
+      chainId: TEST_SAFE.chainId,
+      ...payload,
+    };
 
     await channel.sendToQueue(queueName, data);
 
@@ -315,9 +334,8 @@ describe('Events queue processing e2e tests', () => {
       value: faker.string.numeric(),
     },
   ])('$type clears incoming transfers', async (payload) => {
-    const safeAddress = faker.finance.ethereumAddress();
     const cacheDir = new CacheDir(
-      `${chainId}_incoming_transfers_${getAddress(safeAddress)}`,
+      `${TEST_SAFE.chainId}_incoming_transfers_${getAddress(TEST_SAFE.address)}`,
       faker.string.alpha(),
     );
     await redisClient.hSet(
@@ -325,7 +343,11 @@ describe('Events queue processing e2e tests', () => {
       cacheDir.field,
       faker.string.alpha(),
     );
-    const data = { address: safeAddress, chainId, ...payload };
+    const data = {
+      address: TEST_SAFE.address,
+      chainId: TEST_SAFE.chainId,
+      ...payload,
+    };
 
     await channel.sendToQueue(queueName, data);
 
@@ -345,9 +367,8 @@ describe('Events queue processing e2e tests', () => {
       txHash: faker.string.hexadecimal({ length: 32 }),
     },
   ])('$type clears module transactions', async (payload) => {
-    const safeAddress = faker.finance.ethereumAddress();
     const cacheDir = new CacheDir(
-      `${chainId}_module_transactions_${getAddress(safeAddress)}`,
+      `${TEST_SAFE.chainId}_module_transactions_${getAddress(TEST_SAFE.address)}`,
       faker.string.alpha(),
     );
     await redisClient.hSet(
@@ -355,7 +376,11 @@ describe('Events queue processing e2e tests', () => {
       cacheDir.field,
       faker.string.alpha(),
     );
-    const data = { address: safeAddress, chainId, ...payload };
+    const data = {
+      address: TEST_SAFE.address,
+      chainId: TEST_SAFE.chainId,
+      ...payload,
+    };
 
     await channel.sendToQueue(queueName, data);
 
@@ -400,9 +425,8 @@ describe('Events queue processing e2e tests', () => {
       txHash: faker.string.hexadecimal({ length: 32 }),
     },
   ])('$type clears all transactions', async (payload) => {
-    const safeAddress = faker.finance.ethereumAddress();
     const cacheDir = new CacheDir(
-      `${chainId}_all_transactions_${getAddress(safeAddress)}`,
+      `${TEST_SAFE.chainId}_all_transactions_${getAddress(TEST_SAFE.address)}`,
       faker.string.alpha(),
     );
     await redisClient.hSet(
@@ -410,7 +434,11 @@ describe('Events queue processing e2e tests', () => {
       cacheDir.field,
       faker.string.alpha(),
     );
-    const data = { address: safeAddress, chainId, ...payload };
+    const data = {
+      address: TEST_SAFE.address,
+      chainId: TEST_SAFE.chainId,
+      ...payload,
+    };
 
     await channel.sendToQueue(queueName, data);
 
@@ -433,9 +461,8 @@ describe('Events queue processing e2e tests', () => {
       messageHash: faker.string.hexadecimal({ length: 32 }),
     },
   ])('$type clears messages', async (payload) => {
-    const safeAddress = faker.finance.ethereumAddress();
     const cacheDir = new CacheDir(
-      `${chainId}_messages_${getAddress(safeAddress)}`,
+      `${TEST_SAFE.chainId}_messages_${getAddress(TEST_SAFE.address)}`,
       faker.string.alpha(),
     );
     await redisClient.hSet(
@@ -443,7 +470,11 @@ describe('Events queue processing e2e tests', () => {
       cacheDir.field,
       faker.string.alpha(),
     );
-    const data = { address: safeAddress, chainId, ...payload };
+    const data = {
+      address: TEST_SAFE.address,
+      chainId: TEST_SAFE.chainId,
+      ...payload,
+    };
 
     await channel.sendToQueue(queueName, data);
 
@@ -486,13 +517,13 @@ describe('Events queue processing e2e tests', () => {
       type: 'SAFE_APPS_UPDATE',
     },
   ])('$type clears safe apps', async (payload) => {
-    const cacheDir = new CacheDir(`${chainId}_safe_apps`, '');
+    const cacheDir = new CacheDir(`${TEST_SAFE.chainId}_safe_apps`, '');
     await redisClient.hSet(
       `${cacheKeyPrefix}-${cacheDir.key}`,
       cacheDir.field,
       faker.string.alpha(),
     );
-    const data = { chainId, ...payload };
+    const data = { chainId: TEST_SAFE.chainId, ...payload };
 
     await channel.sendToQueue(queueName, data);
 

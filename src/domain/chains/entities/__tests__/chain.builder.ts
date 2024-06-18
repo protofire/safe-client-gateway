@@ -8,6 +8,8 @@ import { nativeCurrencyBuilder } from '@/domain/chains/entities/__tests__/native
 import { rpcUriBuilder } from '@/domain/chains/entities/__tests__/rpc-uri.builder';
 import { themeBuilder } from '@/domain/chains/entities/__tests__/theme.builder';
 import { Chain } from '@/domain/chains/entities/chain.entity';
+import { pricesProviderBuilder } from '@/domain/chains/entities/__tests__/prices-provider.builder';
+import { balancesProviderBuilder } from '@/domain/chains/entities/__tests__/balances-provider.builder';
 
 export function chainBuilder(): IBuilder<Chain> {
   return new Builder<Chain>()
@@ -23,6 +25,8 @@ export function chainBuilder(): IBuilder<Chain> {
     .with('publicRpcUri', rpcUriBuilder().build())
     .with('blockExplorerUriTemplate', blockExplorerUriTemplateBuilder().build())
     .with('nativeCurrency', nativeCurrencyBuilder().build())
+    .with('pricesProvider', pricesProviderBuilder().build())
+    .with('balancesProvider', balancesProviderBuilder().build())
     .with('transactionService', faker.internet.url({ appendSlash: false }))
     .with('vpcTransactionService', faker.internet.url({ appendSlash: false }))
     .with('theme', themeBuilder().build())

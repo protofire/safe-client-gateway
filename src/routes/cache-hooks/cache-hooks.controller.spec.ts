@@ -1,7 +1,7 @@
 import { faker } from '@faker-js/faker';
 import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import * as request from 'supertest';
+import request from 'supertest';
 import { TestCacheModule } from '@/datasources/cache/__tests__/test.cache.module';
 import { TestNetworkModule } from '@/datasources/network/__tests__/test.network.module';
 import { chainBuilder } from '@/domain/chains/entities/__tests__/chain.builder';
@@ -19,26 +19,31 @@ import {
   INetworkService,
   NetworkService,
 } from '@/datasources/network/network.service.interface';
-import { AccountDataSourceModule } from '@/datasources/account/account.datasource.module';
-import { TestAccountDataSourceModule } from '@/datasources/account/__tests__/test.account.datasource.module';
 import { getAddress } from 'viem';
 import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
 import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
+import { Server } from 'net';
+import { safeBuilder } from '@/domain/safe/entities/__tests__/safe.builder';
+import { IBlockchainApiManager } from '@/domain/interfaces/blockchain-api.manager.interface';
+import { safeCreatedEventBuilder } from '@/routes/cache-hooks/entities/__tests__/safe-created.build';
+import { ITransactionApiManager } from '@/domain/interfaces/transaction-api.manager.interface';
+import { IBalancesApiManager } from '@/domain/interfaces/balances-api.manager.interface';
 
 describe('Post Hook Events (Unit)', () => {
-  let app: INestApplication;
+  let app: INestApplication<Server>;
   let authToken: string;
   let safeConfigUrl: string;
   let fakeCacheService: FakeCacheService;
   let networkService: jest.MockedObjectDeep<INetworkService>;
   let configurationService: IConfigurationService;
+  let blockchainApiManager: IBlockchainApiManager;
+  let transactionApiManager: ITransactionApiManager;
+  let balancesApiManager: IBalancesApiManager;
 
   async function initApp(config: typeof configuration): Promise<void> {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(config)],
     })
-      .overrideModule(AccountDataSourceModule)
-      .useModule(TestAccountDataSourceModule)
       .overrideModule(CacheModule)
       .useModule(TestCacheModule)
       .overrideModule(RequestScopedLoggingModule)
@@ -52,6 +57,11 @@ describe('Post Hook Events (Unit)', () => {
 
     fakeCacheService = moduleFixture.get<FakeCacheService>(CacheService);
     configurationService = moduleFixture.get(IConfigurationService);
+    blockchainApiManager = moduleFixture.get<IBlockchainApiManager>(
+      IBlockchainApiManager,
+    );
+    transactionApiManager = moduleFixture.get(ITransactionApiManager);
+    balancesApiManager = moduleFixture.get(IBalancesApiManager);
     authToken = configurationService.getOrThrow('auth.token');
     safeConfigUrl = configurationService.getOrThrow('safeConfig.baseUri');
     networkService = moduleFixture.get(NetworkService);
@@ -178,6 +188,8 @@ describe('Post Hook Events (Unit)', () => {
     },
     {
       type: 'SAFE_CREATED',
+      address: faker.finance.ethereumAddress(),
+      blockNumber: faker.number.int(),
     },
   ])('accepts $type', async (payload) => {
     const chainId = faker.string.numeric();
@@ -273,14 +285,16 @@ describe('Post Hook Events (Unit)', () => {
       txHash: faker.string.hexadecimal({ length: 32 }),
     },
   ])('$type clears balances', async (payload) => {
-    const safeAddress = faker.finance.ethereumAddress();
     const chainId = faker.string.numeric({
       exclude: configurationService.getOrThrow(
         'features.zerionBalancesChainIds',
       ),
     });
+    const chain = chainBuilder().with('chainId', chainId).build();
+    const safe = safeBuilder().build();
+    const safeAddress = getAddress(safe.address);
     const cacheDir = new CacheDir(
-      `${chainId}_safe_balances_${getAddress(safeAddress)}`,
+      `${chainId}_safe_balances_${safeAddress}`,
       faker.string.alpha(),
     );
     await fakeCacheService.set(
@@ -297,9 +311,11 @@ describe('Post Hook Events (Unit)', () => {
       switch (url) {
         case `${safeConfigUrl}/api/v1/chains/${chainId}`:
           return Promise.resolve({
-            data: chainBuilder().with('chainId', chainId).build(),
+            data: chain,
             status: 200,
           });
+        case `${chain.transactionService}/api/v1/safes/${safeAddress}`:
+          return Promise.resolve({ data: safe, status: 200 });
         default:
           return Promise.reject(new Error(`Could not match ${url}`));
       }
@@ -494,14 +510,16 @@ describe('Post Hook Events (Unit)', () => {
       txHash: faker.string.hexadecimal({ length: 32 }),
     },
   ])('$type clears safe collectibles', async (payload) => {
-    const safeAddress = faker.finance.ethereumAddress();
     const chainId = faker.string.numeric({
       exclude: configurationService.getOrThrow(
         'features.zerionBalancesChainIds',
       ),
     });
+    const chain = chainBuilder().with('chainId', chainId).build();
+    const safe = safeBuilder().build();
+    const safeAddress = getAddress(safe.address);
     const cacheDir = new CacheDir(
-      `${chainId}_safe_collectibles_${getAddress(safeAddress)}`,
+      `${chainId}_safe_collectibles_${safeAddress}`,
       faker.string.alpha(),
     );
     await fakeCacheService.set(
@@ -518,9 +536,11 @@ describe('Post Hook Events (Unit)', () => {
       switch (url) {
         case `${safeConfigUrl}/api/v1/chains/${chainId}`:
           return Promise.resolve({
-            data: chainBuilder().with('chainId', chainId).build(),
+            data: chain,
             status: 200,
           });
+        case `${chain.transactionService}/api/v1/safes/${safeAddress}`:
+          return Promise.resolve({ data: safe, status: 200 });
         default:
           return Promise.reject(new Error(`Could not match ${url}`));
       }
@@ -852,6 +872,106 @@ describe('Post Hook Events (Unit)', () => {
 
   it.each([
     {
+      type: 'CHAIN_UPDATE',
+    },
+  ])('$type clears the blockchain API', async (payload) => {
+    const chainId = faker.string.numeric();
+    const data = {
+      chainId: chainId,
+      ...payload,
+    };
+    networkService.get.mockImplementation(({ url }) => {
+      switch (url) {
+        case `${safeConfigUrl}/api/v1/chains/${chainId}`:
+          return Promise.resolve({
+            data: chainBuilder().with('chainId', chainId).build(),
+            status: 200,
+          });
+        default:
+          return Promise.reject(new Error(`Could not match ${url}`));
+      }
+    });
+    const api = await blockchainApiManager.getApi(chainId);
+
+    await request(app.getHttpServer())
+      .post(`/hooks/events`)
+      .set('Authorization', `Basic ${authToken}`)
+      .send(data)
+      .expect(202);
+
+    const newApi = await blockchainApiManager.getApi(chainId);
+    expect(api).not.toBe(newApi);
+  });
+
+  it.each([
+    {
+      type: 'CHAIN_UPDATE',
+    },
+  ])('$type clears the transaction API', async (payload) => {
+    const chainId = faker.string.numeric();
+    const data = {
+      chainId: chainId,
+      ...payload,
+    };
+    networkService.get.mockImplementation(({ url }) => {
+      switch (url) {
+        case `${safeConfigUrl}/api/v1/chains/${chainId}`:
+          return Promise.resolve({
+            data: chainBuilder().with('chainId', chainId).build(),
+            status: 200,
+          });
+        default:
+          return Promise.reject(new Error(`Could not match ${url}`));
+      }
+    });
+    const api = await transactionApiManager.getApi(chainId);
+
+    await request(app.getHttpServer())
+      .post(`/hooks/events`)
+      .set('Authorization', `Basic ${authToken}`)
+      .send(data)
+      .expect(202);
+
+    const newApi = await transactionApiManager.getApi(chainId);
+    expect(api).not.toBe(newApi);
+  });
+
+  it.each([
+    {
+      type: 'CHAIN_UPDATE',
+    },
+  ])('$type clears the balances API', async (payload) => {
+    const chainId = faker.string.numeric();
+    const safeAddress = getAddress(faker.finance.ethereumAddress());
+    const data = {
+      chainId: chainId,
+      ...payload,
+    };
+    networkService.get.mockImplementation(({ url }) => {
+      switch (url) {
+        case `${safeConfigUrl}/api/v1/chains/${chainId}`:
+          return Promise.resolve({
+            data: chainBuilder().with('chainId', chainId).build(),
+            status: 200,
+          });
+        default:
+          return Promise.reject(new Error(`Could not match ${url}`));
+      }
+    });
+    const api = await balancesApiManager.getApi(chainId, safeAddress);
+
+    await request(app.getHttpServer())
+      .post(`/hooks/events`)
+      .set('Authorization', `Basic ${authToken}`)
+      .send(data)
+      .expect(202);
+
+    const newApi = await balancesApiManager.getApi(chainId, safeAddress);
+    expect(api).not.toBe(newApi);
+  });
+
+  it.each([
+    {
       type: 'SAFE_APPS_UPDATE',
     },
   ])('$type clears safe apps', async (payload) => {
@@ -951,4 +1071,40 @@ describe('Post Hook Events (Unit)', () => {
       await expect(fakeCacheService.get(cacheDir)).resolves.toBeUndefined();
     },
   );
+
+  it.each([
+    {
+      type: 'SAFE_CREATED',
+    },
+  ])('$type clears Safe existence', async () => {
+    const data = safeCreatedEventBuilder().build();
+    const cacheDir = new CacheDir(
+      `${data.chainId}_safe_exists_${data.address}`,
+      '',
+    );
+    networkService.get.mockImplementation(({ url }) => {
+      switch (url) {
+        case `${safeConfigUrl}/api/v1/chains/${data.chainId}`:
+          return Promise.resolve({
+            data: chainBuilder().with('chainId', data.chainId).build(),
+            status: 200,
+          });
+        default:
+          return Promise.reject(new Error(`Could not match ${url}`));
+      }
+    });
+    await fakeCacheService.set(
+      cacheDir,
+      faker.string.alpha(),
+      faker.number.int({ min: 1 }),
+    );
+
+    await request(app.getHttpServer())
+      .post(`/hooks/events`)
+      .set('Authorization', `Basic ${authToken}`)
+      .send(data)
+      .expect(202);
+
+    await expect(fakeCacheService.get(cacheDir)).resolves.toBeUndefined();
+  });
 });

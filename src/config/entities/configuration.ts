@@ -29,6 +29,9 @@ export default () => ({
     nonceTtlSeconds: parseInt(
       process.env.AUTH_NONCE_TTL_SECONDS ?? `${5 * 60}`,
     ),
+    maxValidityPeriodSeconds: parseInt(
+      process.env.AUTH_VALIDITY_PERIOD_SECONDS ?? `${15 * 60}`,
+    ),
   },
   balances: {
     balancesTtlSeconds: parseInt(process.env.BALANCES_TTL_SECONDS ?? `${300}`),
@@ -48,26 +51,6 @@ export default () => ({
           notFoundPriceTtlSeconds: parseInt(
             process.env.NOT_FOUND_PRICE_TTL_SECONDS ?? `${72 * 60 * 60}`,
           ),
-          chains: {
-            1: { nativeCoin: 'ethereum', chainName: 'ethereum' },
-            10: { nativeCoin: 'ethereum', chainName: 'optimistic-ethereum' },
-            100: { nativeCoin: 'xdai', chainName: 'xdai' },
-            1101: { nativeCoin: 'ethereum', chainName: 'polygon-zkevm' },
-            11155111: { nativeCoin: 'ethereum', chainName: 'ethereum' },
-            1313161554: { nativeCoin: 'ethereum', chainName: 'aurora' },
-            137: { nativeCoin: 'matic-network', chainName: 'polygon-pos' },
-            196: { nativeCoin: 'okb', chainName: 'x1' },
-            324: { nativeCoin: 'ethereum', chainName: 'zksync' },
-            42161: { nativeCoin: 'ethereum', chainName: 'arbitrum-one' },
-            42220: { nativeCoin: 'celo', chainName: 'celo' },
-            43114: { nativeCoin: 'avalanche-2', chainName: 'avalanche' },
-            5: { nativeCoin: 'ethereum', chainName: 'ethereum' },
-            534352: { nativeCoin: 'weth', chainName: 'scroll' },
-            56: { nativeCoin: 'binancecoin', chainName: 'binance-smart-chain' },
-            8453: { nativeCoin: 'ethereum', chainName: 'base' },
-            84531: { nativeCoin: 'ethereum', chainName: 'base' },
-            84532: { nativeCoin: 'ethereum', chainName: 'base' },
-          },
           highRefreshRateTokens:
             process.env.HIGH_REFRESH_RATE_TOKENS?.split(',') ?? [],
           highRefreshRateTokensTtlSeconds: parseInt(
@@ -81,19 +64,17 @@ export default () => ({
         chains: {
           1: { chainName: 'ethereum' },
           10: { chainName: 'optimism' },
-          56: { chainName: 'binance-smart-chain' },
           100: { chainName: 'xdai' },
+          1101: { chainName: 'polygon-zkevm' },
+          1313161554: { chainName: 'aurora' },
           137: { chainName: 'polygon' },
           324: { chainName: 'zksync-era' },
-          // 1101 (Polygon zkEVM) is not available on Zerion
-          // 1101: { chainName: '' },
-          8453: { chainName: 'base' },
           42161: { chainName: 'arbitrum' },
           42220: { chainName: 'celo' },
           43114: { chainName: 'avalanche' },
-          // 11155111 (Sepolia) is not available on Zerion
-          // 11155111: { chainName: '' },
-          1313161554: { chainName: 'aurora' },
+          534352: { chainName: 'scroll' },
+          56: { chainName: 'binance-smart-chain' },
+          8453: { chainName: 'base' },
         },
         currencies: [
           'usd',
@@ -120,6 +101,11 @@ export default () => ({
           process.env.ZERION_RATE_LIMIT_CALLS_BY_PERIOD ?? `${2}`,
         ),
       },
+    },
+  },
+  blockchain: {
+    infura: {
+      apiKey: process.env.INFURA_API_KEY,
     },
   },
   db: {
@@ -149,20 +135,6 @@ export default () => ({
     apiKey: process.env.EMAIL_API_KEY,
     fromEmail: process.env.EMAIL_API_FROM_EMAIL,
     fromName: process.env.EMAIL_API_FROM_NAME || 'Safe',
-    templates: {
-      recoveryTx: process.env.EMAIL_TEMPLATE_RECOVERY_TX,
-      unknownRecoveryTx: process.env.EMAIL_TEMPLATE_UNKNOWN_RECOVERY_TX,
-      verificationCode: process.env.EMAIL_TEMPLATE_VERIFICATION_CODE,
-    },
-    verificationCode: {
-      resendLockWindowMs: parseInt(
-        process.env.EMAIL_VERIFICATION_CODE_RESEND_LOCK_WINDOW_MS ??
-          `${30 * 1000}`,
-      ),
-      ttlMs: parseInt(
-        process.env.EMAIL_VERIFICATION_CODE_TTL_MS ?? `${5 * 60 * 1000}`,
-      ),
-    },
   },
   expirationTimeInSeconds: {
     default: parseInt(process.env.EXPIRATION_TIME_DEFAULT_SECONDS ?? `${60}`),
@@ -193,13 +165,16 @@ export default () => ({
     swapsDecoding: process.env.FF_SWAPS_DECODING?.toLowerCase() === 'true',
     historyDebugLogs:
       process.env.FF_HISTORY_DEBUG_LOGS?.toLowerCase() === 'true',
-    imitationFiltering:
-      process.env.FF_IMITATION_FILTERING?.toLowerCase() === 'true',
+    imitationMapping:
+      process.env.FF_IMITATION_MAPPING?.toLowerCase() === 'true',
     auth: process.env.FF_AUTH?.toLowerCase() === 'true',
     confirmationView:
       process.env.FF_CONFIRMATION_VIEW?.toLowerCase() === 'true',
     eventsQueue: process.env.FF_EVENTS_QUEUE?.toLowerCase() === 'true',
     delegatesV2: process.env.FF_DELEGATES_V2?.toLowerCase() === 'true',
+    counterfactualBalances:
+      process.env.FF_COUNTERFACTUAL_BALANCES?.toLowerCase() === 'true',
+    accounts: process.env.FF_ACCOUNTS?.toLowerCase() === 'true',
   },
   httpClient: {
     // Timeout in milliseconds to be used for the HTTP client.
@@ -222,9 +197,10 @@ export default () => ({
     ownersTtlSeconds: parseInt(process.env.OWNERS_TTL_SECONDS ?? `${0}`),
   },
   mappings: {
-    imitationTransactions: {
+    imitation: {
+      lookupDistance: parseInt(process.env.IMITATION_LOOKUP_DISTANCE ?? `${3}`),
       prefixLength: parseInt(process.env.IMITATION_PREFIX_LENGTH ?? `${3}`),
-      suffixLength: parseInt(process.env.VANITY_ADDRESS_CHARS ?? `${4}`),
+      suffixLength: parseInt(process.env.IMITATION_SUFFIX_LENGTH ?? `${4}`),
     },
     history: {
       maxNestedTransfers: parseInt(
@@ -248,6 +224,7 @@ export default () => ({
     ),
     apiKey: {
       100: process.env.RELAY_PROVIDER_API_KEY_GNOSIS_CHAIN,
+      42161: process.env.RELAY_PROVIDER_API_KEY_ARBITRUM_ONE,
       11155111: process.env.RELAY_PROVIDER_API_KEY_SEPOLIA,
     },
   },
@@ -265,6 +242,7 @@ export default () => ({
     api: {
       1: 'https://api.cow.fi/mainnet',
       100: 'https://api.cow.fi/xdai',
+      42161: 'https://api.cow.fi/arbitrum_one',
       11155111: 'https://api.cow.fi/sepolia',
     },
     explorerBaseUri:

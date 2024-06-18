@@ -1,6 +1,6 @@
 import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import * as request from 'supertest';
+import request from 'supertest';
 import { TestAppProvider } from '@/__tests__/test-app.provider';
 import { TestCacheModule } from '@/datasources/cache/__tests__/test.cache.module';
 import { TestNetworkModule } from '@/datasources/network/__tests__/test.network.module';
@@ -21,14 +21,14 @@ import { NULL_ADDRESS } from '@/routes/common/constants';
 import { balanceBuilder } from '@/domain/balances/entities/__tests__/balance.builder';
 import { balanceTokenBuilder } from '@/domain/balances/entities/__tests__/balance.token.builder';
 import { NetworkResponseError } from '@/datasources/network/entities/network.error.entity';
-import { AccountDataSourceModule } from '@/datasources/account/account.datasource.module';
-import { TestAccountDataSourceModule } from '@/datasources/account/__tests__/test.account.datasource.module';
 import { getAddress } from 'viem';
 import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
 import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
+import { Server } from 'net';
+import { safeBuilder } from '@/domain/safe/entities/__tests__/safe.builder';
 
 describe('Balances Controller (Unit)', () => {
-  let app: INestApplication;
+  let app: INestApplication<Server>;
   let safeConfigUrl: string;
   let pricesProviderUrl: string;
   let networkService: jest.MockedObjectDeep<INetworkService>;
@@ -36,11 +36,18 @@ describe('Balances Controller (Unit)', () => {
   beforeEach(async () => {
     jest.resetAllMocks();
 
+    const defaultConfiguration = configuration();
+    const testConfiguration = (): typeof defaultConfiguration => ({
+      ...defaultConfiguration,
+      features: {
+        ...defaultConfiguration.features,
+        counterfactualBalances: true,
+      },
+    });
+
     const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule.register(configuration)],
+      imports: [AppModule.register(testConfiguration)],
     })
-      .overrideModule(AccountDataSourceModule)
-      .useModule(TestAccountDataSourceModule)
       .overrideModule(CacheModule)
       .useModule(TestCacheModule)
       .overrideModule(RequestScopedLoggingModule)
@@ -51,9 +58,11 @@ describe('Balances Controller (Unit)', () => {
       .useModule(TestQueuesApiModule)
       .compile();
 
-    const configurationService = moduleFixture.get(IConfigurationService);
-    safeConfigUrl = configurationService.get('safeConfig.baseUri');
-    pricesProviderUrl = configurationService.get(
+    const configurationService = moduleFixture.get<IConfigurationService>(
+      IConfigurationService,
+    );
+    safeConfigUrl = configurationService.getOrThrow('safeConfig.baseUri');
+    pricesProviderUrl = configurationService.getOrThrow(
       'balances.providers.safe.prices.baseUri',
     );
     networkService = moduleFixture.get(NetworkService);
@@ -69,7 +78,7 @@ describe('Balances Controller (Unit)', () => {
   describe('GET /balances', () => {
     it(`maps native coin + ERC20 token balance correctly, and sorts balances by fiatBalance`, async () => {
       const chain = chainBuilder().with('chainId', '10').build();
-      const safeAddress = faker.finance.ethereumAddress();
+      const safeAddress = getAddress(faker.finance.ethereumAddress());
       const tokenAddress = faker.finance.ethereumAddress();
       const secondTokenAddress = faker.finance.ethereumAddress();
       const transactionApiBalancesResponse = [
@@ -89,22 +98,14 @@ describe('Balances Controller (Unit)', () => {
           .with('token', balanceTokenBuilder().with('decimals', 17).build())
           .build(),
       ];
-      const nativeCoinId = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain.chainId}.nativeCoin`,
-        );
       const apiKey = app
-        .get(IConfigurationService)
+        .get<IConfigurationService>(IConfigurationService)
         .getOrThrow('balances.providers.safe.prices.apiKey');
-      const chainName = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain.chainId}.chainName`,
-        );
       const currency = faker.finance.currencyCode();
       const nativeCoinPriceProviderResponse = {
-        [nativeCoinId]: { [currency.toLowerCase()]: 1536.75 },
+        [chain.pricesProvider.nativeCoin]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
       };
       const tokenPriceProviderResponse = {
         [tokenAddress]: { [currency.toLowerCase()]: 12.5 },
@@ -114,6 +115,11 @@ describe('Balances Controller (Unit)', () => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
             return Promise.resolve({ data: chain, status: 200 });
+          case `${chain.transactionService}/api/v1/safes/${safeAddress}`:
+            return Promise.resolve({
+              data: safeBuilder().build(),
+              status: 200,
+            });
           case `${chain.transactionService}/api/v1/safes/${safeAddress}/balances/`:
             return Promise.resolve({
               data: transactionApiBalancesResponse,
@@ -124,7 +130,7 @@ describe('Balances Controller (Unit)', () => {
               data: nativeCoinPriceProviderResponse,
               status: 200,
             });
-          case `${pricesProviderUrl}/simple/token_price/${chainName}`:
+          case `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`:
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
@@ -191,21 +197,24 @@ describe('Balances Controller (Unit)', () => {
         });
 
       // 4 Network calls are expected
-      // (1. Chain data, 2. Balances, 3. Coingecko native coin, 4. Coingecko tokens)
-      expect(networkService.get.mock.calls.length).toBe(4);
+      // (1. Chain data, 2. Safe data, 3. Balances, 4. Coingecko native coin, 5. Coingecko tokens)
+      expect(networkService.get.mock.calls.length).toBe(5);
       expect(networkService.get.mock.calls[0][0].url).toBe(
         `${safeConfigUrl}/api/v1/chains/${chain.chainId}`,
       );
       expect(networkService.get.mock.calls[1][0].url).toBe(
+        `${chain.transactionService}/api/v1/safes/${safeAddress}`,
+      );
+      expect(networkService.get.mock.calls[2][0].url).toBe(
         `${chain.transactionService}/api/v1/safes/${safeAddress}/balances/`,
       );
-      expect(networkService.get.mock.calls[1][0].networkRequest).toStrictEqual({
+      expect(networkService.get.mock.calls[2][0].networkRequest).toStrictEqual({
         params: { trusted: false, exclude_spam: true },
       });
-      expect(networkService.get.mock.calls[2][0].url).toBe(
-        `${pricesProviderUrl}/simple/token_price/${chainName}`,
+      expect(networkService.get.mock.calls[3][0].url).toBe(
+        `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`,
       );
-      expect(networkService.get.mock.calls[2][0].networkRequest).toStrictEqual({
+      expect(networkService.get.mock.calls[3][0].networkRequest).toStrictEqual({
         headers: { 'x-cg-pro-api-key': apiKey },
         params: {
           vs_currencies: currency.toLowerCase(),
@@ -215,18 +224,21 @@ describe('Balances Controller (Unit)', () => {
           ].join(','),
         },
       });
-      expect(networkService.get.mock.calls[3][0].url).toBe(
+      expect(networkService.get.mock.calls[4][0].url).toBe(
         `${pricesProviderUrl}/simple/price`,
       );
-      expect(networkService.get.mock.calls[3][0].networkRequest).toStrictEqual({
+      expect(networkService.get.mock.calls[4][0].networkRequest).toStrictEqual({
         headers: { 'x-cg-pro-api-key': apiKey },
-        params: { ids: nativeCoinId, vs_currencies: currency.toLowerCase() },
+        params: {
+          ids: chain.pricesProvider.nativeCoin,
+          vs_currencies: currency.toLowerCase(),
+        },
       });
     });
 
     it(`excludeSpam and trusted params are forwarded to tx service`, async () => {
       const chain = chainBuilder().with('chainId', '10').build();
-      const safeAddress = faker.finance.ethereumAddress();
+      const safeAddress = getAddress(faker.finance.ethereumAddress());
       const tokenAddress = faker.finance.ethereumAddress();
       const transactionApiBalancesResponse = [
         balanceBuilder()
@@ -237,11 +249,6 @@ describe('Balances Controller (Unit)', () => {
       ];
       const excludeSpam = true;
       const trusted = true;
-      const chainName = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain.chainId}.chainName`,
-        );
       const currency = faker.finance.currencyCode();
       const tokenPriceProviderResponse = {
         [tokenAddress]: { [currency.toLowerCase()]: 2.5 },
@@ -250,12 +257,17 @@ describe('Balances Controller (Unit)', () => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
             return Promise.resolve({ data: chain, status: 200 });
+          case `${chain.transactionService}/api/v1/safes/${safeAddress}`:
+            return Promise.resolve({
+              data: safeBuilder().build(),
+              status: 200,
+            });
           case `${chain.transactionService}/api/v1/safes/${safeAddress}/balances/`:
             return Promise.resolve({
               data: transactionApiBalancesResponse,
               status: 200,
             });
-          case `${pricesProviderUrl}/simple/token_price/${chainName}`:
+          case `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`:
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
@@ -272,7 +284,7 @@ describe('Balances Controller (Unit)', () => {
         .expect(200);
 
       // trusted and exclude_spam params are passed
-      expect(networkService.get.mock.calls[1][0].networkRequest).toStrictEqual({
+      expect(networkService.get.mock.calls[2][0].networkRequest).toStrictEqual({
         params: {
           trusted,
           exclude_spam: excludeSpam,
@@ -282,7 +294,7 @@ describe('Balances Controller (Unit)', () => {
 
     it(`maps native token correctly`, async () => {
       const chain = chainBuilder().with('chainId', '10').build();
-      const safeAddress = faker.finance.ethereumAddress();
+      const safeAddress = getAddress(faker.finance.ethereumAddress());
       const transactionApiBalancesResponse = [
         balanceBuilder()
           .with('tokenAddress', null)
@@ -291,18 +303,20 @@ describe('Balances Controller (Unit)', () => {
           .build(),
       ];
       const currency = faker.finance.currencyCode();
-      const nativeCoinId = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain.chainId}.nativeCoin`,
-        );
       const nativeCoinPriceProviderResponse = {
-        [nativeCoinId]: { [currency.toLowerCase()]: 1536.75 },
+        [chain.pricesProvider.nativeCoin]: {
+          [currency.toLowerCase()]: 1536.75,
+        },
       };
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
             return Promise.resolve({ data: chain, status: 200 });
+          case `${chain.transactionService}/api/v1/safes/${safeAddress}`:
+            return Promise.resolve({
+              data: safeBuilder().build(),
+              status: 200,
+            });
           case `${chain.transactionService}/api/v1/safes/${safeAddress}/balances/`:
             return Promise.resolve({
               data: transactionApiBalancesResponse,
@@ -347,7 +361,7 @@ describe('Balances Controller (Unit)', () => {
 
     it('returns large numbers as is (not in scientific notation)', async () => {
       const chain = chainBuilder().with('chainId', '10').build();
-      const safeAddress = faker.finance.ethereumAddress();
+      const safeAddress = getAddress(faker.finance.ethereumAddress());
       const tokenAddress = faker.finance.ethereumAddress();
       const transactionApiBalancesResponse = [
         balanceBuilder()
@@ -356,11 +370,6 @@ describe('Balances Controller (Unit)', () => {
           .with('token', balanceTokenBuilder().with('decimals', 17).build())
           .build(),
       ];
-      const chainName = app
-        .get(IConfigurationService)
-        .getOrThrow(
-          `balances.providers.safe.prices.chains.${chain.chainId}.chainName`,
-        );
       const currency = faker.finance.currencyCode();
       const tokenPriceProviderResponse = {
         [tokenAddress]: { [currency.toLowerCase()]: 2.5 },
@@ -369,12 +378,17 @@ describe('Balances Controller (Unit)', () => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
             return Promise.resolve({ data: chain, status: 200 });
+          case `${chain.transactionService}/api/v1/safes/${safeAddress}`:
+            return Promise.resolve({
+              data: safeBuilder().build(),
+              status: 200,
+            });
           case `${chain.transactionService}/api/v1/safes/${safeAddress}/balances/`:
             return Promise.resolve({
               data: transactionApiBalancesResponse,
               status: 200,
             });
-          case `${pricesProviderUrl}/simple/token_price/${chainName}`:
+          case `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`:
             return Promise.resolve({
               data: tokenPriceProviderResponse,
               status: 200,
@@ -411,26 +425,29 @@ describe('Balances Controller (Unit)', () => {
         });
 
       // 3 Network calls are expected
-      // (1. Chain data, 2. Balances, 3. Coingecko token)
-      expect(networkService.get.mock.calls.length).toBe(3);
+      // (1. Chain data, 2. Safe data, 3. Balances, 4. Coingecko token)
+      expect(networkService.get.mock.calls.length).toBe(4);
       expect(networkService.get.mock.calls[0][0].url).toBe(
         `${safeConfigUrl}/api/v1/chains/${chain.chainId}`,
       );
       expect(networkService.get.mock.calls[1][0].url).toBe(
+        `${chain.transactionService}/api/v1/safes/${safeAddress}`,
+      );
+      expect(networkService.get.mock.calls[2][0].url).toBe(
         `${chain.transactionService}/api/v1/safes/${safeAddress}/balances/`,
       );
-      expect(networkService.get.mock.calls[1][0].networkRequest).toStrictEqual({
+      expect(networkService.get.mock.calls[2][0].networkRequest).toStrictEqual({
         params: { trusted: false, exclude_spam: true },
       });
-      expect(networkService.get.mock.calls[2][0].url).toBe(
-        `${pricesProviderUrl}/simple/token_price/${chainName}`,
+      expect(networkService.get.mock.calls[3][0].url).toBe(
+        `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`,
       );
     });
 
     describe('Config API Error', () => {
       it(`500 error response`, async () => {
         const chainId = '1';
-        const safeAddress = faker.finance.ethereumAddress();
+        const safeAddress = getAddress(faker.finance.ethereumAddress());
         const error = new NetworkResponseError(
           new URL(
             `${safeConfigUrl}/v1/chains/${chainId}/safes/${safeAddress}/balances/usd`,
@@ -456,7 +473,7 @@ describe('Balances Controller (Unit)', () => {
     describe('Prices provider API Error', () => {
       it(`should return a 0-balance when an error is thrown by the provider`, async () => {
         const chain = chainBuilder().with('chainId', '10').build();
-        const safeAddress = faker.finance.ethereumAddress();
+        const safeAddress = getAddress(faker.finance.ethereumAddress());
         const tokenAddress = faker.finance.ethereumAddress();
         const transactionApiBalancesResponse = [
           balanceBuilder()
@@ -465,21 +482,21 @@ describe('Balances Controller (Unit)', () => {
             .with('token', balanceTokenBuilder().with('decimals', 17).build())
             .build(),
         ];
-        const chainName = app
-          .get(IConfigurationService)
-          .getOrThrow(
-            `balances.providers.safe.prices.chains.${chain.chainId}.chainName`,
-          );
         networkService.get.mockImplementation(({ url }) => {
           switch (url) {
             case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
               return Promise.resolve({ data: chain, status: 200 });
+            case `${chain.transactionService}/api/v1/safes/${safeAddress}`:
+              return Promise.resolve({
+                data: safeBuilder().build(),
+                status: 200,
+              });
             case `${chain.transactionService}/api/v1/safes/${safeAddress}/balances/`:
               return Promise.resolve({
                 data: transactionApiBalancesResponse,
                 status: 200,
               });
-            case `${pricesProviderUrl}/simple/token_price/${chainName}`:
+            case `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`:
               return Promise.reject();
             default:
               return Promise.reject(new Error(`Could not match ${url}`));
@@ -514,12 +531,12 @@ describe('Balances Controller (Unit)', () => {
             ],
           });
 
-        expect(networkService.get.mock.calls.length).toBe(3);
+        expect(networkService.get.mock.calls.length).toBe(4);
       });
 
       it(`should return a 0-balance when a validation error happens`, async () => {
         const chain = chainBuilder().with('chainId', '10').build();
-        const safeAddress = faker.finance.ethereumAddress();
+        const safeAddress = getAddress(faker.finance.ethereumAddress());
         const tokenAddress = getAddress(faker.finance.ethereumAddress());
         const transactionApiBalancesResponse = [
           balanceBuilder()
@@ -528,22 +545,22 @@ describe('Balances Controller (Unit)', () => {
             .with('token', balanceTokenBuilder().with('decimals', 17).build())
             .build(),
         ];
-        const chainName = app
-          .get(IConfigurationService)
-          .getOrThrow(
-            `balances.providers.safe.prices.chains.${chain.chainId}.chainName`,
-          );
         const tokenPriceProviderResponse = 'notAnObject';
         networkService.get.mockImplementation(({ url }) => {
           switch (url) {
             case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
               return Promise.resolve({ data: chain, status: 200 });
+            case `${chain.transactionService}/api/v1/safes/${safeAddress}`:
+              return Promise.resolve({
+                data: safeBuilder().build(),
+                status: 200,
+              });
             case `${chain.transactionService}/api/v1/safes/${safeAddress}/balances/`:
               return Promise.resolve({
                 data: transactionApiBalancesResponse,
                 status: 200,
               });
-            case `${pricesProviderUrl}/simple/token_price/${chainName}`:
+            case `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`:
               return Promise.resolve({
                 data: tokenPriceProviderResponse,
                 status: 200,
@@ -581,19 +598,27 @@ describe('Balances Controller (Unit)', () => {
             ],
           });
 
-        expect(networkService.get.mock.calls.length).toBe(3);
+        expect(networkService.get.mock.calls.length).toBe(4);
       });
     });
 
     describe('Transaction API Error', () => {
       it(`500 error response`, async () => {
         const chainId = '1';
-        const safeAddress = faker.finance.ethereumAddress();
+        const safeAddress = getAddress(faker.finance.ethereumAddress());
         const chainResponse = chainBuilder().with('chainId', chainId).build();
         const transactionServiceUrl = `${chainResponse.transactionService}/api/v1/safes/${safeAddress}/balances/`;
         networkService.get.mockImplementation(({ url }) => {
           if (url == `${safeConfigUrl}/api/v1/chains/${chainId}`) {
             return Promise.resolve({ data: chainResponse, status: 200 });
+          } else if (
+            url ==
+            `${chainResponse.transactionService}/api/v1/safes/${safeAddress}`
+          ) {
+            return Promise.resolve({
+              data: safeBuilder().build(),
+              status: 200,
+            });
           } else if (url == transactionServiceUrl) {
             const error = new NetworkResponseError(
               new URL(transactionServiceUrl),
@@ -615,13 +640,13 @@ describe('Balances Controller (Unit)', () => {
             code: 500,
           });
 
-        expect(networkService.get.mock.calls.length).toBe(2);
+        expect(networkService.get.mock.calls.length).toBe(3);
       });
     });
 
     it(`500 error if validation fails`, async () => {
       const chainId = '1';
-      const safeAddress = faker.finance.ethereumAddress();
+      const safeAddress = getAddress(faker.finance.ethereumAddress());
       const chainResponse = chainBuilder().with('chainId', chainId).build();
       networkService.get.mockImplementation(({ url }) => {
         if (url == `${safeConfigUrl}/api/v1/chains/${chainId}`) {
@@ -632,6 +657,14 @@ describe('Balances Controller (Unit)', () => {
         ) {
           return Promise.resolve({
             data: [{ invalid: 'data' }],
+            status: 200,
+          });
+        } else if (
+          url ==
+          `${chainResponse.transactionService}/api/v1/safes/${safeAddress}`
+        ) {
+          return Promise.resolve({
+            data: safeBuilder().build(),
             status: 200,
           });
         } else {
@@ -647,7 +680,7 @@ describe('Balances Controller (Unit)', () => {
           message: 'Internal server error',
         });
 
-      expect(networkService.get.mock.calls.length).toBe(3);
+      expect(networkService.get.mock.calls.length).toBe(4);
     });
   });
 

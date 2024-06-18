@@ -1,9 +1,10 @@
-import * as postgres from 'postgres';
+import postgres from 'postgres';
 import { Module } from '@nestjs/common';
 import { PostgresDatabaseShutdownHook } from '@/datasources/db/postgres-database.shutdown.hook';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import { PostgresDatabaseMigrationHook } from '@/datasources/db/postgres-database.migration.hook';
-import * as fs from 'fs';
+import fs from 'fs';
+import { PostgresDatabaseMigrator } from '@/datasources/db/postgres-database.migrator';
 
 function dbFactory(configurationService: IConfigurationService): postgres.Sql {
   const caPath = configurationService.get<string>('db.postgres.ssl.caPath');
@@ -31,12 +32,21 @@ function dbFactory(configurationService: IConfigurationService): postgres.Sql {
   });
 }
 
+function migratorFactory(sql: postgres.Sql): PostgresDatabaseMigrator {
+  return new PostgresDatabaseMigrator(sql);
+}
+
 @Module({
   providers: [
     {
       provide: 'DB_INSTANCE',
       useFactory: dbFactory,
       inject: [IConfigurationService],
+    },
+    {
+      provide: PostgresDatabaseMigrator,
+      useFactory: migratorFactory,
+      inject: ['DB_INSTANCE'],
     },
     PostgresDatabaseShutdownHook,
     PostgresDatabaseMigrationHook,

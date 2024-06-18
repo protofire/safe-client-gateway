@@ -6,24 +6,29 @@ import {
   PaginationData,
   cursorUrlFromLimitAndOffset,
 } from '@/routes/common/pagination/pagination.data';
+import { IChainsRepository } from '@/domain/chains/chains.repository.interface';
 
 @Injectable()
 export class CollectiblesService {
   constructor(
     @Inject(ICollectiblesRepository)
     private readonly repository: ICollectiblesRepository,
+    @Inject(IChainsRepository)
+    private readonly chainsRepository: IChainsRepository,
   ) {}
 
   async getCollectibles(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
     routeUrl: Readonly<URL>;
     paginationData: PaginationData;
     trusted: boolean;
     excludeSpam: boolean;
   }): Promise<Page<Collectible>> {
+    const chain = await this.chainsRepository.getChain(args.chainId);
     const collectibles = await this.repository.getCollectibles({
       ...args,
+      chain,
       limit: args.paginationData.limit,
       offset: args.paginationData.offset,
     });
