@@ -9,7 +9,8 @@ import { AddressSchema } from '@/validation/entities/schemas/address.schema';
 import { ValidationPipe } from '@/validation/pipes/validation.pipe';
 import { Controller, Get, Param } from '@nestjs/common';
 import { ApiOkResponse, ApiQuery, ApiTags } from '@nestjs/swagger';
-import { z } from 'zod';
+import { Campaign } from '@/routes/locking/entities/campaign.entity';
+import { CampaignPage } from '@/routes/locking/entities/campaign.page.entity';
 
 @ApiTags('locking')
 @Controller({
@@ -19,11 +20,33 @@ import { z } from 'zod';
 export class LockingController {
   constructor(private readonly lockingService: LockingService) {}
 
+  @ApiOkResponse({ type: Campaign })
+  @Get('/campaigns/:campaignId')
+  async getCampaignById(
+    @Param('campaignId') campaignId: string,
+  ): Promise<Campaign> {
+    return this.lockingService.getCampaignById(campaignId);
+  }
+
+  @ApiOkResponse({ type: CampaignPage })
+  @ApiQuery({
+    name: 'cursor',
+    required: false,
+    type: String,
+  })
+  @Get('/campaigns')
+  async getCampaigns(
+    @RouteUrlDecorator() routeUrl: URL,
+    @PaginationDataDecorator() paginationData: PaginationData,
+  ): Promise<CampaignPage> {
+    return this.lockingService.getCampaigns({ routeUrl, paginationData });
+  }
+
   @ApiOkResponse({ type: Rank })
-  @Get('/leaderboard/:safeAddress')
+  @Get('/leaderboard/rank/:safeAddress')
   async getRank(
     @Param('safeAddress', new ValidationPipe(AddressSchema))
-    safeAddress: z.infer<typeof AddressSchema>,
+    safeAddress: `0x${string}`,
   ): Promise<Rank> {
     return this.lockingService.getRank(safeAddress);
   }
@@ -51,7 +74,7 @@ export class LockingController {
   @Get('/:safeAddress/history')
   async getLockingHistory(
     @Param('safeAddress', new ValidationPipe(AddressSchema))
-    safeAddress: z.infer<typeof AddressSchema>,
+    safeAddress: `0x${string}`,
     @RouteUrlDecorator() routeUrl: URL,
     @PaginationDataDecorator() paginationData: PaginationData,
   ): Promise<LockingEventPage> {

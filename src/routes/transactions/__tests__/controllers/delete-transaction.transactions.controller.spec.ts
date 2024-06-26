@@ -28,6 +28,8 @@ import {
 import { CacheService } from '@/datasources/cache/cache.service.interface';
 import { CacheDir } from '@/datasources/cache/entities/cache-dir.entity';
 import { FakeCacheService } from '@/datasources/cache/__tests__/fake.cache.service';
+import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
+import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 
 describe('Delete Transaction - Transactions Controller (Unit', () => {
   let app: INestApplication;
@@ -49,6 +51,8 @@ describe('Delete Transaction - Transactions Controller (Unit', () => {
       .useModule(TestLoggingModule)
       .overrideModule(NetworkModule)
       .useModule(TestNetworkModule)
+      .overrideModule(QueuesApiModule)
+      .useModule(TestQueuesApiModule)
       .compile();
 
     const configurationService = moduleFixture.get(IConfigurationService);
@@ -107,7 +111,7 @@ describe('Delete Transaction - Transactions Controller (Unit', () => {
     networkService.delete.mockImplementation(({ url }) => {
       if (
         url ===
-        `${chain.transactionService}/api/v1/transactions/${tx.safeTxHash}`
+        `${chain.transactionService}/api/v1/multisig-transactions/${tx.safeTxHash}`
       ) {
         return Promise.resolve({ data: {}, status: 204 });
       }
@@ -142,7 +146,7 @@ describe('Delete Transaction - Transactions Controller (Unit', () => {
     networkService.delete.mockImplementation(({ url }) => {
       if (
         url ===
-        `${chain.transactionService}/api/v1/transactions/${tx.safeTxHash}`
+        `${chain.transactionService}/api/v1/multisig-transactions/${tx.safeTxHash}`
       ) {
         return Promise.resolve({ data: {}, status: 204 });
       }
@@ -191,7 +195,7 @@ describe('Delete Transaction - Transactions Controller (Unit', () => {
     networkService.delete.mockImplementation(({ url }) => {
       if (
         url ===
-        `${chain.transactionService}/api/v1/transactions/${tx.safeTxHash}`
+        `${chain.transactionService}/api/v1/multisig-transactions/${tx.safeTxHash}`
       ) {
         return Promise.reject(
           new NetworkResponseError(

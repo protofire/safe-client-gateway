@@ -33,7 +33,7 @@ import { TransactionPreview } from '@/routes/transactions/entities/transaction-p
 import { Transaction } from '@/routes/transactions/entities/transaction.entity';
 import { AddConfirmationDtoSchema } from '@/routes/transactions/entities/schemas/add-confirmation.dto.schema';
 import { PreviewTransactionDtoSchema } from '@/routes/transactions/entities/schemas/preview-transaction.dto.schema';
-import { ProposeTransactionDtoValidationPipe } from '@/routes/transactions/pipes/propose-transaction.dto.validation.pipe';
+import { ProposeTransactionDtoSchema } from '@/routes/transactions/entities/schemas/propose-transaction.dto.schema';
 import { TransactionsService } from '@/routes/transactions/transactions.service';
 import { DeleteTransactionDto } from '@/routes/transactions/entities/delete-transaction.dto.entity';
 import { ValidationPipe } from '@/validation/pipes/validation.pipe';
@@ -233,6 +233,8 @@ export class TransactionsController {
     timezoneOffsetMs: number,
     @Query('trusted', new DefaultValuePipe(true), ParseBoolPipe)
     trusted: boolean,
+    @Query('imitation', new DefaultValuePipe(true), ParseBoolPipe)
+    imitation: boolean,
   ): Promise<Partial<TransactionItemPage>> {
     return this.transactionsService.getTransactionHistory({
       chainId,
@@ -241,6 +243,7 @@ export class TransactionsController {
       paginationData,
       timezoneOffsetMs,
       onlyTrusted: trusted,
+      showImitations: imitation,
     });
   }
 
@@ -250,7 +253,7 @@ export class TransactionsController {
   async proposeTransaction(
     @Param('chainId') chainId: string,
     @Param('safeAddress') safeAddress: string,
-    @Body(ProposeTransactionDtoValidationPipe)
+    @Body(new ValidationPipe(ProposeTransactionDtoSchema))
     proposeTransactionDto: ProposeTransactionDto,
   ): Promise<TransactionDetails> {
     return this.transactionsService.proposeTransaction({

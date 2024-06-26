@@ -17,6 +17,7 @@ import { difference, get } from 'lodash';
 import { LoggingService, ILoggingService } from '@/logging/logging.interface';
 import { NetworkResponseError } from '@/datasources/network/entities/network.error.entity';
 import { asError } from '@/logging/utils';
+import { Chain } from '@/domain/chains/entities/chain.entity';
 
 @Injectable()
 export class CoingeckoApi implements IPricesApi {
@@ -34,10 +35,25 @@ export class CoingeckoApi implements IPricesApi {
   static readonly NOT_FOUND_TTL_RANGE_SECONDS: number = 60 * 60 * 24;
   private readonly apiKey: string | undefined;
   private readonly baseUrl: string;
-  private readonly pricesTtlSeconds: number;
-  private readonly notFoundPriceTtlSeconds: number;
   private readonly defaultExpirationTimeInSeconds: number;
   private readonly defaultNotFoundExpirationTimeSeconds: number;
+  private readonly pricesTtlSeconds: number;
+  /**
+   * TTL in seconds for native coin prices.
+   */
+  private readonly nativeCoinPricesTtlSeconds: number;
+  /**
+   * TTL in seconds for a not found token price.
+   */
+  private readonly notFoundPriceTtlSeconds: number;
+  /**
+   * Token addresses that will be cached with a highRefreshRateTokensTtlSeconds TTL.
+   */
+  private readonly highRefreshRateTokens: string[];
+  /**
+   * TTL in seconds for high-rate refresh token prices.
+   */
+  private readonly highRefreshRateTokensTtlSeconds: number;
 
   constructor(
     @Inject(IConfigurationService)
@@ -60,6 +76,10 @@ export class CoingeckoApi implements IPricesApi {
     this.pricesTtlSeconds = this.configurationService.getOrThrow<number>(
       'balances.providers.safe.prices.pricesTtlSeconds',
     );
+    this.nativeCoinPricesTtlSeconds =
+      this.configurationService.getOrThrow<number>(
+        'balances.providers.safe.prices.nativeCoinPricesTtlSeconds',
+      );
     this.notFoundPriceTtlSeconds = this.configurationService.getOrThrow<number>(
       'balances.providers.safe.prices.notFoundPriceTtlSeconds',
     );
@@ -67,17 +87,39 @@ export class CoingeckoApi implements IPricesApi {
       this.configurationService.getOrThrow<number>(
         'expirationTimeInSeconds.notFound.default',
       );
+    // Coingecko expects the token addresses to be lowercase, so lowercase addresses are enforced here.
+    this.highRefreshRateTokens = this.configurationService
+      .getOrThrow<
+        string[]
+      >('balances.providers.safe.prices.highRefreshRateTokens')
+      .map((tokenAddress) => tokenAddress.toLowerCase());
+
+    this.highRefreshRateTokensTtlSeconds =
+      this.configurationService.getOrThrow<number>(
+        'balances.providers.safe.prices.highRefreshRateTokensTtlSeconds',
+      );
   }
 
+  /**
+   * Gets prices for a chain's native coin, trying to get it from cache first.
+   * If it's not found in the cache, it tries to retrieve it from the Coingecko API.
+   *
+   * @param args.chain Chain entity containing the chain-specific configuration
+   * @param args.fiatCode
+   * @returns number representing the native coin price, or null if not found.
+   */
   async getNativeCoinPrice(args: {
-    chainId: string;
+    chain: Chain;
     fiatCode: string;
   }): Promise<number | null> {
     try {
       const lowerCaseFiatCode = args.fiatCode.toLowerCase();
-      const nativeCoinId = this.configurationService.getOrThrow<string>(
-        `balances.providers.safe.prices.chains.${args.chainId}.nativeCoin`,
-      );
+      // TODO: remove configurationService fallback when fully migrated.
+      const nativeCoinId =
+        args.chain.pricesProvider?.nativeCoin ??
+        this.configurationService.getOrThrow<string>(
+          `balances.providers.safe.prices.chains.${args.chain.chainId}.nativeCoin`,
+        );
       const cacheDir = CacheRouter.getNativeCoinPriceCacheDir({
         nativeCoinId,
         fiatCode: lowerCaseFiatCode,
@@ -98,7 +140,7 @@ export class CoingeckoApi implements IPricesApi {
           }),
         },
         notFoundExpireTimeSeconds: this.defaultNotFoundExpirationTimeSeconds,
-        expireTimeSeconds: this.pricesTtlSeconds,
+        expireTimeSeconds: this.nativeCoinPricesTtlSeconds,
       });
       return result?.[nativeCoinId]?.[lowerCaseFiatCode];
     } catch (error) {
@@ -115,13 +157,13 @@ export class CoingeckoApi implements IPricesApi {
    * Gets prices for a set of token addresses, trying to get them from cache first.
    * For those not found in the cache, it tries to retrieve them from the Coingecko API.
    *
-   * @param args.chainName Coingecko's name for the chain (see configuration)
+   * @param args.chain Chain entity containing the chain-specific configuration
    * @param args.tokenAddresses Array of token addresses which prices are being retrieved
    * @param args.fiatCode
    * @returns Array of {@link AssetPrice}
    */
   async getTokenPrices(args: {
-    chainId: string;
+    chain: Chain;
     tokenAddresses: string[];
     fiatCode: string;
   }): Promise<AssetPrice[]> {
@@ -130,9 +172,12 @@ export class CoingeckoApi implements IPricesApi {
       const lowerCaseTokenAddresses = args.tokenAddresses.map((address) =>
         address.toLowerCase(),
       );
-      const chainName = this.configurationService.getOrThrow<string>(
-        `balances.providers.safe.prices.chains.${args.chainId}.chainName`,
-      );
+      // TODO: remove configurationService fallback when fully migrated.
+      const chainName =
+        args.chain.pricesProvider?.chainName ??
+        this.configurationService.getOrThrow<string>(
+          `balances.providers.safe.prices.chains.${args.chain.chainId}.chainName`,
+        );
       const pricesFromCache = await this._getTokenPricesFromCache({
         chainName,
         tokenAddresses: lowerCaseTokenAddresses,
@@ -242,13 +287,31 @@ export class CoingeckoApi implements IPricesApi {
         await this.cacheService.set(
           CacheRouter.getTokenPriceCacheDir({ ...args, tokenAddress }),
           JSON.stringify(price),
-          validPrice
-            ? this.pricesTtlSeconds
-            : this._getRandomNotFoundTokenPriceTtl(),
+          this._getTtl(validPrice, tokenAddress),
         );
         return price;
       }),
     );
+  }
+
+  /**
+   * Gets the cache TTL for storing the price value.
+   * If the token address is included in {@link highRefreshRateTokens} (defaults to []),
+   * then {@link highRefreshRateTokensTtlSeconds} is used (defaults to 30 seconds).
+   * If the price cannot ve retrieved (or it's zero) {@link _getRandomNotFoundTokenPriceTtl} is called.
+   * Else {@link pricesTtlSeconds} is used (defaults to 300 seconds).
+   */
+  private _getTtl(
+    price: number | null | undefined,
+    tokenAddress: string,
+  ): number {
+    if (this.highRefreshRateTokens.includes(tokenAddress)) {
+      return this.highRefreshRateTokensTtlSeconds;
+    }
+
+    return !price
+      ? this._getRandomNotFoundTokenPriceTtl()
+      : this.pricesTtlSeconds;
   }
 
   /**

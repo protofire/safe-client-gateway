@@ -48,6 +48,23 @@ import {
 import { accountBuilder } from '@/domain/account/entities/__tests__/account.builder';
 import { EmailAddress } from '@/domain/account/entities/account.entity';
 import { subscriptionBuilder } from '@/domain/account/entities/__tests__/subscription.builder';
+import {
+  AlertsApiConfigurationModule,
+  ALERTS_API_CONFIGURATION_MODULE,
+} from '@/datasources/alerts-api/configuration/alerts-api.configuration.module';
+import alertsApiConfiguration from '@/datasources/alerts-api/configuration/__tests__/alerts-api.configuration';
+import {
+  AlertsConfigurationModule,
+  ALERTS_CONFIGURATION_MODULE,
+} from '@/routes/alerts/configuration/alerts.configuration.module';
+import alertsConfiguration from '@/routes/alerts/configuration/__tests__/alerts.configuration';
+import jwtConfiguration from '@/datasources/jwt/configuration/__tests__/jwt.configuration';
+import {
+  JWT_CONFIGURATION_MODULE,
+  JwtConfigurationModule,
+} from '@/datasources/jwt/configuration/jwt.configuration.module';
+import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
+import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 
 // The `x-tenderly-signature` header contains a cryptographic signature. The webhook request signature is
 // a HMAC SHA256 hash of concatenated signing secret, request payload, and timestamp, in this order.
@@ -102,6 +119,14 @@ describe('Alerts (Unit)', () => {
       const moduleFixture: TestingModule = await Test.createTestingModule({
         imports: [AppModule.register(testConfiguration)],
       })
+        .overrideModule(JWT_CONFIGURATION_MODULE)
+        .useModule(JwtConfigurationModule.register(jwtConfiguration))
+        .overrideModule(ALERTS_CONFIGURATION_MODULE)
+        .useModule(AlertsConfigurationModule.register(alertsConfiguration))
+        .overrideModule(ALERTS_API_CONFIGURATION_MODULE)
+        .useModule(
+          AlertsApiConfigurationModule.register(alertsApiConfiguration),
+        )
         .overrideModule(AccountDataSourceModule)
         .useModule(TestAccountDataSourceModule)
         .overrideModule(CacheModule)
@@ -112,11 +137,13 @@ describe('Alerts (Unit)', () => {
         .useModule(TestNetworkModule)
         .overrideModule(EmailApiModule)
         .useModule(TestEmailApiModule)
+        .overrideModule(QueuesApiModule)
+        .useModule(TestQueuesApiModule)
         .compile();
 
       configurationService = moduleFixture.get(IConfigurationService);
       safeConfigUrl = configurationService.get('safeConfig.baseUri');
-      signingKey = configurationService.getOrThrow('alerts.signingKey');
+      signingKey = configurationService.getOrThrow('alerts-route.signingKey');
       emailApi = moduleFixture.get(IEmailApi);
       accountDataSource = moduleFixture.get(IAccountDataSource);
       networkService = moduleFixture.get(NetworkService);
@@ -256,9 +283,9 @@ describe('Alerts (Unit)', () => {
           const chain = chainBuilder().build();
           const delayModifier = getAddress(faker.finance.ethereumAddress());
           const owners = [
-            faker.finance.ethereumAddress(),
-            faker.finance.ethereumAddress(),
-            faker.finance.ethereumAddress(),
+            getAddress(faker.finance.ethereumAddress()),
+            getAddress(faker.finance.ethereumAddress()),
+            getAddress(faker.finance.ethereumAddress()),
           ];
           const safe = safeBuilder()
             .with('owners', owners)
@@ -267,7 +294,7 @@ describe('Alerts (Unit)', () => {
 
           const removeOwner = removeOwnerEncoder(owners).with(
             'owner',
-            getAddress(owners[1]),
+            owners[1],
           );
           const { threshold } = removeOwner.build();
           const transactionAddedEvent = transactionAddedEventBuilder()
@@ -364,9 +391,9 @@ describe('Alerts (Unit)', () => {
           const chain = chainBuilder().build();
           const delayModifier = getAddress(faker.finance.ethereumAddress());
           const owners = [
-            faker.finance.ethereumAddress(),
-            faker.finance.ethereumAddress(),
-            faker.finance.ethereumAddress(),
+            getAddress(faker.finance.ethereumAddress()),
+            getAddress(faker.finance.ethereumAddress()),
+            getAddress(faker.finance.ethereumAddress()),
           ];
           const safe = safeBuilder()
             .with('owners', owners)
@@ -568,9 +595,9 @@ describe('Alerts (Unit)', () => {
           const chain = chainBuilder().build();
           const delayModifier = getAddress(faker.finance.ethereumAddress());
           const owners = [
-            faker.finance.ethereumAddress(),
-            faker.finance.ethereumAddress(),
-            faker.finance.ethereumAddress(),
+            getAddress(faker.finance.ethereumAddress()),
+            getAddress(faker.finance.ethereumAddress()),
+            getAddress(faker.finance.ethereumAddress()),
           ];
           const safe = safeBuilder()
             .with('modules', [delayModifier])
@@ -579,7 +606,7 @@ describe('Alerts (Unit)', () => {
 
           const addOwnerWithThreshold = addOwnerWithThresholdEncoder();
           const removeOwner = removeOwnerEncoder(safe.owners)
-            .with('owner', getAddress(owners[0]))
+            .with('owner', owners[0])
             .with('threshold', faker.number.bigInt());
           const multiSendTransactions = multiSendTransactionsEncoder([
             {
@@ -603,7 +630,7 @@ describe('Alerts (Unit)', () => {
             .with('data', multiSend.encode())
             .with(
               'to',
-              getAddress(getMultiSendCallOnlyDeployment()!.defaultAddress!),
+              getAddress(getMultiSendCallOnlyDeployment()!.defaultAddress),
             )
             .encode();
 
@@ -1112,9 +1139,9 @@ describe('Alerts (Unit)', () => {
         const chain = chainBuilder().build();
         const delayModifier = getAddress(faker.finance.ethereumAddress());
         const owners = [
-          faker.finance.ethereumAddress(),
-          faker.finance.ethereumAddress(),
-          faker.finance.ethereumAddress(),
+          getAddress(faker.finance.ethereumAddress()),
+          getAddress(faker.finance.ethereumAddress()),
+          getAddress(faker.finance.ethereumAddress()),
         ];
         const safe = safeBuilder()
           .with('modules', [delayModifier])
@@ -1144,7 +1171,7 @@ describe('Alerts (Unit)', () => {
           .with('data', multiSend.encode())
           .with(
             'to',
-            getAddress(getMultiSendCallOnlyDeployment()!.defaultAddress!),
+            getAddress(getMultiSendCallOnlyDeployment()!.defaultAddress),
           )
           .encode();
 
@@ -1227,9 +1254,9 @@ describe('Alerts (Unit)', () => {
         const chain = chainBuilder().build();
         const delayModifier = getAddress(faker.finance.ethereumAddress());
         const owners = [
-          faker.finance.ethereumAddress(),
-          faker.finance.ethereumAddress(),
-          faker.finance.ethereumAddress(),
+          getAddress(faker.finance.ethereumAddress()),
+          getAddress(faker.finance.ethereumAddress()),
+          getAddress(faker.finance.ethereumAddress()),
         ];
         const safe = safeBuilder()
           .with('modules', [delayModifier])
@@ -1259,7 +1286,7 @@ describe('Alerts (Unit)', () => {
           .with('data', multiSend.encode())
           .with(
             'to',
-            getAddress(getMultiSendCallOnlyDeployment()!.defaultAddress!),
+            getAddress(getMultiSendCallOnlyDeployment()!.defaultAddress),
           )
           .encode();
 
@@ -1576,7 +1603,6 @@ describe('Alerts (Unit)', () => {
 
     describe('/alerts route disabled', () => {
       let app: INestApplication;
-      let signingKey: string;
 
       beforeEach(async () => {
         jest.resetAllMocks();
@@ -1601,12 +1627,11 @@ describe('Alerts (Unit)', () => {
           .useModule(TestLoggingModule)
           .overrideModule(NetworkModule)
           .useModule(TestNetworkModule)
+          .overrideModule(QueuesApiModule)
+          .useModule(TestQueuesApiModule)
           .compile();
 
         app = moduleFixture.createNestApplication();
-        const configurationService = moduleFixture.get(IConfigurationService);
-        signingKey = configurationService.getOrThrow('alerts.signingKey');
-
         await app.init();
       });
 
@@ -1618,7 +1643,7 @@ describe('Alerts (Unit)', () => {
         const alert = alertBuilder().build();
         const timestamp = Date.now().toString();
         const signature = fakeTenderlySignature({
-          signingKey,
+          signingKey: faker.string.nanoid(32),
           alert,
           timestamp,
         });

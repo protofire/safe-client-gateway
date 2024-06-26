@@ -8,7 +8,6 @@ import { TestCacheModule } from '@/datasources/cache/__tests__/test.cache.module
 import { TestNetworkModule } from '@/datasources/network/__tests__/test.network.module';
 import { chainBuilder } from '@/domain/chains/entities/__tests__/chain.builder';
 import { pageBuilder } from '@/domain/entities/__tests__/page.builder';
-import { GetEstimationDto } from '@/domain/estimations/entities/get-estimation.dto.entity';
 import { estimationBuilder } from '@/domain/estimations/entities/__tests__/estimation.builder';
 import {
   multisigTransactionBuilder,
@@ -28,6 +27,8 @@ import {
 } from '@/datasources/network/network.service.interface';
 import { AccountDataSourceModule } from '@/datasources/account/account.datasource.module';
 import { TestAccountDataSourceModule } from '@/datasources/account/__tests__/test.account.datasource.module';
+import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
+import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 
 describe('Estimations Controller (Unit)', () => {
   let app: INestApplication;
@@ -48,6 +49,8 @@ describe('Estimations Controller (Unit)', () => {
       .useModule(TestLoggingModule)
       .overrideModule(NetworkModule)
       .useModule(TestNetworkModule)
+      .overrideModule(QueuesApiModule)
+      .useModule(TestQueuesApiModule)
       .compile();
 
     const configurationService = moduleFixture.get(IConfigurationService);
@@ -100,14 +103,12 @@ describe('Estimations Controller (Unit)', () => {
         .post(
           `/v2/chains/${chain.chainId}/safes/${safe.address}/multisig-transactions/estimations`,
         )
-        .send(
-          new GetEstimationDto(
-            faker.finance.ethereumAddress(),
-            faker.string.numeric(),
-            faker.string.hexadecimal({ length: 32 }),
-            0,
-          ),
-        )
+        .send({
+          to: faker.finance.ethereumAddress(),
+          value: faker.string.numeric(),
+          data: faker.string.hexadecimal({ length: 32 }),
+          operation: 0,
+        })
         .expect(200)
         .expect({
           currentNonce: safe.nonce,
@@ -154,14 +155,12 @@ describe('Estimations Controller (Unit)', () => {
       .post(
         `/v2/chains/${chain.chainId}/safes/${safe.address}/multisig-transactions/estimations`,
       )
-      .send(
-        new GetEstimationDto(
-          faker.finance.ethereumAddress(),
-          faker.string.numeric(),
-          faker.string.hexadecimal({ length: 32 }),
-          0,
-        ),
-      )
+      .send({
+        to: faker.finance.ethereumAddress(),
+        value: faker.string.numeric(),
+        data: faker.string.hexadecimal({ length: 32 }),
+        operation: 0,
+      })
       .expect(500)
       .expect({
         statusCode: 500,
@@ -170,19 +169,27 @@ describe('Estimations Controller (Unit)', () => {
   });
 
   it('Should get a validation error', async () => {
-    const getEstimationDto = new GetEstimationDto(
-      faker.finance.ethereumAddress(),
-      faker.string.numeric(),
-      faker.string.hexadecimal({ length: 32 }),
-      1,
-    );
+    const getEstimationDto = {
+      to: faker.finance.ethereumAddress(),
+      value: faker.string.numeric(),
+      data: faker.string.hexadecimal({ length: 32 }),
+      operation: 1,
+    };
+
     await request(app.getHttpServer())
       .post(
         `/v2/chains/${faker.string.numeric()}/safes/${faker.finance.ethereumAddress()}/multisig-transactions/estimations`,
       )
       .send(omit(getEstimationDto, 'value'))
-      .expect(400)
-      .expect({ message: 'Validation failed', code: 42, arguments: [] });
+      .expect(422)
+      .expect({
+        statusCode: 422,
+        code: 'invalid_type',
+        expected: 'string',
+        received: 'undefined',
+        path: ['value'],
+        message: 'Required',
+      });
   });
 
   it('should return last transaction nonce plus 1 as recommended nonce', async () => {
@@ -227,14 +234,12 @@ describe('Estimations Controller (Unit)', () => {
       .post(
         `/v2/chains/${chain.chainId}/safes/${address}/multisig-transactions/estimations`,
       )
-      .send(
-        new GetEstimationDto(
-          faker.finance.ethereumAddress(),
-          faker.string.numeric(),
-          faker.string.hexadecimal({ length: 32 }),
-          0,
-        ),
-      )
+      .send({
+        to: faker.finance.ethereumAddress(),
+        value: faker.string.numeric(),
+        data: faker.string.hexadecimal({ length: 32 }),
+        operation: 0,
+      })
       .expect(200)
       .expect({
         currentNonce: safe.nonce,
@@ -277,14 +282,12 @@ describe('Estimations Controller (Unit)', () => {
       .post(
         `/v2/chains/${chain.chainId}/safes/${address}/multisig-transactions/estimations`,
       )
-      .send(
-        new GetEstimationDto(
-          faker.finance.ethereumAddress(),
-          faker.string.numeric(),
-          faker.string.hexadecimal({ length: 32 }),
-          0,
-        ),
-      )
+      .send({
+        to: faker.finance.ethereumAddress(),
+        value: faker.string.numeric(),
+        data: faker.string.hexadecimal({ length: 32 }),
+        operation: 0,
+      })
       .expect(200)
       .expect({
         currentNonce: safe.nonce,
@@ -333,14 +336,12 @@ describe('Estimations Controller (Unit)', () => {
       .post(
         `/v2/chains/${chain.chainId}/safes/${address}/multisig-transactions/estimations`,
       )
-      .send(
-        new GetEstimationDto(
-          faker.finance.ethereumAddress(),
-          faker.string.numeric(),
-          faker.string.hexadecimal({ length: 32 }),
-          0,
-        ),
-      )
+      .send({
+        to: faker.finance.ethereumAddress(),
+        value: faker.string.numeric(),
+        data: faker.string.hexadecimal({ length: 32 }),
+        operation: 0,
+      })
       .expect(200)
       .expect({
         currentNonce: safe.nonce,

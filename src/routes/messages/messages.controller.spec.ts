@@ -32,6 +32,8 @@ import { SafeApp } from '@/routes/safe-apps/entities/safe-app.entity';
 import { NetworkResponseError } from '@/datasources/network/entities/network.error.entity';
 import { AccountDataSourceModule } from '@/datasources/account/account.datasource.module';
 import { TestAccountDataSourceModule } from '@/datasources/account/__tests__/test.account.datasource.module';
+import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
+import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 
 describe('Messages controller', () => {
   let app: INestApplication;
@@ -52,6 +54,8 @@ describe('Messages controller', () => {
       .useModule(TestLoggingModule)
       .overrideModule(NetworkModule)
       .useModule(TestNetworkModule)
+      .overrideModule(QueuesApiModule)
+      .useModule(TestQueuesApiModule)
       .compile();
 
     const configurationService = moduleFixture.get(IConfigurationService);
@@ -476,7 +480,7 @@ describe('Messages controller', () => {
       await request(app.getHttpServer())
         .get(`/v1/chains/${chain.chainId}/safes/${safe.address}/messages`)
         .expect(500)
-        .expect({ message: 'Validation failed', code: 42, arguments: [] });
+        .expect({ statusCode: 500, message: 'Internal server error' });
     });
 
     it('should get a message with a date label', async () => {
@@ -804,11 +808,10 @@ describe('Messages controller', () => {
       const chain = chainBuilder().build();
       const safe = safeBuilder().build();
       const createMessageDto = messageBuilder().build();
-      createMessageDto.message = faker.number.int();
 
       await request(app.getHttpServer())
         .post(`/v1/chains/${chain.chainId}/safes/${safe.address}/messages`)
-        .send(createMessageDto)
+        .send({ ...createMessageDto, message: faker.number.int() })
         .expect(422)
         .expect({
           statusCode: 422,
@@ -903,11 +906,14 @@ describe('Messages controller', () => {
           `/v1/chains/${chain.chainId}/messages/${message.messageHash}/signatures`,
         )
         .send({})
-        .expect(400)
+        .expect(422)
         .expect({
-          message: 'Validation failed',
-          code: 42,
-          arguments: [],
+          statusCode: 422,
+          code: 'invalid_type',
+          expected: 'string',
+          received: 'undefined',
+          path: ['signature'],
+          message: 'Required',
         });
     });
   });

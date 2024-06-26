@@ -1,57 +1,32 @@
-import Ajv, { Schema } from 'ajv';
-import addFormats from 'ajv-formats';
+import { ZodType } from 'zod';
 
-const configurationSchema: Schema = {
-  type: 'object',
-  properties: {
-    AUTH_TOKEN: { type: 'string' },
-    LOG_LEVEL: {
-      type: 'string',
-      enum: ['error', 'warn', 'info', 'http', 'verbose', 'debug', 'silly'],
-    },
-    ALERTS_PROVIDER_SIGNING_KEY: { type: 'string' },
-    ALERTS_PROVIDER_API_KEY: { type: 'string' },
-    ALERTS_PROVIDER_ACCOUNT: { type: 'string' },
-    ALERTS_PROVIDER_PROJECT: { type: 'string' },
-    EMAIL_API_APPLICATION_CODE: { type: 'string' },
-    EMAIL_API_FROM_EMAIL: { type: 'string', format: 'email' },
-    EMAIL_API_KEY: { type: 'string' },
-    EMAIL_TEMPLATE_RECOVERY_TX: { type: 'string' },
-    EMAIL_TEMPLATE_UNKNOWN_RECOVERY_TX: { type: 'string' },
-    EMAIL_TEMPLATE_VERIFICATION_CODE: { type: 'string' },
-    RELAY_PROVIDER_API_KEY_GNOSIS_CHAIN: { type: 'string' },
-    RELAY_PROVIDER_API_KEY_SEPOLIA: { type: 'string' },
-  },
-  required: [
-    'AUTH_TOKEN',
-    'ALERTS_PROVIDER_SIGNING_KEY',
-    'ALERTS_PROVIDER_API_KEY',
-    'ALERTS_PROVIDER_ACCOUNT',
-    'ALERTS_PROVIDER_PROJECT',
-    'EMAIL_API_APPLICATION_CODE',
-    'EMAIL_API_FROM_EMAIL',
-    'EMAIL_API_KEY',
-    'EMAIL_TEMPLATE_RECOVERY_TX',
-    'EMAIL_TEMPLATE_UNKNOWN_RECOVERY_TX',
-    'EMAIL_TEMPLATE_VERIFICATION_CODE',
-    'RELAY_PROVIDER_API_KEY_GNOSIS_CHAIN',
-    'RELAY_PROVIDER_API_KEY_SEPOLIA',
-  ],
-};
-
-export function validate(
+/**
+ * Validates the configuration against the provided schema
+ *
+ * @param configuration - The configuration to validate
+ * @param schema - The schema to validate the configuration against
+ */
+export default function (
   configuration: Record<string, unknown>,
+  schema: ZodType,
 ): Record<string, unknown> {
-  if (process.env.NODE_ENV !== 'test') {
-    const ajv = new Ajv({ allErrors: true });
-    addFormats(ajv, { formats: ['email'] });
-
-    if (!ajv.validate(configurationSchema, configuration)) {
-      const errors = ajv.errors
-        ?.map((error) => `${error.instancePath} ${error.message}`)
-        ?.join(', ');
-      throw Error(`Configuration is invalid: ${errors}`);
-    }
+  if (process.env.NODE_ENV === 'test') {
+    return configuration;
   }
-  return configuration;
+
+  const result = schema.safeParse(configuration);
+  if (result.success) {
+    return configuration;
+  }
+
+  const errors = Object.entries(result.error.flatten().fieldErrors)
+    .map(([field, errors]) => {
+      if (Array.isArray(errors)) {
+        return `${field} ${errors.join(', ')}`;
+      }
+      return `${field}: Unknown error format`;
+    })
+    .join('; ');
+
+  throw Error(`Configuration is invalid: ${errors}`);
 }

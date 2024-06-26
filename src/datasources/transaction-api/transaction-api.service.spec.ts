@@ -859,7 +859,7 @@ describe('TransactionApi', () => {
       const limit = faker.number.int();
       const offset = faker.number.int();
       const incomingTransfer = erc20TransferBuilder()
-        .with('to', safeAddress)
+        .with('to', getAddress(safeAddress))
         .build();
       const incomingTransfersPage = pageBuilder()
         .with('results', [incomingTransfer])
@@ -1487,7 +1487,7 @@ describe('TransactionApi', () => {
     it('should delete a transaction', async () => {
       const safeTxHash = faker.string.hexadecimal();
       const signature = faker.string.hexadecimal();
-      const deleteTransactionUrl = `${baseUrl}/api/v1/transactions/${safeTxHash}`;
+      const deleteTransactionUrl = `${baseUrl}/api/v1/multisig-transactions/${safeTxHash}`;
       networkService.delete.mockResolvedValueOnce({
         status: 200,
         data: {},
@@ -1514,7 +1514,7 @@ describe('TransactionApi', () => {
     ])(`should forward a %s error`, async (_, error) => {
       const safeTxHash = faker.string.hexadecimal();
       const signature = faker.string.hexadecimal();
-      const deleteTransactionUrl = `${baseUrl}/api/v1/transactions/${safeTxHash}`;
+      const deleteTransactionUrl = `${baseUrl}/api/v1/multisig-transactions/${safeTxHash}`;
       const statusCode = faker.internet.httpStatusCode({
         types: ['clientError', 'serverError'],
       });
@@ -2117,9 +2117,9 @@ describe('TransactionApi', () => {
   describe('getEstimation', () => {
     it('should return the estimation received', async () => {
       const safeAddress = faker.finance.ethereumAddress();
-      const to = faker.finance.ethereumAddress();
+      const to = getAddress(faker.finance.ethereumAddress());
       const value = faker.string.numeric();
-      const data = faker.string.hexadecimal();
+      const data = faker.string.hexadecimal() as `0x${string}`;
       const operation = faker.helpers.arrayElement([0, 1] as const);
       const estimation = {
         safeTxGas: faker.string.numeric(),
@@ -2154,9 +2154,9 @@ describe('TransactionApi', () => {
       ['standard', new Error(errorMessage)],
     ])(`should forward a %s error`, async (_, error) => {
       const safeAddress = faker.finance.ethereumAddress();
-      const to = faker.finance.ethereumAddress();
+      const to = getAddress(faker.finance.ethereumAddress());
       const value = faker.string.numeric();
-      const data = faker.string.hexadecimal();
+      const data = faker.string.hexadecimal() as `0x${string}`;
       const operation = faker.helpers.arrayElement([0, 1] as const);
       const getEstimationUrl = `${baseUrl}/api/v1/safes/${safeAddress}/multisig-transactions/estimations/`;
       const statusCode = faker.internet.httpStatusCode({

@@ -20,7 +20,7 @@ import { INestApplication } from '@nestjs/common';
 import { faker } from '@faker-js/faker';
 import { chainBuilder } from '@/domain/chains/entities/__tests__/chain.builder';
 import { safeBuilder } from '@/domain/safe/entities/__tests__/safe.builder';
-import { Hex, getAddress } from 'viem';
+import { getAddress } from 'viem';
 import {
   addOwnerWithThresholdEncoder,
   changeThresholdEncoder,
@@ -51,6 +51,8 @@ import {
 } from '@safe-global/safe-deployments';
 import { createProxyWithNonceEncoder } from '@/domain/relay/contracts/__tests__/encoders/proxy-factory-encoder.builder';
 import { getDeploymentVersionsByChainIds } from '@/__tests__/deployments.helper';
+import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
+import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 
 const supportedChainIds = Object.keys(configuration().relay.apiKey);
 
@@ -88,10 +90,6 @@ describe('Relay controller', () => {
     const defaultConfiguration = configuration();
     const testConfiguration = (): typeof defaultConfiguration => ({
       ...defaultConfiguration,
-      features: {
-        ...defaultConfiguration.features,
-        relay: true,
-      },
       relay: {
         ...defaultConfiguration.relay,
         limit: 5,
@@ -109,6 +107,8 @@ describe('Relay controller', () => {
       .useModule(TestLoggingModule)
       .overrideModule(NetworkModule)
       .useModule(TestNetworkModule)
+      .overrideModule(QueuesApiModule)
+      .useModule(TestQueuesApiModule)
       .compile();
 
     configurationService = moduleFixture.get(IConfigurationService);
@@ -137,7 +137,7 @@ describe('Relay controller', () => {
                 const safeAddress = getAddress(safe.address);
                 const data = execTransactionEncoder()
                   .with('value', faker.number.bigInt())
-                  .encode() as Hex;
+                  .encode();
                 const taskId = faker.string.uuid();
                 networkService.get.mockImplementation(({ url }) => {
                   switch (url) {
@@ -177,7 +177,7 @@ describe('Relay controller', () => {
                 const safe = safeBuilder().build();
                 const safeAddress = getAddress(safe.address);
                 const gasLimit = faker.string.numeric({ exclude: '0' });
-                const data = execTransactionEncoder().encode() as Hex;
+                const data = execTransactionEncoder().encode();
                 const taskId = faker.string.uuid();
                 networkService.get.mockImplementation(({ url }) => {
                   switch (url) {
@@ -262,7 +262,7 @@ describe('Relay controller', () => {
                   const safe = safeBuilder().build();
                   const data = execTransactionEncoder()
                     .with('data', execTransactionData)
-                    .encode() as Hex;
+                    .encode();
                   const taskId = faker.string.uuid();
                   networkService.get.mockImplementation(({ url }) => {
                     switch (url) {
@@ -312,7 +312,7 @@ describe('Relay controller', () => {
                 const data = execTransactionEncoder()
                   .with('to', safeAddress)
                   .with('data', execTransactionEncoder().encode())
-                  .encode() as Hex;
+                  .encode();
                 const taskId = faker.string.uuid();
                 networkService.get.mockImplementation(({ url }) => {
                   switch (url) {
@@ -416,65 +416,6 @@ describe('Relay controller', () => {
               });
             },
           );
-
-          it('should otherwise default to version 1.3.0', async () => {
-            const version = '1.3.0';
-            const chain = chainBuilder().with('chainId', chainId).build();
-            const safe = safeBuilder().build();
-            const safeAddress = getAddress(safe.address);
-            const transactions = [
-              execTransactionEncoder()
-                .with('data', addOwnerWithThresholdEncoder().encode())
-                .encode(),
-              execTransactionEncoder()
-                .with('data', changeThresholdEncoder().encode())
-                .encode(),
-            ].map((data) => ({
-              operation: faker.number.int({ min: 0, max: 1 }),
-              data,
-              to: safeAddress,
-              value: faker.number.bigInt(),
-            }));
-            const data = multiSendEncoder()
-              .with('transactions', multiSendTransactionsEncoder(transactions))
-              .encode();
-            const to = getMultiSendCallOnlyDeployment({
-              version,
-              network: chainId,
-            })!.networkAddresses[chainId];
-            const taskId = faker.string.uuid();
-            networkService.get.mockImplementation(({ url }) => {
-              switch (url) {
-                case `${safeConfigUrl}/api/v1/chains/${chainId}`:
-                  return Promise.resolve({ data: chain, status: 200 });
-                case `${chain.transactionService}/api/v1/safes/${safeAddress}`:
-                  // Official mastercopy
-                  return Promise.resolve({ data: safe, status: 200 });
-                default:
-                  return Promise.reject(`No matching rule for url: ${url}`);
-              }
-            });
-            networkService.post.mockImplementation(({ url }) => {
-              switch (url) {
-                case `${relayUrl}/relays/v2/sponsored-call`:
-                  return Promise.resolve({ data: { taskId }, status: 200 });
-                default:
-                  return Promise.reject(`No matching rule for url: ${url}`);
-              }
-            });
-
-            await request(app.getHttpServer())
-              .post(`/v1/chains/${chain.chainId}/relay`)
-              .send({
-                // No version
-                to,
-                data,
-              })
-              .expect(201)
-              .expect({
-                taskId,
-              });
-          });
         });
 
         describe('MultiSend', () => {
@@ -543,66 +484,6 @@ describe('Relay controller', () => {
               });
             },
           );
-
-          // TODO: Remove when legacy support is removed
-          it('should otherwise default to version 1.3.0', async () => {
-            const version = '1.3.0';
-            const chain = chainBuilder().with('chainId', chainId).build();
-            const safe = safeBuilder().build();
-            const safeAddress = getAddress(safe.address);
-            const transactions = [
-              execTransactionEncoder()
-                .with('data', addOwnerWithThresholdEncoder().encode())
-                .encode(),
-              execTransactionEncoder()
-                .with('data', changeThresholdEncoder().encode())
-                .encode(),
-            ].map((data) => ({
-              operation: faker.number.int({ min: 0, max: 1 }),
-              data,
-              to: safeAddress,
-              value: faker.number.bigInt(),
-            }));
-            const data = multiSendEncoder()
-              .with('transactions', multiSendTransactionsEncoder(transactions))
-              .encode();
-            const to = getMultiSendDeployment({
-              version,
-              network: chainId,
-            })!.networkAddresses[chainId];
-            const taskId = faker.string.uuid();
-            networkService.get.mockImplementation(({ url }) => {
-              switch (url) {
-                case `${safeConfigUrl}/api/v1/chains/${chainId}`:
-                  return Promise.resolve({ data: chain, status: 200 });
-                case `${chain.transactionService}/api/v1/safes/${safeAddress}`:
-                  // Official mastercopy
-                  return Promise.resolve({ data: safe, status: 200 });
-                default:
-                  return Promise.reject(`No matching rule for url: ${url}`);
-              }
-            });
-            networkService.post.mockImplementation(({ url }) => {
-              switch (url) {
-                case `${relayUrl}/relays/v2/sponsored-call`:
-                  return Promise.resolve({ data: { taskId }, status: 200 });
-                default:
-                  return Promise.reject(`No matching rule for url: ${url}`);
-              }
-            });
-
-            await request(app.getHttpServer())
-              .post(`/v1/chains/${chain.chainId}/relay`)
-              .send({
-                // No version
-                to,
-                data,
-              })
-              .expect(201)
-              .expect({
-                taskId,
-              });
-          });
         });
 
         describe('ProxyFactory', () => {
@@ -850,78 +731,6 @@ describe('Relay controller', () => {
               }
             },
           );
-
-          // TODO: Remove when legacy support is removed
-          it.each([
-            [
-              'creating an official Safe',
-              (chainId: string): string =>
-                getSafeSingletonDeployment({
-                  version: '1.3.0',
-                  network: chainId,
-                })!.networkAddresses[chainId],
-            ],
-            [
-              'creating an official L2 Safe',
-              (chainId: string): string =>
-                getSafeL2SingletonDeployment({
-                  version: '1.3.0',
-                  network: chainId,
-                })!.networkAddresses[chainId],
-            ],
-          ])(
-            'should otherwise default to version 1.3.0 singletons when %s',
-            async (_, getSingleton) => {
-              const version = '1.3.0';
-              const singleton = getSingleton(chainId);
-              const chain = chainBuilder().with('chainId', chainId).build();
-              const owners = [
-                getAddress(faker.finance.ethereumAddress()),
-                getAddress(faker.finance.ethereumAddress()),
-              ];
-              const proxyFactory = getProxyFactoryDeployment({
-                version,
-                network: chainId,
-              })!.networkAddresses[chainId];
-              const to = getAddress(proxyFactory);
-              const data = createProxyWithNonceEncoder()
-                .with('singleton', getAddress(singleton))
-                .with(
-                  'initializer',
-                  setupEncoder().with('owners', owners).encode(),
-                )
-                .encode();
-              const taskId = faker.string.uuid();
-              networkService.get.mockImplementation(({ url }) => {
-                switch (url) {
-                  case `${safeConfigUrl}/api/v1/chains/${chainId}`:
-                    return Promise.resolve({ data: chain, status: 200 });
-                  default:
-                    return Promise.reject(`No matching rule for url: ${url}`);
-                }
-              });
-              networkService.post.mockImplementation(({ url }) => {
-                switch (url) {
-                  case `${relayUrl}/relays/v2/sponsored-call`:
-                    return Promise.resolve({ data: { taskId }, status: 200 });
-                  default:
-                    return Promise.reject(`No matching rule for url: ${url}`);
-                }
-              });
-
-              await request(app.getHttpServer())
-                .post(`/v1/chains/${chain.chainId}/relay`)
-                .send({
-                  version,
-                  to,
-                  data,
-                })
-                .expect(201)
-                .expect({
-                  taskId,
-                });
-            },
-          );
         });
       });
 
@@ -938,7 +747,7 @@ describe('Relay controller', () => {
                 const data = execTransactionEncoder()
                   .with('to', safeAddress)
                   .with('value', faker.number.bigInt())
-                  .encode() as Hex;
+                  .encode();
                 networkService.get.mockImplementation(({ url }) => {
                   switch (url) {
                     case `${safeConfigUrl}/api/v1/chains/${chainId}`:
@@ -976,7 +785,7 @@ describe('Relay controller', () => {
                     'data',
                     erc20TransferEncoder().with('to', safeAddress).encode(),
                   )
-                  .encode() as Hex;
+                  .encode();
                 networkService.get.mockImplementation(({ url }) => {
                   switch (url) {
                     case `${safeConfigUrl}/api/v1/chains/${chainId}`:
@@ -1016,7 +825,7 @@ describe('Relay controller', () => {
                       .with('recipient', safeAddress)
                       .encode(),
                   )
-                  .encode() as Hex;
+                  .encode();
                 networkService.get.mockImplementation(({ url }) => {
                   switch (url) {
                     case `${safeConfigUrl}/api/v1/chains/${chainId}`:
@@ -1057,7 +866,7 @@ describe('Relay controller', () => {
                       .with('recipient', recipient)
                       .encode(),
                   )
-                  .encode() as Hex;
+                  .encode();
                 networkService.get.mockImplementation(({ url }) => {
                   switch (url) {
                     case `${safeConfigUrl}/api/v1/chains/${chainId}`:
@@ -1093,7 +902,7 @@ describe('Relay controller', () => {
                 const data = execTransactionEncoder()
                   .with('to', safeAddress)
                   .with('data', erc20ApproveEncoder().encode())
-                  .encode() as Hex;
+                  .encode();
                 networkService.get.mockImplementation(({ url }) => {
                   switch (url) {
                     case `${safeConfigUrl}/api/v1/chains/${chainId}`:
@@ -1127,7 +936,7 @@ describe('Relay controller', () => {
                 const safeAddress = faker.finance.ethereumAddress();
                 const data = execTransactionEncoder()
                   .with('value', faker.number.bigInt())
-                  .encode() as Hex;
+                  .encode();
                 networkService.get.mockImplementation(({ url }) => {
                   switch (url) {
                     case `${safeConfigUrl}/api/v1/chains/${chainId}`:
@@ -1436,7 +1245,7 @@ describe('Relay controller', () => {
           const safeAddress = getAddress(safe.address);
           const data = execTransactionEncoder()
             .with('value', faker.number.bigInt())
-            .encode() as Hex;
+            .encode();
           const gasLimit = 'invalid';
 
           await request(app.getHttpServer())
@@ -1452,7 +1261,7 @@ describe('Relay controller', () => {
               statusCode: 422,
               code: 'custom',
               path: ['gasLimit'],
-              message: 'Invalid input',
+              message: 'Unable to parse value',
             });
         });
 
@@ -1501,7 +1310,7 @@ describe('Relay controller', () => {
               const safeAddress = getAddress(safe.address);
               const data = execTransactionEncoder()
                 .with('value', faker.number.bigInt())
-                .encode() as Hex;
+                .encode();
               const taskId = faker.string.uuid();
               networkService.get.mockImplementation(({ url }) => {
                 switch (url) {
@@ -1678,13 +1487,15 @@ describe('Relay controller', () => {
         });
 
         it('should handle both checksummed and non-checksummed addresses', async () => {
+          // Version supported by all contracts
+          const version = '1.3.0';
           const chain = chainBuilder().with('chainId', chainId).build();
           const safe = safeBuilder().build();
           const nonChecksummedAddress = safe.address.toLowerCase();
           const checksummedSafeAddress = getAddress(safe.address);
           const data = execTransactionEncoder()
             .with('value', faker.number.bigInt())
-            .encode() as Hex;
+            .encode();
           const taskId = faker.string.uuid();
           networkService.get.mockImplementation(({ url }) => {
             switch (url) {
@@ -1716,6 +1527,7 @@ describe('Relay controller', () => {
               .send({
                 to: address,
                 data,
+                version,
               });
           }
 
@@ -1742,7 +1554,7 @@ describe('Relay controller', () => {
           const safeAddress = getAddress(safe.address);
           const data = execTransactionEncoder()
             .with('value', faker.number.bigInt())
-            .encode() as Hex;
+            .encode();
           const taskId = faker.string.uuid();
           networkService.get.mockImplementation(({ url }) => {
             switch (url) {
@@ -1781,12 +1593,14 @@ describe('Relay controller', () => {
         });
 
         it('should return 429 if the rate limit is reached', async () => {
+          // Version supported by all contracts
+          const version = '1.3.0';
           const chain = chainBuilder().with('chainId', chainId).build();
           const safe = safeBuilder().build();
           const safeAddress = getAddress(safe.address);
           const data = execTransactionEncoder()
             .with('value', faker.number.bigInt())
-            .encode() as Hex;
+            .encode();
           const taskId = faker.string.uuid();
           networkService.get.mockImplementation(({ url }) => {
             switch (url) {
@@ -1815,6 +1629,7 @@ describe('Relay controller', () => {
               .send({
                 to: safeAddress,
                 data,
+                version,
               });
           }
 
@@ -1823,6 +1638,7 @@ describe('Relay controller', () => {
             .send({
               to: safeAddress,
               data,
+              version,
             })
             .expect(429)
             .expect({
@@ -1833,9 +1649,11 @@ describe('Relay controller', () => {
       });
 
       it('should return 503 if the relayer throws', async () => {
+        // Version supported by all contracts
+        const version = '1.3.0';
         const chain = chainBuilder().with('chainId', chainId).build();
         const safe = safeBuilder().build();
-        const data = execTransactionEncoder().encode() as Hex;
+        const data = execTransactionEncoder().encode();
         networkService.get.mockImplementation(({ url }) => {
           switch (url) {
             case `${safeConfigUrl}/api/v1/chains/${chainId}`:
@@ -1861,6 +1679,7 @@ describe('Relay controller', () => {
           .send({
             to: safe.address,
             data,
+            version,
           })
           .expect(503);
       });
@@ -1876,12 +1695,14 @@ describe('Relay controller', () => {
       });
 
       it('should not return negative limits if more requests were made than the limit', async () => {
+        // Version supported by all contracts
+        const version = '1.3.0';
         const chain = chainBuilder().with('chainId', chainId).build();
         const safe = safeBuilder().build();
         const safeAddress = getAddress(safe.address);
         const data = execTransactionEncoder()
           .with('value', faker.number.bigInt())
-          .encode() as Hex;
+          .encode();
         const taskId = faker.string.uuid();
         networkService.get.mockImplementation(({ url }) => {
           switch (url) {
@@ -1910,6 +1731,7 @@ describe('Relay controller', () => {
             .send({
               to: safeAddress,
               data,
+              version,
             });
         }
 

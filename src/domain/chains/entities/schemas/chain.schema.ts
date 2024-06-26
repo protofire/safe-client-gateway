@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { RpcUriAuthentication } from '@/domain/chains/entities/rpc-uri-authentication.entity';
 import { AddressSchema } from '@/validation/entities/schemas/address.schema';
+import { buildPageSchema } from '@/domain/entities/schemas/page.schema.factory';
 
 export const NativeCurrencySchema = z.object({
   name: z.string(),
@@ -53,6 +54,11 @@ export const GasPriceSchema = z.array(
   ]),
 );
 
+export const PricesProviderSchema = z.object({
+  chainName: z.string().nullish().default(null),
+  nativeCoin: z.string().nullish().default(null),
+});
+
 export const ChainSchema = z.object({
   chainId: z.string(),
   chainName: z.string(),
@@ -66,6 +72,8 @@ export const ChainSchema = z.object({
   publicRpcUri: RpcUriSchema,
   blockExplorerUriTemplate: BlockExplorerUriTemplateSchema,
   nativeCurrency: NativeCurrencySchema,
+  // TODO: remove optionality when fully migrated.
+  pricesProvider: PricesProviderSchema.optional(),
   transactionService: z.string().url(),
   vpcTransactionService: z.string().url(),
   theme: ThemeSchema,
@@ -76,3 +84,5 @@ export const ChainSchema = z.object({
   // TODO: Extract and use RelayDtoSchema['version'] when fully migrated to zod
   recommendedMasterCopyVersion: z.string(),
 });
+
+export const ChainPageSchema = buildPageSchema(ChainSchema);

@@ -1,6 +1,6 @@
 services:
   redis:
-    image: redis/redis-stack:7.0.2-RC1
+    image: redis/redis-stack:7.2.0-v10
     ports:
       - ${REDIS_PORT-6379}:${REDIS_PORT-6379}
       - 8001:8001
@@ -34,6 +34,17 @@ services:
       -c ssl_key_file=/var/lib/postgresql/server.key
       -c hba_file=/etc/pg_hba.conf
 
+  rabbitmq:
+    image: rabbitmq:alpine
+    ports:
+      - '5672:5672'
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 15s
+      timeout: 30s
+      retries: 3
+      start_period: 15s
+
   web:
     build: .
     tty: true
@@ -52,6 +63,8 @@ services:
       EMAIL_TEMPLATE_UNKNOWN_RECOVERY_TX: ${EMAIL_TEMPLATE_UNKNOWN_RECOVERY_TX-example_template_unknown_recovery_tx}
       EMAIL_TEMPLATE_RECOVERY_TX: ${EMAIL_TEMPLATE_RECOVERY_TX-example_template_recovery_tx}
       EMAIL_TEMPLATE_VERIFICATION_CODE: ${EMAIL_TEMPLATE_VERIFICATION_CODE-example_template_verification_code}
+      JWT_ISSUER: ${JWT_ISSUER-example_issuer}
+      JWT_TOKEN: ${JWT_TOKEN-example_token}
       RELAY_PROVIDER_API_KEY_GNOSIS_CHAIN: ${RELAY_PROVIDER_API_KEY_GNOSIS_CHAIN-example_api_key}
       RELAY_PROVIDER_API_KEY_SEPOLIA: ${RELAY_PROVIDER_API_KEY_SEPOLIA-example_api_key}
     depends_on:

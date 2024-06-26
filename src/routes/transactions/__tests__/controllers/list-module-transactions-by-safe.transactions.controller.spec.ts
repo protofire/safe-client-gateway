@@ -26,6 +26,8 @@ import { pageBuilder } from '@/domain/entities/__tests__/page.builder';
 import { NetworkResponseError } from '@/datasources/network/entities/network.error.entity';
 import { AccountDataSourceModule } from '@/datasources/account/account.datasource.module';
 import { TestAccountDataSourceModule } from '@/datasources/account/__tests__/test.account.datasource.module';
+import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
+import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 
 describe('List module transactions by Safe - Transactions Controller (Unit)', () => {
   let app: INestApplication;
@@ -46,6 +48,8 @@ describe('List module transactions by Safe - Transactions Controller (Unit)', ()
       .useModule(TestLoggingModule)
       .overrideModule(NetworkModule)
       .useModule(TestNetworkModule)
+      .overrideModule(QueuesApiModule)
+      .useModule(TestQueuesApiModule)
       .compile();
 
     const configurationService = moduleFixture.get(IConfigurationService);
@@ -128,9 +132,8 @@ describe('List module transactions by Safe - Transactions Controller (Unit)', ()
       .get(`/v1/chains/${chainId}/safes/${safeAddress}/module-transactions`)
       .expect(500)
       .expect({
-        message: 'Validation failed',
-        code: 42,
-        arguments: [],
+        statusCode: 500,
+        message: 'Internal server error',
       });
   });
 

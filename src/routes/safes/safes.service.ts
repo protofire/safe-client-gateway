@@ -19,9 +19,17 @@ import {
 } from '@/routes/safes/entities/safe-info.entity';
 import { SafeNonces } from '@/routes/safes/entities/nonces.entity';
 import { Page } from '@/domain/entities/page.entity';
+import { IBalancesRepository } from '@/domain/balances/balances.repository.interface';
+import { getNumberString } from '@/domain/common/utils/utils';
+import { SafeOverview } from '@/routes/safes/entities/safe-overview.entity';
+import { IConfigurationService } from '@/config/configuration.service.interface';
+import { LoggingService, ILoggingService } from '@/logging/logging.interface';
+import { asError } from '@/logging/utils';
 
 @Injectable()
 export class SafesService {
+  private readonly maxOverviews: number;
+
   constructor(
     @Inject(ISafeRepository)
     private readonly safeRepository: ISafeRepository,
@@ -30,7 +38,15 @@ export class SafesService {
     private readonly addressInfoHelper: AddressInfoHelper,
     @Inject(IMessagesRepository)
     private readonly messagesRepository: MessagesRepository,
-  ) {}
+    @Inject(IBalancesRepository)
+    private readonly balancesRepository: IBalancesRepository,
+    @Inject(IConfigurationService) configurationService: IConfigurationService,
+    @Inject(LoggingService) private readonly loggingService: ILoggingService,
+  ) {
+    this.maxOverviews = configurationService.getOrThrow(
+      'mappings.safe.maxOverviews',
+    );
+  }
 
   async getSafeInfo(args: {
     chainId: string;
@@ -111,12 +127,102 @@ export class SafesService {
     );
   }
 
+  async getSafeOverview(args: {
+    currency: string;
+    addresses: Array<{ chainId: string; address: string }>;
+    trusted: boolean;
+    excludeSpam: boolean;
+    walletAddress?: `0x${string}`;
+  }): Promise<Array<SafeOverview>> {
+    const limitedSafes = args.addresses.slice(0, this.maxOverviews);
+
+    const settledOverviews = await Promise.allSettled(
+      limitedSafes.map(async ({ chainId, address }) => {
+        const chain = await this.chainsRepository.getChain(chainId);
+        const [safe, balances] = await Promise.all([
+          this.safeRepository.getSafe({
+            chainId,
+            address,
+          }),
+          this.balancesRepository.getBalances({
+            chain,
+            safeAddress: address,
+            trusted: args.trusted,
+            fiatCode: args.currency,
+            excludeSpam: args.excludeSpam,
+          }),
+        ]);
+        const queue = await this.safeRepository.getTransactionQueue({
+          chainId,
+          safe,
+        });
+
+        const fiatBalance = balances
+          .filter((b) => b.fiatBalance !== null)
+          .reduce((acc, b) => acc + Number(b.fiatBalance), 0);
+
+        const awaitingConfirmation = args.walletAddress
+          ? this.computeAwaitingConfirmation({
+              transactions: queue.results,
+              walletAddress: args.walletAddress,
+            })
+          : null;
+
+        return new SafeOverview(
+          new AddressInfo(safe.address),
+          chainId,
+          safe.threshold,
+          safe.owners.map((ownerAddress) => new AddressInfo(ownerAddress)),
+          getNumberString(fiatBalance),
+          queue.count ?? 0,
+          awaitingConfirmation,
+        );
+      }),
+    );
+
+    const safeOverviews: Array<SafeOverview> = [];
+
+    for (const safeOverview of settledOverviews) {
+      if (safeOverview.status === 'rejected') {
+        this.loggingService.warn(
+          `Error while getting Safe overview: ${asError(safeOverview.reason)} `,
+        );
+      } else if (safeOverview.status === 'fulfilled') {
+        safeOverviews.push(safeOverview.value);
+      }
+    }
+
+    return safeOverviews;
+  }
+
   public async getNonces(args: {
     chainId: string;
     safeAddress: string;
   }): Promise<SafeNonces> {
     const nonce = await this.safeRepository.getNonces(args);
     return new SafeNonces(nonce);
+  }
+
+  private computeAwaitingConfirmation(args: {
+    transactions: Array<MultisigTransaction>;
+    walletAddress: `0x${string}`;
+  }): number {
+    return args.transactions.reduce(
+      (acc, { confirmationsRequired, confirmations }) => {
+        const isConfirmed =
+          !!confirmations && confirmations.length >= confirmationsRequired;
+        const isSignable =
+          !isConfirmed &&
+          !confirmations?.some((confirmation) => {
+            return confirmation.owner === args.walletAddress;
+          });
+        if (isSignable) {
+          acc++;
+        }
+        return acc;
+      },
+      0,
+    );
   }
 
   private toUnixTimestampInSecondsOrNull(date: Date | null): string | null {
@@ -244,9 +350,9 @@ export class SafesService {
     // If the singleton of this safe is not part of the collection
     // of the supported singletons we return UNKNOWN
     if (
-      !supportedSingletons
-        .map((singleton) => singleton.address)
-        .includes(safe.masterCopy)
+      supportedSingletons.every(
+        (singleton) => singleton.address !== safe.masterCopy,
+      )
     )
       return MasterCopyVersionState.UNKNOWN;
 
