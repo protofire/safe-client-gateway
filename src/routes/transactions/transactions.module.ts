@@ -11,6 +11,7 @@ import { SettingsChangeMapper } from '@/routes/transactions/mappers/common/setti
 import { TransactionDataMapper } from '@/routes/transactions/mappers/common/transaction-data.mapper';
 import { MultisigTransactionInfoMapper } from '@/routes/transactions/mappers/common/transaction-info.mapper';
 import { CreationTransactionMapper } from '@/routes/transactions/mappers/creation-transaction/creation-transaction.mapper';
+import { GPv2OrderHelper } from '@/routes/transactions/helpers/gp-v2-order.helper';
 import { ModuleTransactionDetailsMapper } from '@/routes/transactions/mappers/module-transactions/module-transaction-details.mapper';
 import { ModuleTransactionStatusMapper } from '@/routes/transactions/mappers/module-transactions/module-transaction-status.mapper';
 import { ModuleTransactionMapper } from '@/routes/transactions/mappers/module-transactions/module-transaction.mapper';
@@ -29,7 +30,7 @@ import { TransferImitationMapper } from '@/routes/transactions/mappers/transfers
 import { TransactionsController } from '@/routes/transactions/transactions.controller';
 import { TransactionsService } from '@/routes/transactions/transactions.service';
 import { SwapOrderMapperModule } from '@/routes/transactions/mappers/common/swap-order.mapper';
-import { SetPreSignatureDecoderModule } from '@/domain/swaps/contracts/decoders/set-pre-signature-decoder.helper';
+import { GPv2DecoderModule } from '@/domain/swaps/contracts/decoders/gp-v2-decoder.helper';
 import { SafeRepositoryModule } from '@/domain/safe/safe.repository.interface';
 import { ContractsRepositoryModule } from '@/domain/contracts/contracts.repository.interface';
 import { DataDecodedRepositoryModule } from '@/domain/data-decoder/data-decoded.repository.interface';
@@ -37,6 +38,11 @@ import { HumanDescriptionRepositoryModule } from '@/domain/human-description/hum
 import { SafeAppsRepositoryModule } from '@/domain/safe-apps/safe-apps.repository.interface';
 import { TokenRepositoryModule } from '@/domain/tokens/token.repository.interface';
 import { SwapOrderHelperModule } from '@/routes/transactions/helpers/swap-order.helper';
+import { SwapsRepositoryModule } from '@/domain/swaps/swaps-repository.module';
+import { TwapOrderMapperModule } from '@/routes/transactions/mappers/common/twap-order.mapper';
+import { TwapOrderHelperModule } from '@/routes/transactions/helpers/twap-order.helper';
+import { SwapTransferInfoMapper } from '@/routes/transactions/mappers/transfers/swap-transfer-info.mapper';
+import { SwapAppsHelperModule } from '@/routes/transactions/helpers/swap-apps.helper';
 
 @Module({
   controllers: [TransactionsController],
@@ -47,10 +53,14 @@ import { SwapOrderHelperModule } from '@/routes/transactions/helpers/swap-order.
     HumanDescriptionRepositoryModule,
     SafeRepositoryModule,
     SafeAppsRepositoryModule,
-    SetPreSignatureDecoderModule,
+    GPv2DecoderModule,
+    SwapAppsHelperModule,
     SwapOrderMapperModule,
     SwapOrderHelperModule,
+    SwapsRepositoryModule,
     TokenRepositoryModule,
+    TwapOrderMapperModule,
+    TwapOrderHelperModule,
   ],
   providers: [
     CreationTransactionMapper,
@@ -58,6 +68,7 @@ import { SwapOrderHelperModule } from '@/routes/transactions/helpers/swap-order.
     DataDecodedParamHelper,
     Erc20TransferMapper,
     Erc721TransferMapper,
+    GPv2OrderHelper,
     TransferMapper,
     ModuleTransactionDetailsMapper,
     ModuleTransactionMapper,
@@ -72,6 +83,7 @@ import { SwapOrderHelperModule } from '@/routes/transactions/helpers/swap-order.
     QueuedItemsMapper,
     SafeAppInfoMapper,
     SettingsChangeMapper,
+    SwapTransferInfoMapper,
     TransactionDataMapper,
     TransactionPreviewMapper,
     TransactionsHistoryMapper,

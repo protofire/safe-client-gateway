@@ -1,17 +1,22 @@
 import { Injectable, Module } from '@nestjs/common';
-import { SetPreSignatureDecoder } from '@/domain/swaps/contracts/decoders/set-pre-signature-decoder.helper';
+import { GPv2Decoder } from '@/domain/swaps/contracts/decoders/gp-v2-decoder.helper';
 import { SwapOrderTransactionInfo } from '@/routes/transactions/entities/swaps/swap-order-info.entity';
 import { TokenInfo } from '@/routes/transactions/entities/swaps/token-info.entity';
 import {
   SwapOrderHelper,
   SwapOrderHelperModule,
 } from '@/routes/transactions/helpers/swap-order.helper';
+import {
+  SwapAppsHelper,
+  SwapAppsHelperModule,
+} from '@/routes/transactions/helpers/swap-apps.helper';
 
 @Injectable()
 export class SwapOrderMapper {
   constructor(
-    private readonly setPreSignatureDecoder: SetPreSignatureDecoder,
+    private readonly gpv2Decoder: GPv2Decoder,
     private readonly swapOrderHelper: SwapOrderHelper,
+    private readonly swapAppsHelper: SwapAppsHelper,
   ) {}
 
   async mapSwapOrder(
@@ -19,19 +24,26 @@ export class SwapOrderMapper {
     transaction: { data: `0x${string}` },
   ): Promise<SwapOrderTransactionInfo> {
     const orderUid: `0x${string}` | null =
-      this.setPreSignatureDecoder.getOrderUid(transaction.data);
+      this.gpv2Decoder.getOrderUidFromSetPreSignature(transaction.data);
     if (!orderUid) {
       throw new Error('Order UID not found in transaction data');
     }
+    const order = await this.swapOrderHelper.getOrder({ chainId, orderUid });
 
-    const { order, sellToken, buyToken } = await this.swapOrderHelper.getOrder({
-      chainId,
-      orderUid,
-    });
-
-    if (!this.swapOrderHelper.isAppAllowed(order)) {
+    if (!this.swapAppsHelper.isAppAllowed(order)) {
       throw new Error(`Unsupported App: ${order.fullAppData?.appCode}`);
     }
+
+    const [sellToken, buyToken] = await Promise.all([
+      this.swapOrderHelper.getToken({
+        address: order.sellToken,
+        chainId,
+      }),
+      this.swapOrderHelper.getToken({
+        address: order.buyToken,
+        chainId,
+      }),
+    ]);
 
     return new SwapOrderTransactionInfo({
       uid: order.uid,
@@ -59,7 +71,7 @@ export class SwapOrderMapper {
         symbol: buyToken.symbol,
         trusted: buyToken.trusted,
       }),
-      explorerUrl: this.swapOrderHelper.getOrderExplorerUrl(order),
+      explorerUrl: this.swapOrderHelper.getOrderExplorerUrl(order).toString(),
       executedSurplusFee: order.executedSurplusFee?.toString() ?? null,
       receiver: order.receiver,
       owner: order.owner,
@@ -69,8 +81,8 @@ export class SwapOrderMapper {
 }
 
 @Module({
-  imports: [SwapOrderHelperModule],
-  providers: [SwapOrderMapper, SetPreSignatureDecoder],
+  imports: [SwapOrderHelperModule, SwapAppsHelperModule],
+  providers: [SwapOrderMapper, GPv2Decoder],
   exports: [SwapOrderMapper],
 })
 export class SwapOrderMapperModule {}

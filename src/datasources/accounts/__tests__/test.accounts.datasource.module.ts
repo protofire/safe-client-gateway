@@ -2,8 +2,12 @@ import { Module } from '@nestjs/common';
 import { IAccountsDatasource } from '@/domain/interfaces/accounts.datasource.interface';
 
 const accountsDatasource = {
-  getAccount: jest.fn(),
   createAccount: jest.fn(),
+  deleteAccount: jest.fn(),
+  getAccount: jest.fn(),
+  getDataTypes: jest.fn(),
+  getAccountDataSettings: jest.fn(),
+  upsertAccountDataSettings: jest.fn(),
 } as jest.MockedObjectDeep<IAccountsDatasource>;
 
 @Module({

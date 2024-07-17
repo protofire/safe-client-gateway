@@ -18,10 +18,12 @@ import { HumanDescriptionMapper } from '@/routes/transactions/mappers/common/hum
 import { NativeCoinTransferMapper } from '@/routes/transactions/mappers/common/native-coin-transfer.mapper';
 import { SettingsChangeMapper } from '@/routes/transactions/mappers/common/settings-change.mapper';
 import { SwapOrderMapper } from '@/routes/transactions/mappers/common/swap-order.mapper';
-import { isHex } from 'viem';
 import { ILoggingService, LoggingService } from '@/logging/logging.interface';
 import { SwapOrderTransactionInfo } from '@/routes/transactions/entities/swaps/swap-order-info.entity';
 import { SwapOrderHelper } from '@/routes/transactions/helpers/swap-order.helper';
+import { TwapOrderMapper } from '@/routes/transactions/mappers/common/twap-order.mapper';
+import { TwapOrderHelper } from '@/routes/transactions/helpers/twap-order.helper';
+import { TwapOrderTransactionInfo } from '@/routes/transactions/entities/swaps/twap-order-info.entity';
 
 @Injectable()
 export class MultisigTransactionInfoMapper {
@@ -30,6 +32,7 @@ export class MultisigTransactionInfoMapper {
   private readonly SAFE_TRANSFER_FROM_METHOD = 'safeTransferFrom';
   private readonly isRichFragmentsEnabled: boolean;
   private readonly isSwapsDecodingEnabled: boolean;
+  private readonly isTwapsDecodingEnabled: boolean;
 
   private readonly ERC20_TRANSFER_METHODS = [
     this.TRANSFER_METHOD,
@@ -56,12 +59,17 @@ export class MultisigTransactionInfoMapper {
     private readonly humanDescriptionMapper: HumanDescriptionMapper,
     private readonly swapOrderMapper: SwapOrderMapper,
     private readonly swapOrderHelper: SwapOrderHelper,
+    private readonly twapOrderMapper: TwapOrderMapper,
+    private readonly twapOrderHelper: TwapOrderHelper,
   ) {
     this.isRichFragmentsEnabled = this.configurationService.getOrThrow(
       'features.richFragments',
     );
     this.isSwapsDecodingEnabled = this.configurationService.getOrThrow(
       'features.swapsDecoding',
+    );
+    this.isTwapsDecodingEnabled = this.configurationService.getOrThrow(
+      'features.twapsDecoding',
     );
   }
 
@@ -97,6 +105,14 @@ export class MultisigTransactionInfoMapper {
         await this.mapSwapOrder(chainId, transaction);
       // If the transaction is a swap order, we return it immediately
       if (swapOrder) return swapOrder;
+    }
+
+    if (this.isTwapsDecodingEnabled) {
+      // If the transaction is a TWAP order, we return it immediately
+      const twapOrder = await this.mapTwapOrder(chainId, transaction);
+      if (twapOrder) {
+        return twapOrder;
+      }
     }
 
     if (this.isCustomTransaction(value, dataSize, transaction.operation)) {
@@ -195,7 +211,7 @@ export class MultisigTransactionInfoMapper {
     chainId: string,
     transaction: MultisigTransaction | ModuleTransaction,
   ): Promise<SwapOrderTransactionInfo | null> {
-    if (!transaction?.data || !isHex(transaction.data)) {
+    if (!transaction?.data) {
       return null;
     }
 
@@ -213,6 +229,46 @@ export class MultisigTransactionInfoMapper {
       });
     } catch (error) {
       // The transaction is a swap order, but we couldn't decode it successfully.
+      this.loggingService.warn(error);
+      return null;
+    }
+  }
+
+  /**
+   * Maps a TWAP order transaction.
+   * If the transaction is not a TWAP order, it returns null.
+   *
+   * @param chainId - chain ID of the transaction
+   * @param transaction - transaction to map
+   * @returns mapped {@link TwapOrderTransactionInfo} or null if none found
+   */
+  private async mapTwapOrder(
+    chainId: string,
+    transaction: MultisigTransaction | ModuleTransaction,
+  ): Promise<TwapOrderTransactionInfo | null> {
+    if (!transaction?.data) {
+      return null;
+    }
+
+    const orderData = this.twapOrderHelper.findTwapOrder({
+      to: transaction.to,
+      data: transaction.data,
+    });
+
+    if (!orderData) {
+      return null;
+    }
+
+    try {
+      return await this.twapOrderMapper.mapTwapOrder(
+        chainId,
+        transaction.safe,
+        {
+          data: orderData,
+          executionDate: transaction.executionDate,
+        },
+      );
+    } catch (error) {
       this.loggingService.warn(error);
       return null;
     }

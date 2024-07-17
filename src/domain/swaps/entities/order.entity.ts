@@ -5,6 +5,8 @@ import { FullAppDataSchema } from '@/domain/swaps/entities/full-app-data.entity'
 
 export type Order = z.infer<typeof OrderSchema>;
 
+export type KnownOrder = Order & { kind: Exclude<Order['kind'], 'unknown'> };
+
 export enum OrderStatus {
   PreSignaturePending = 'presignaturePending',
   Open = 'open',
@@ -21,6 +23,25 @@ export enum OrderClass {
   Unknown = 'unknown',
 }
 
+export enum OrderKind {
+  Buy = 'buy',
+  Sell = 'sell',
+  Unknown = 'unknown',
+}
+
+export enum SellTokenBalance {
+  Erc20 = 'erc20',
+  Internal = 'internal',
+  External = 'external',
+  Unknown = 'unknown',
+}
+
+export enum BuyTokenBalance {
+  Erc20 = 'erc20',
+  Internal = 'internal',
+  Unknown = 'unknown',
+}
+
 export const OrderSchema = z.object({
   sellToken: AddressSchema,
   buyToken: AddressSchema,
@@ -30,12 +51,12 @@ export const OrderSchema = z.object({
   validTo: z.number(),
   appData: z.string(),
   feeAmount: z.coerce.bigint(),
-  kind: z.enum(['buy', 'sell', 'unknown']).catch('unknown'),
+  kind: z.nativeEnum(OrderKind).catch(OrderKind.Unknown),
   partiallyFillable: z.boolean(),
   sellTokenBalance: z
-    .enum(['erc20', 'internal', 'external', 'unknown'])
-    .catch('unknown'),
-  buyTokenBalance: z.enum(['erc20', 'internal', 'unknown']).catch('unknown'),
+    .nativeEnum(SellTokenBalance)
+    .catch(SellTokenBalance.Unknown),
+  buyTokenBalance: z.nativeEnum(BuyTokenBalance).catch(BuyTokenBalance.Unknown),
   signingScheme: z
     .enum(['eip712', 'ethsign', 'presign', 'eip1271', 'unknown'])
     .catch('unknown'),
@@ -82,3 +103,5 @@ export const OrderSchema = z.object({
   executedSurplusFee: z.coerce.bigint().nullish().default(null),
   fullAppData: FullAppDataSchema.shape.fullAppData,
 });
+
+export const OrdersSchema = z.array(OrderSchema);
