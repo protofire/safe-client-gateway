@@ -1,7 +1,7 @@
 import { faker } from '@faker-js/faker';
 import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import * as request from 'supertest';
+import request from 'supertest';
 import { TestAppProvider } from '@/__tests__/test-app.provider';
 import { TestCacheModule } from '@/datasources/cache/__tests__/test.cache.module';
 import { TestNetworkModule } from '@/datasources/network/__tests__/test.network.module';
@@ -16,8 +16,6 @@ import {
 import { DeleteTransactionDto } from '@/routes/transactions/entities/delete-transaction.dto.entity';
 import { AppModule } from '@/app.module';
 import { CacheModule } from '@/datasources/cache/cache.module';
-import { TestAccountDataSourceModule } from '@/datasources/account/__tests__/test.account.datasource.module';
-import { AccountDataSourceModule } from '@/datasources/account/account.datasource.module';
 import { NetworkModule } from '@/datasources/network/network.module';
 import { RequestScopedLoggingModule } from '@/logging/logging.module';
 import { NetworkResponseError } from '@/datasources/network/entities/network.error.entity';
@@ -30,9 +28,10 @@ import { CacheDir } from '@/datasources/cache/entities/cache-dir.entity';
 import { FakeCacheService } from '@/datasources/cache/__tests__/fake.cache.service';
 import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
 import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
+import { Server } from 'net';
 
 describe('Delete Transaction - Transactions Controller (Unit', () => {
-  let app: INestApplication;
+  let app: INestApplication<Server>;
   let safeConfigUrl: string;
   let networkService: jest.MockedObjectDeep<INetworkService>;
   let fakeCacheService: FakeCacheService;
@@ -43,8 +42,6 @@ describe('Delete Transaction - Transactions Controller (Unit', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(configuration)],
     })
-      .overrideModule(AccountDataSourceModule)
-      .useModule(TestAccountDataSourceModule)
       .overrideModule(CacheModule)
       .useModule(TestCacheModule)
       .overrideModule(RequestScopedLoggingModule)
@@ -55,8 +52,10 @@ describe('Delete Transaction - Transactions Controller (Unit', () => {
       .useModule(TestQueuesApiModule)
       .compile();
 
-    const configurationService = moduleFixture.get(IConfigurationService);
-    safeConfigUrl = configurationService.get('safeConfig.baseUri');
+    const configurationService = moduleFixture.get<IConfigurationService>(
+      IConfigurationService,
+    );
+    safeConfigUrl = configurationService.getOrThrow('safeConfig.baseUri');
     networkService = moduleFixture.get(NetworkService);
     fakeCacheService = moduleFixture.get(CacheService);
 

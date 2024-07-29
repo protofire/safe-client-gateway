@@ -1,16 +1,20 @@
 import { Inject, Injectable, Module } from '@nestjs/common';
-import { MultiSendDecoder } from '@/domain/contracts/decoders/multi-send-decoder.helper';
-import { SetPreSignatureDecoder } from '@/domain/swaps/contracts/decoders/set-pre-signature-decoder.helper';
+import {
+  TransactionDataFinder,
+  TransactionDataFinderModule,
+} from '@/routes/transactions/helpers/transaction-data-finder.helper';
+import { GPv2Decoder } from '@/domain/swaps/contracts/decoders/gp-v2-decoder.helper';
 import {
   ITokenRepository,
   TokenRepositoryModule,
 } from '@/domain/tokens/token.repository.interface';
-import {
-  ISwapsRepository,
-  SwapsRepository,
-} from '@/domain/swaps/swaps.repository';
+import { ISwapsRepository } from '@/domain/swaps/swaps.repository';
 import { Token, TokenType } from '@/domain/tokens/entities/token.entity';
-import { Order } from '@/domain/swaps/entities/order.entity';
+import {
+  KnownOrder,
+  Order,
+  OrderKind,
+} from '@/domain/swaps/entities/order.entity';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import { SwapsRepositoryModule } from '@/domain/swaps/swaps-repository.module';
 import {
@@ -22,24 +26,21 @@ import {
 export class SwapOrderHelper {
   // This is the Native Currency address considered by CoW Swap
   // https://docs.cow.fi/cow-protocol/reference/sdks/cow-sdk/modules#buy_eth_address
-  private static readonly NATIVE_CURRENCY_ADDRESS =
+  public static readonly NATIVE_CURRENCY_ADDRESS =
     '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
-
-  private readonly restrictApps: boolean =
-    this.configurationService.getOrThrow('swaps.restrictApps');
 
   private readonly swapsExplorerBaseUri: string =
     this.configurationService.getOrThrow('swaps.explorerBaseUri');
 
   constructor(
-    private readonly multiSendDecoder: MultiSendDecoder,
-    private readonly setPreSignatureDecoder: SetPreSignatureDecoder,
+    private readonly transactionDataFinder: TransactionDataFinder,
+    private readonly gpv2Decoder: GPv2Decoder,
     @Inject(ITokenRepository)
     private readonly tokenRepository: ITokenRepository,
-    @Inject(ISwapsRepository) private readonly swapsRepository: SwapsRepository,
+    @Inject(ISwapsRepository)
+    private readonly swapsRepository: ISwapsRepository,
     @Inject(IConfigurationService)
     private readonly configurationService: IConfigurationService,
-    @Inject('SWAP_ALLOWED_APPS') private readonly allowedApps: Set<string>,
     @Inject(IChainsRepository)
     private readonly chainsRepository: IChainsRepository,
   ) {}
@@ -53,22 +54,11 @@ export class SwapOrderHelper {
    * @returns The swap order if found, otherwise null
    */
   public findSwapOrder(data: `0x${string}`): `0x${string}` | null {
-    // The swap order can be in the transaction data directly
-    if (this.isSwapOrder({ data })) {
-      return data;
-    }
-    // or in the data of a multisend transaction
-    if (this.multiSendDecoder.helpers.isMultiSend(data)) {
-      const transactions = this.multiSendDecoder.mapMultiSendTransactions(data);
-      // TODO If we can build a sorted hash map of the transactions, we can avoid iterating all of them
-      //  as we know the pattern of a Swap Order.
-      for (const transaction of transactions) {
-        if (this.isSwapOrder(transaction)) {
-          return transaction.data;
-        }
-      }
-    }
-    return null;
+    return this.transactionDataFinder.findTransactionData(
+      (transaction) =>
+        this.gpv2Decoder.helpers.isSetPreSignature(transaction.data),
+      { data },
+    );
   }
 
   /**
@@ -79,45 +69,25 @@ export class SwapOrderHelper {
    * @param {string} args.orderUid - The unique identifier of the order, prefixed with '0x'.
    * @returns {Promise} A promise that resolves to an object containing the order and token details.
    *
-   * The returned object includes:
-   * - `order`: An object representing the order.
-   * - `sellToken`: The Token object with a mandatory `decimals` property
-   * - `buyToken`: Similar to `sellToken`, for the token being purchased in the order.
+   * The returned object represents the order.
    *
    * @throws {Error} Throws an error if the order `kind` is 'unknown'.
    * @throws {Error} Throws an error if either the sellToken or buyToken object has null decimals.
    */
-  async getOrder(args: { chainId: string; orderUid: `0x${string}` }): Promise<{
-    order: Order & { kind: Exclude<Order['kind'], 'unknown'> };
-    sellToken: Token & { decimals: number };
-    buyToken: Token & { decimals: number };
-  }> {
+  async getOrder(args: {
+    chainId: string;
+    orderUid: `0x${string}`;
+  }): Promise<KnownOrder> {
     const order = await this.swapsRepository.getOrder(
       args.chainId,
       args.orderUid,
     );
 
-    if (order.kind === 'unknown') throw new Error('Unknown order kind');
-
-    const [buyToken, sellToken] = await Promise.all([
-      this.getToken({
-        chainId: args.chainId,
-        address: order.buyToken,
-      }),
-      this.getToken({
-        chainId: args.chainId,
-        address: order.sellToken,
-      }),
-    ]);
-
-    if (buyToken.decimals === null || sellToken.decimals === null) {
-      throw new Error('Invalid token decimals');
-    }
+    if (order.kind === OrderKind.Unknown) throw new Error('Unknown order kind');
 
     return {
-      order: { ...order, kind: order.kind },
-      buyToken: { ...buyToken, decimals: buyToken.decimals },
-      sellToken: { ...sellToken, decimals: sellToken.decimals },
+      ...order,
+      kind: order.kind,
     };
   }
 
@@ -134,23 +104,6 @@ export class SwapOrderHelper {
   }
 
   /**
-   * Checks if the app associated with an order is allowed.
-   *
-   * @param order - the order to which we should verify the app data with
-   * @returns true if the app is allowed, false otherwise.
-   */
-  isAppAllowed(order: Order): boolean {
-    if (!this.restrictApps) return true;
-    const appCode = order.fullAppData?.appCode;
-    return !!appCode && this.allowedApps.has(appCode);
-  }
-
-  private isSwapOrder(transaction: { data?: `0x${string}` }): boolean {
-    if (!transaction.data) return false;
-    return this.setPreSignatureDecoder.isSetPreSignature(transaction.data);
-  }
-
-  /**
    * Retrieves a token object based on the provided Ethereum chain ID and token address.
    * If the specified address is the placeholder for the native currency of the chain,
    * it fetches the chain's native currency details from the {@link IChainsRepository}.
@@ -160,15 +113,14 @@ export class SwapOrderHelper {
    *   - `chainId`: A string representing the ID of the blockchain chain.
    *   - `address`: A string representing the Ethereum address of the token, prefixed with '0x'.
    * @returns {Promise<Token>} A promise that resolves to a Token object containing the details
-   * of either the native currency or the specified token.
+   * of either the native currency or the specified token with mandatory decimals.
    * @throws {Error} Throws an error if the token data cannot be retrieved.
-   * @private
    * @async
    */
-  private async getToken(args: {
+  public async getToken(args: {
     chainId: string;
     address: `0x${string}`;
-  }): Promise<Token> {
+  }): Promise<Token & { decimals: NonNullable<Token['decimals']> }> {
     // We perform lower case comparison because the provided address (3rd party service)
     // might not be checksummed.
     if (
@@ -188,20 +140,18 @@ export class SwapOrderHelper {
         trusted: true,
       };
     } else {
-      return this.tokenRepository.getToken({
+      const token = await this.tokenRepository.getToken({
         chainId: args.chainId,
         address: args.address,
       });
+
+      if (token.decimals === null) {
+        throw new Error('Invalid token decimals');
+      }
+
+      return { ...token, decimals: token.decimals };
     }
   }
-}
-
-function allowedAppsFactory(
-  configurationService: IConfigurationService,
-): Set<string> {
-  const allowedApps =
-    configurationService.getOrThrow<string[]>('swaps.allowedApps');
-  return new Set(allowedApps);
 }
 
 @Module({
@@ -209,17 +159,9 @@ function allowedAppsFactory(
     ChainsRepositoryModule,
     SwapsRepositoryModule,
     TokenRepositoryModule,
+    TransactionDataFinderModule,
   ],
-  providers: [
-    SwapOrderHelper,
-    MultiSendDecoder,
-    SetPreSignatureDecoder,
-    {
-      provide: 'SWAP_ALLOWED_APPS',
-      useFactory: allowedAppsFactory,
-      inject: [IConfigurationService],
-    },
-  ],
+  providers: [SwapOrderHelper, GPv2Decoder],
   exports: [SwapOrderHelper],
 })
 export class SwapOrderHelperModule {}

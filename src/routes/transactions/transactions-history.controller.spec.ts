@@ -1,7 +1,7 @@
 import { faker } from '@faker-js/faker';
 import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import * as request from 'supertest';
+import request from 'supertest';
 import { TestAppProvider } from '@/__tests__/test-app.provider';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import configuration from '@/config/entities/__tests__/configuration';
@@ -47,8 +47,6 @@ import { AppModule } from '@/app.module';
 import { CacheModule } from '@/datasources/cache/cache.module';
 import { RequestScopedLoggingModule } from '@/logging/logging.module';
 import { NetworkModule } from '@/datasources/network/network.module';
-import { AccountDataSourceModule } from '@/datasources/account/account.datasource.module';
-import { TestAccountDataSourceModule } from '@/datasources/account/__tests__/test.account.datasource.module';
 import {
   erc20TransferBuilder,
   toJson as erc20TransferToJson,
@@ -62,13 +60,13 @@ import { NetworkResponseError } from '@/datasources/network/entities/network.err
 import { getAddress } from 'viem';
 import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
 import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
+import { Server } from 'net';
 
 describe('Transactions History Controller (Unit)', () => {
-  let app: INestApplication;
-  let safeConfigUrl: string;
+  let app: INestApplication<Server>;
+  let safeConfigUrl: string | undefined;
   let networkService: jest.MockedObjectDeep<INetworkService>;
-  const prefixLength = 3;
-  const suffixLength = 4;
+  let configurationService: jest.MockedObjectDeep<IConfigurationService>;
 
   beforeEach(async () => {
     jest.resetAllMocks();
@@ -80,22 +78,12 @@ describe('Transactions History Controller (Unit)', () => {
         history: {
           maxNestedTransfers: 5,
         },
-        imitation: {
-          prefixLength,
-          suffixLength,
-        },
-      },
-      features: {
-        ...configuration().features,
-        imitationMapping: true,
       },
     });
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(testConfiguration)],
     })
-      .overrideModule(AccountDataSourceModule)
-      .useModule(TestAccountDataSourceModule)
       .overrideModule(CacheModule)
       .useModule(TestCacheModule)
       .overrideModule(RequestScopedLoggingModule)
@@ -106,7 +94,7 @@ describe('Transactions History Controller (Unit)', () => {
       .useModule(TestQueuesApiModule)
       .compile();
 
-    const configurationService = moduleFixture.get(IConfigurationService);
+    configurationService = moduleFixture.get(IConfigurationService);
     safeConfigUrl = configurationService.get('safeConfig.baseUri');
     networkService = moduleFixture.get(NetworkService);
 
@@ -147,7 +135,8 @@ describe('Transactions History Controller (Unit)', () => {
     const chainId = chainResponse.chainId;
     networkService.get.mockImplementation(({ url }) => {
       const getChainUrl = `${safeConfigUrl}/api/v1/chains/${chainId}`;
-      const getAllTransactions = `${chainResponse.transactionService}/api/v1/safes/${safeAddress}/all-transactions/`;
+      // Param ValidationPipe checksums address
+      const getAllTransactions = `${chainResponse.transactionService}/api/v1/safes/${getAddress(safeAddress)}/all-transactions/`;
       if (url === getChainUrl) {
         return Promise.resolve({ data: chainResponse, status: 200 });
       }
@@ -174,7 +163,8 @@ describe('Transactions History Controller (Unit)', () => {
     const page = pageBuilder().build();
     networkService.get.mockImplementation(({ url }) => {
       const getChainUrl = `${safeConfigUrl}/api/v1/chains/${chain.chainId}`;
-      const getAllTransactions = `${chain.transactionService}/api/v1/safes/${safeAddress}/all-transactions/`;
+      // Param ValidationPipe checksums address
+      const getAllTransactions = `${chain.transactionService}/api/v1/safes/${getAddress(safeAddress)}/all-transactions/`;
       if (url === getChainUrl) {
         return Promise.resolve({ data: chain, status: 200 });
       }
@@ -210,9 +200,10 @@ describe('Transactions History Controller (Unit)', () => {
     const creationTransaction = creationTransactionBuilder().build();
     networkService.get.mockImplementation(({ url }) => {
       const getChainUrl = `${safeConfigUrl}/api/v1/chains/${chainId}`;
-      const getAllTransactions = `${chainResponse.transactionService}/api/v1/safes/${safeAddress}/all-transactions/`;
-      const getSafeUrl = `${chainResponse.transactionService}/api/v1/safes/${safeAddress}`;
-      const getSafeCreationUrl = `${chainResponse.transactionService}/api/v1/safes/${safeAddress}/creation/`;
+      // Param ValidationPipe checksums address
+      const getAllTransactions = `${chainResponse.transactionService}/api/v1/safes/${getAddress(safeAddress)}/all-transactions/`;
+      const getSafeUrl = `${chainResponse.transactionService}/api/v1/safes/${getAddress(safeAddress)}`;
+      const getSafeCreationUrl = `${chainResponse.transactionService}/api/v1/safes/${getAddress(safeAddress)}/creation/`;
       if (url === getChainUrl) {
         return Promise.resolve({ data: chainResponse, status: 200 });
       }
@@ -338,8 +329,9 @@ describe('Transactions History Controller (Unit)', () => {
     };
     networkService.get.mockImplementation(({ url }) => {
       const getChainUrl = `${safeConfigUrl}/api/v1/chains/${chainId}`;
-      const getAllTransactions = `${chainResponse.transactionService}/api/v1/safes/${safeAddress}/all-transactions/`;
-      const getSafeUrl = `${chainResponse.transactionService}/api/v1/safes/${safeAddress}`;
+      // Param ValidationPipe checksums address
+      const getAllTransactions = `${chainResponse.transactionService}/api/v1/safes/${getAddress(safeAddress)}/all-transactions/`;
+      const getSafeUrl = `${chainResponse.transactionService}/api/v1/safes/${getAddress(safeAddress)}`;
       if (url === getChainUrl) {
         return Promise.resolve({ data: chainResponse, status: 200 });
       }
@@ -393,8 +385,9 @@ describe('Transactions History Controller (Unit)', () => {
     };
     networkService.get.mockImplementation(({ url }) => {
       const getChainUrl = `${safeConfigUrl}/api/v1/chains/${chainId}`;
-      const getAllTransactions = `${chainResponse.transactionService}/api/v1/safes/${safeAddress}/all-transactions/`;
-      const getSafeUrl = `${chainResponse.transactionService}/api/v1/safes/${safeAddress}`;
+      // Param ValidationPipe checksums address
+      const getAllTransactions = `${chainResponse.transactionService}/api/v1/safes/${getAddress(safeAddress)}/all-transactions/`;
+      const getSafeUrl = `${chainResponse.transactionService}/api/v1/safes/${getAddress(safeAddress)}`;
       if (url === getChainUrl) {
         return Promise.resolve({ data: chainResponse, status: 200 });
       }
@@ -546,6 +539,7 @@ describe('Transactions History Controller (Unit)', () => {
               type: 'TRANSACTION',
               transaction: {
                 id: `module_${safe.address}_i5a6754140f0432d3b`,
+                txHash: moduleTransaction.transactionHash,
                 safeAppInfo: null,
                 timestamp: moduleTransaction.executionDate.getTime(),
                 txStatus: 'SUCCESS',
@@ -574,12 +568,16 @@ describe('Transactions History Controller (Unit)', () => {
               type: 'TRANSACTION',
               transaction: {
                 id: `multisig_${safe.address}_0x31d44c67`,
+                txHash: multisigTransaction.transactionHash,
                 timestamp: 1668583871000,
                 txStatus: 'SUCCESS',
                 txInfo: {
                   type: 'Transfer',
                   sender: { value: multisigTransaction.safe },
-                  recipient: { value: multisigTransactionToAddress },
+                  // Decoder checksums address (although Transaction Service likely returns it checksummed)
+                  recipient: {
+                    value: getAddress(multisigTransactionToAddress),
+                  },
                   direction: 'OUTGOING',
                   transferInfo: {
                     type: 'ERC20',
@@ -610,6 +608,7 @@ describe('Transactions History Controller (Unit)', () => {
               type: 'TRANSACTION',
               transaction: {
                 id: `transfer_${safe.address}_e1015fc6905859c69`,
+                txHash: nativeTokenTransfer.transactionHash,
                 executionInfo: null,
                 safeAppInfo: null,
                 timestamp: nativeTokenTransfer.executionDate.getTime(),
@@ -651,10 +650,11 @@ describe('Transactions History Controller (Unit)', () => {
       .build();
     networkService.get.mockImplementation(({ url }) => {
       const getChainUrl = `${safeConfigUrl}/api/v1/chains/${chainId}`;
-      const getAllTransactions = `${chainResponse.transactionService}/api/v1/safes/${safeAddress}/all-transactions/`;
-      const getSafeUrl = `${chainResponse.transactionService}/api/v1/safes/${safeAddress}`;
+      // Param ValidationPipe checksums address
+      const getAllTransactions = `${chainResponse.transactionService}/api/v1/safes/${getAddress(safeAddress)}/all-transactions/`;
+      const getSafeUrl = `${chainResponse.transactionService}/api/v1/safes/${getAddress(safeAddress)}`;
       const getContractUrl = `${chainResponse.transactionService}/api/v1/contracts/`;
-      const getSafeCreationUrl = `${chainResponse.transactionService}/api/v1/safes/${safeAddress}/creation/`;
+      const getSafeCreationUrl = `${chainResponse.transactionService}/api/v1/safes/${getAddress(safeAddress)}/creation/`;
       if (url === getChainUrl) {
         return Promise.resolve({ data: chainResponse, status: 200 });
       }
@@ -732,8 +732,9 @@ describe('Transactions History Controller (Unit)', () => {
     };
     networkService.get.mockImplementation(({ url }) => {
       const getChainUrl = `${safeConfigUrl}/api/v1/chains/${chainId}`;
-      const getAllTransactions = `${chainResponse.transactionService}/api/v1/safes/${safeAddress}/all-transactions/`;
-      const getSafeUrl = `${chainResponse.transactionService}/api/v1/safes/${safeAddress}`;
+      // Param ValidationPipe checksums address
+      const getAllTransactions = `${chainResponse.transactionService}/api/v1/safes/${getAddress(safeAddress)}/all-transactions/`;
+      const getSafeUrl = `${chainResponse.transactionService}/api/v1/safes/${getAddress(safeAddress)}`;
       if (url === getChainUrl) {
         return Promise.resolve({ data: chainResponse, status: 200 });
       }
@@ -763,7 +764,8 @@ describe('Transactions History Controller (Unit)', () => {
       url: `${safeConfigUrl}/api/v1/chains/${chainId}`,
     });
     expect(networkService.get).toHaveBeenCalledWith({
-      url: `${chainResponse.transactionService}/api/v1/safes/${safeAddress}/all-transactions/`,
+      // Param ValidationPipe checksums address
+      url: `${chainResponse.transactionService}/api/v1/safes/${getAddress(safeAddress)}/all-transactions/`,
       networkRequest: {
         params: {
           executed: true,
@@ -771,7 +773,8 @@ describe('Transactions History Controller (Unit)', () => {
           limit: limit + 1,
           ordering: undefined,
           queued: false,
-          safe: safeAddress,
+          // Param ValidationPipe checksums address
+          safe: getAddress(safeAddress),
         },
       },
     });
@@ -780,9 +783,9 @@ describe('Transactions History Controller (Unit)', () => {
   it('Should limit the amount of nested transfers', async () => {
     const safe = safeBuilder().build();
     const chain = chainBuilder().build();
-    const maxNestedTransfers = app
-      .get(IConfigurationService)
-      .getOrThrow('mappings.history.maxNestedTransfers');
+    const maxNestedTransfers = configurationService.getOrThrow<number>(
+      'mappings.history.maxNestedTransfers',
+    );
     const date = new Date();
     const transfers = faker.helpers.multiple(
       () =>
@@ -824,8 +827,9 @@ describe('Transactions History Controller (Unit)', () => {
       )
       .expect(200)
       .then(({ body }) => {
-        // the amount of TransactionItems is limited to the max value
         expect(
+          // the amount of TransactionItems is limited to the max value
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-call
           body.results.filter(
             (item: TransactionItem) => item.type === 'TRANSACTION',
           ),
@@ -1351,1136 +1355,5 @@ describe('Transactions History Controller (Unit)', () => {
           },
         });
       });
-  });
-
-  describe('Address poisoning', () => {
-    // TODO: Add tests with a mixture of (non-)trusted tokens, as well add builder-based tests
-    describe('Trusted tokens', () => {
-      it('should flag outgoing ERC-20 transfers that imitate a direct predecessor', async () => {
-        // Example taken from arb1:0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4 - marked as trusted
-        const chain = chainBuilder().build();
-        const safe = safeBuilder()
-          .with('address', '0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4')
-          .with('owners', [
-            '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-            '0xBE7d3f723d069a941228e44e222b37fBCe0731ce',
-          ])
-          .build();
-
-        const results = [
-          {
-            executionDate: '2024-03-20T09:42:58Z',
-            to: '0x0e74DE9501F54610169EDB5D6CC6b559d403D4B7',
-            data: '0x12514bba00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000010000000000000000000000000cdb94376e0330b13f5becaece169602cbb14399c000000000000000000000000a52cd97c022e5373ee305010ff2263d29bb87a7000000000000000000000000000000000000000000000000000000000000000000000000000000000000000009a6de84bf23ed9ba92bdb8027037975ef181b1c4000000000000000000000000345e400b58fbc0f9bc0eb176b6a125f35056ac300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000fd737d98d9f6b566cc104fd40aecc449b8eaa5120000000000000000000000001b4b73713ada8a6f864b58d0dd6099ca54e59aa30000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000878678326eac90000000000000000000000000000000000000000000000000000000000000001ed02f00000000000000000000000000000000000000000000000000000000000000000',
-            txHash:
-              '0xf6ab60f4e79f01e6f9615aa134725d5fe0d7222b47a441fff6233f9219593bb4',
-            blockNumber: 192295013,
-            transfers: [
-              {
-                type: 'ERC20_TRANSFER',
-                executionDate: '2024-03-20T09:42:58Z',
-                blockNumber: 192295013,
-                transactionHash:
-                  '0xf6ab60f4e79f01e6f9615aa134725d5fe0d7222b47a441fff6233f9219593bb4',
-                to: '0xFd737d98d9F6b566cc104Fd40aEcC449b8EaA512',
-                value: '40000000000000000000000',
-                tokenId: null,
-                tokenAddress: '0xcDB94376E0330B13F5Becaece169602cbB14399c',
-                transferId:
-                  'ef6ab60f4e79f01e6f9615aa134725d5fe0d7222b47a441fff6233f9219593bb44',
-                tokenInfo: {
-                  type: 'ERC20',
-                  address: '0xcDB94376E0330B13F5Becaece169602cbB14399c',
-                  name: 'Arbitrum',
-                  symbol: 'ARB',
-                  decimals: 18,
-                  logoUri:
-                    'https://safe-transaction-assets.safe.global/tokens/logos/0xcDB94376E0330B13F5Becaece169602cbB14399c.png',
-                  trusted: true,
-                },
-                from: '0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4',
-              },
-            ],
-            txType: 'ETHEREUM_TRANSACTION',
-            from: '0xA504C7e72AD25927EbFA6ea14aD5EA56fb0aB64a',
-          },
-          {
-            safe: '0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4',
-            to: '0x912CE59144191C1204E64559FE8253a0e49E6548',
-            value: '0',
-            data: '0xa9059cbb000000000000000000000000fd7e78798f312a29bb03133de9d26e151d3aa512000000000000000000000000000000000000000000000878678326eac9000000',
-            operation: 0,
-            gasToken: '0x0000000000000000000000000000000000000000',
-            safeTxGas: 0,
-            baseGas: 0,
-            gasPrice: '0',
-            refundReceiver: '0x0000000000000000000000000000000000000000',
-            nonce: 3,
-            executionDate: '2024-03-20T09:41:25Z',
-            submissionDate: '2024-03-20T09:38:11.447366Z',
-            modified: '2024-03-20T09:41:25Z',
-            blockNumber: 192294646,
-            transactionHash:
-              '0x7e60c76bb3b350dc552f3c261faf7dcdbfe141f7a740d9495efd49f371817813',
-            safeTxHash:
-              '0xa0772fe5d26572fa777e0b4557da9a03d208086078215245ed26502f7a7bf683',
-            proposer: '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-            executor: '0xBE7d3f723d069a941228e44e222b37fBCe0731ce',
-            isExecuted: true,
-            isSuccessful: true,
-            ethGasPrice: '10946000',
-            maxFeePerGas: null,
-            maxPriorityFeePerGas: null,
-            gasUsed: 249105,
-            fee: '2726703330000',
-            origin: '{}',
-            dataDecoded: {
-              method: 'transfer',
-              parameters: [
-                {
-                  name: 'to',
-                  type: 'address',
-                  value: '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-                },
-                {
-                  name: 'value',
-                  type: 'uint256',
-                  value: '40000000000000000000000',
-                },
-              ],
-            },
-            confirmationsRequired: 2,
-            confirmations: [
-              {
-                owner: '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-                submissionDate: '2024-03-20T09:38:11.479197Z',
-                transactionHash: null,
-                signature:
-                  '0x552b4bfaf92e7486785f6f922975e131f244152613486f2567112913a910047f14a5f5ce410d39192d0fbc7df1d9dc43e7c11b64510d44151dd2712be14665eb1c',
-                signatureType: 'EOA',
-              },
-              {
-                owner: '0xBE7d3f723d069a941228e44e222b37fBCe0731ce',
-                submissionDate: '2024-03-20T09:41:25Z',
-                transactionHash: null,
-                signature:
-                  '0x000000000000000000000000be7d3f723d069a941228e44e222b37fbce0731ce000000000000000000000000000000000000000000000000000000000000000001',
-                signatureType: 'APPROVED_HASH',
-              },
-            ],
-            trusted: true,
-            signatures:
-              '0x000000000000000000000000be7d3f723d069a941228e44e222b37fbce0731ce000000000000000000000000000000000000000000000000000000000000000001552b4bfaf92e7486785f6f922975e131f244152613486f2567112913a910047f14a5f5ce410d39192d0fbc7df1d9dc43e7c11b64510d44151dd2712be14665eb1c',
-            transfers: [
-              {
-                type: 'ERC20_TRANSFER',
-                executionDate: '2024-03-20T09:41:25Z',
-                blockNumber: 192294646,
-                transactionHash:
-                  '0x7e60c76bb3b350dc552f3c261faf7dcdbfe141f7a740d9495efd49f371817813',
-                to: '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-                value: '40000000000000000000000',
-                tokenId: null,
-                tokenAddress: '0x912CE59144191C1204E64559FE8253a0e49E6548',
-                transferId:
-                  'e7e60c76bb3b350dc552f3c261faf7dcdbfe141f7a740d9495efd49f3718178133',
-                tokenInfo: {
-                  type: 'ERC20',
-                  address: '0x912CE59144191C1204E64559FE8253a0e49E6548',
-                  name: 'Arbitrum',
-                  symbol: 'ARB',
-                  decimals: 18,
-                  logoUri:
-                    'https://safe-transaction-assets.safe.global/tokens/logos/0x912CE59144191C1204E64559FE8253a0e49E6548.png',
-                  trusted: true,
-                },
-                from: '0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4',
-              },
-            ],
-            txType: 'MULTISIG_TRANSACTION',
-          },
-        ];
-
-        const getChainUrl = `${safeConfigUrl}/api/v1/chains/${chain.chainId}`;
-        const getAllTransactionsUrl = `${chain.transactionService}/api/v1/safes/${safe.address}/all-transactions/`;
-        const getSafeUrl = `${chain.transactionService}/api/v1/safes/${safe.address}`;
-        const getImitationTokenAddressUrl = `${chain.transactionService}/api/v1/tokens/${results[0].transfers[0].tokenAddress}`;
-        const getTokenAddressUrl = `${chain.transactionService}/api/v1/tokens/${results[1].transfers[0].tokenAddress}`;
-        networkService.get.mockImplementation(({ url }) => {
-          if (url === getChainUrl) {
-            return Promise.resolve({ data: chain, status: 200 });
-          }
-          if (url === getAllTransactionsUrl) {
-            return Promise.resolve({
-              data: pageBuilder().with('results', results).build(),
-              status: 200,
-            });
-          }
-          if (url === getSafeUrl) {
-            return Promise.resolve({ data: safe, status: 200 });
-          }
-          if (url === getImitationTokenAddressUrl) {
-            return Promise.resolve({
-              data: results[0].transfers[0].tokenInfo,
-              status: 200,
-            });
-          }
-          if (url === getTokenAddressUrl) {
-            return Promise.resolve({
-              data: results[1].transfers[0].tokenInfo,
-              status: 200,
-            });
-          }
-          return Promise.reject(new Error(`Could not match ${url}`));
-        });
-
-        await request(app.getHttpServer())
-          .get(
-            `/v1/chains/${chain.chainId}/safes/${safe.address}/transactions/history?trusted=true`,
-          )
-          .expect(200)
-          .then(({ body }) => {
-            expect(body.results).toStrictEqual([
-              {
-                timestamp: 1710927778000,
-                type: 'DATE_LABEL',
-              },
-              {
-                conflictType: 'None',
-                transaction: {
-                  executionInfo: null,
-                  id: 'transfer_0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4_ef6ab60f4e79f01e6f9615aa134725d5fe0d7222b47a441fff6233f9219593bb44',
-                  safeAppInfo: null,
-                  timestamp: 1710927778000,
-                  txInfo: {
-                    direction: 'OUTGOING',
-                    humanDescription: null,
-                    recipient: {
-                      logoUri: null,
-                      name: null,
-                      value: '0xFd737d98d9F6b566cc104Fd40aEcC449b8EaA512',
-                    },
-                    richDecodedInfo: null,
-                    sender: {
-                      logoUri: null,
-                      name: null,
-                      value: '0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4',
-                    },
-                    transferInfo: {
-                      decimals: 18,
-                      imitation: true,
-                      logoUri:
-                        'https://safe-transaction-assets.safe.global/tokens/logos/0xcDB94376E0330B13F5Becaece169602cbB14399c.png',
-                      tokenAddress:
-                        '0xcDB94376E0330B13F5Becaece169602cbB14399c',
-                      tokenName: 'Arbitrum',
-                      tokenSymbol: 'ARB',
-                      trusted: true,
-                      type: 'ERC20',
-                      value: '40000000000000000000000',
-                    },
-                    type: 'Transfer',
-                  },
-                  txStatus: 'SUCCESS',
-                },
-                type: 'TRANSACTION',
-              },
-              {
-                conflictType: 'None',
-                transaction: {
-                  executionInfo: {
-                    confirmationsRequired: 2,
-                    confirmationsSubmitted: 2,
-                    missingSigners: null,
-                    nonce: 3,
-                    type: 'MULTISIG',
-                  },
-                  id: 'multisig_0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4_0xa0772fe5d26572fa777e0b4557da9a03d208086078215245ed26502f7a7bf683',
-                  safeAppInfo: null,
-                  timestamp: 1710927685000,
-                  txInfo: {
-                    direction: 'OUTGOING',
-                    humanDescription: 'Send 40000 ARB to 0xFd7e...A512',
-                    recipient: {
-                      logoUri: null,
-                      name: null,
-                      value: '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-                    },
-                    richDecodedInfo: {
-                      fragments: [
-                        {
-                          type: 'text',
-                          value: 'Send',
-                        },
-                        {
-                          logoUri:
-                            'https://safe-transaction-assets.safe.global/tokens/logos/0x912CE59144191C1204E64559FE8253a0e49E6548.png',
-                          symbol: 'ARB',
-                          type: 'tokenValue',
-                          value: '40000',
-                        },
-                        {
-                          type: 'text',
-                          value: 'to',
-                        },
-                        {
-                          type: 'address',
-                          value: '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-                        },
-                      ],
-                    },
-                    sender: {
-                      logoUri: null,
-                      name: null,
-                      value: '0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4',
-                    },
-                    transferInfo: {
-                      decimals: 18,
-                      imitation: null,
-                      logoUri:
-                        'https://safe-transaction-assets.safe.global/tokens/logos/0x912CE59144191C1204E64559FE8253a0e49E6548.png',
-                      tokenAddress:
-                        '0x912CE59144191C1204E64559FE8253a0e49E6548',
-                      tokenName: 'Arbitrum',
-                      tokenSymbol: 'ARB',
-                      trusted: null,
-                      type: 'ERC20',
-                      value: '40000000000000000000000',
-                    },
-                    type: 'Transfer',
-                  },
-                  txStatus: 'SUCCESS',
-                },
-                type: 'TRANSACTION',
-              },
-            ]);
-          });
-      });
-
-      it('should filter out outgoing ERC-20 transfers that imitate a direct predecessor', async () => {
-        // Example taken from arb1:0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4 - marked as trusted
-        const chain = chainBuilder().build();
-        const safe = safeBuilder()
-          .with('address', '0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4')
-          .with('owners', [
-            '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-            '0xBE7d3f723d069a941228e44e222b37fBCe0731ce',
-          ])
-          .build();
-
-        const results = [
-          {
-            executionDate: '2024-03-20T09:42:58Z',
-            to: '0x0e74DE9501F54610169EDB5D6CC6b559d403D4B7',
-            data: '0x12514bba00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000010000000000000000000000000cdb94376e0330b13f5becaece169602cbb14399c000000000000000000000000a52cd97c022e5373ee305010ff2263d29bb87a7000000000000000000000000000000000000000000000000000000000000000000000000000000000000000009a6de84bf23ed9ba92bdb8027037975ef181b1c4000000000000000000000000345e400b58fbc0f9bc0eb176b6a125f35056ac300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000fd737d98d9f6b566cc104fd40aecc449b8eaa5120000000000000000000000001b4b73713ada8a6f864b58d0dd6099ca54e59aa30000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000878678326eac90000000000000000000000000000000000000000000000000000000000000001ed02f00000000000000000000000000000000000000000000000000000000000000000',
-            txHash:
-              '0xf6ab60f4e79f01e6f9615aa134725d5fe0d7222b47a441fff6233f9219593bb4',
-            blockNumber: 192295013,
-            transfers: [
-              {
-                type: 'ERC20_TRANSFER',
-                executionDate: '2024-03-20T09:42:58Z',
-                blockNumber: 192295013,
-                transactionHash:
-                  '0xf6ab60f4e79f01e6f9615aa134725d5fe0d7222b47a441fff6233f9219593bb4',
-                to: '0xFd737d98d9F6b566cc104Fd40aEcC449b8EaA512',
-                value: '40000000000000000000000',
-                tokenId: null,
-                tokenAddress: '0xcDB94376E0330B13F5Becaece169602cbB14399c',
-                transferId:
-                  'ef6ab60f4e79f01e6f9615aa134725d5fe0d7222b47a441fff6233f9219593bb44',
-                tokenInfo: {
-                  type: 'ERC20',
-                  address: '0xcDB94376E0330B13F5Becaece169602cbB14399c',
-                  name: 'Arbitrum',
-                  symbol: 'ARB',
-                  decimals: 18,
-                  logoUri:
-                    'https://safe-transaction-assets.safe.global/tokens/logos/0xcDB94376E0330B13F5Becaece169602cbB14399c.png',
-                  trusted: true,
-                },
-                from: '0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4',
-              },
-            ],
-            txType: 'ETHEREUM_TRANSACTION',
-            from: '0xA504C7e72AD25927EbFA6ea14aD5EA56fb0aB64a',
-          },
-          {
-            safe: '0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4',
-            to: '0x912CE59144191C1204E64559FE8253a0e49E6548',
-            value: '0',
-            data: '0xa9059cbb000000000000000000000000fd7e78798f312a29bb03133de9d26e151d3aa512000000000000000000000000000000000000000000000878678326eac9000000',
-            operation: 0,
-            gasToken: '0x0000000000000000000000000000000000000000',
-            safeTxGas: 0,
-            baseGas: 0,
-            gasPrice: '0',
-            refundReceiver: '0x0000000000000000000000000000000000000000',
-            nonce: 3,
-            executionDate: '2024-03-20T09:41:25Z',
-            submissionDate: '2024-03-20T09:38:11.447366Z',
-            modified: '2024-03-20T09:41:25Z',
-            blockNumber: 192294646,
-            transactionHash:
-              '0x7e60c76bb3b350dc552f3c261faf7dcdbfe141f7a740d9495efd49f371817813',
-            safeTxHash:
-              '0xa0772fe5d26572fa777e0b4557da9a03d208086078215245ed26502f7a7bf683',
-            proposer: '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-            executor: '0xBE7d3f723d069a941228e44e222b37fBCe0731ce',
-            isExecuted: true,
-            isSuccessful: true,
-            ethGasPrice: '10946000',
-            maxFeePerGas: null,
-            maxPriorityFeePerGas: null,
-            gasUsed: 249105,
-            fee: '2726703330000',
-            origin: '{}',
-            dataDecoded: {
-              method: 'transfer',
-              parameters: [
-                {
-                  name: 'to',
-                  type: 'address',
-                  value: '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-                },
-                {
-                  name: 'value',
-                  type: 'uint256',
-                  value: '40000000000000000000000',
-                },
-              ],
-            },
-            confirmationsRequired: 2,
-            confirmations: [
-              {
-                owner: '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-                submissionDate: '2024-03-20T09:38:11.479197Z',
-                transactionHash: null,
-                signature:
-                  '0x552b4bfaf92e7486785f6f922975e131f244152613486f2567112913a910047f14a5f5ce410d39192d0fbc7df1d9dc43e7c11b64510d44151dd2712be14665eb1c',
-                signatureType: 'EOA',
-              },
-              {
-                owner: '0xBE7d3f723d069a941228e44e222b37fBCe0731ce',
-                submissionDate: '2024-03-20T09:41:25Z',
-                transactionHash: null,
-                signature:
-                  '0x000000000000000000000000be7d3f723d069a941228e44e222b37fbce0731ce000000000000000000000000000000000000000000000000000000000000000001',
-                signatureType: 'APPROVED_HASH',
-              },
-            ],
-            trusted: true,
-            signatures:
-              '0x000000000000000000000000be7d3f723d069a941228e44e222b37fbce0731ce000000000000000000000000000000000000000000000000000000000000000001552b4bfaf92e7486785f6f922975e131f244152613486f2567112913a910047f14a5f5ce410d39192d0fbc7df1d9dc43e7c11b64510d44151dd2712be14665eb1c',
-            transfers: [
-              {
-                type: 'ERC20_TRANSFER',
-                executionDate: '2024-03-20T09:41:25Z',
-                blockNumber: 192294646,
-                transactionHash:
-                  '0x7e60c76bb3b350dc552f3c261faf7dcdbfe141f7a740d9495efd49f371817813',
-                to: '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-                value: '40000000000000000000000',
-                tokenId: null,
-                tokenAddress: '0x912CE59144191C1204E64559FE8253a0e49E6548',
-                transferId:
-                  'e7e60c76bb3b350dc552f3c261faf7dcdbfe141f7a740d9495efd49f3718178133',
-                tokenInfo: {
-                  type: 'ERC20',
-                  address: '0x912CE59144191C1204E64559FE8253a0e49E6548',
-                  name: 'Arbitrum',
-                  symbol: 'ARB',
-                  decimals: 18,
-                  logoUri:
-                    'https://safe-transaction-assets.safe.global/tokens/logos/0x912CE59144191C1204E64559FE8253a0e49E6548.png',
-                  trusted: true,
-                },
-                from: '0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4',
-              },
-            ],
-            txType: 'MULTISIG_TRANSACTION',
-          },
-        ];
-
-        const getChainUrl = `${safeConfigUrl}/api/v1/chains/${chain.chainId}`;
-        const getAllTransactionsUrl = `${chain.transactionService}/api/v1/safes/${safe.address}/all-transactions/`;
-        const getSafeUrl = `${chain.transactionService}/api/v1/safes/${safe.address}`;
-        const getImitationTokenAddressUrl = `${chain.transactionService}/api/v1/tokens/${results[0].transfers[0].tokenAddress}`;
-        const getTokenAddressUrl = `${chain.transactionService}/api/v1/tokens/${results[1].transfers[0].tokenAddress}`;
-        networkService.get.mockImplementation(({ url }) => {
-          if (url === getChainUrl) {
-            return Promise.resolve({ data: chain, status: 200 });
-          }
-          if (url === getAllTransactionsUrl) {
-            return Promise.resolve({
-              data: pageBuilder().with('results', results).build(),
-              status: 200,
-            });
-          }
-          if (url === getSafeUrl) {
-            return Promise.resolve({ data: safe, status: 200 });
-          }
-          if (url === getImitationTokenAddressUrl) {
-            return Promise.resolve({
-              data: results[0].transfers[0].tokenInfo,
-              status: 200,
-            });
-          }
-          if (url === getTokenAddressUrl) {
-            return Promise.resolve({
-              data: results[1].transfers[0].tokenInfo,
-              status: 200,
-            });
-          }
-          return Promise.reject(new Error(`Could not match ${url}`));
-        });
-
-        await request(app.getHttpServer())
-          .get(
-            `/v1/chains/${chain.chainId}/safes/${safe.address}/transactions/history?trusted=true&imitation=false`,
-          )
-          .expect(200)
-          .then(({ body }) => {
-            expect(body.results).toStrictEqual([
-              {
-                timestamp: 1710927685000,
-                type: 'DATE_LABEL',
-              },
-              {
-                conflictType: 'None',
-                transaction: {
-                  executionInfo: {
-                    confirmationsRequired: 2,
-                    confirmationsSubmitted: 2,
-                    missingSigners: null,
-                    nonce: 3,
-                    type: 'MULTISIG',
-                  },
-                  id: 'multisig_0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4_0xa0772fe5d26572fa777e0b4557da9a03d208086078215245ed26502f7a7bf683',
-                  safeAppInfo: null,
-                  timestamp: 1710927685000,
-                  txInfo: {
-                    direction: 'OUTGOING',
-                    humanDescription: 'Send 40000 ARB to 0xFd7e...A512',
-                    recipient: {
-                      logoUri: null,
-                      name: null,
-                      value: '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-                    },
-                    richDecodedInfo: {
-                      fragments: [
-                        {
-                          type: 'text',
-                          value: 'Send',
-                        },
-                        {
-                          logoUri:
-                            'https://safe-transaction-assets.safe.global/tokens/logos/0x912CE59144191C1204E64559FE8253a0e49E6548.png',
-                          symbol: 'ARB',
-                          type: 'tokenValue',
-                          value: '40000',
-                        },
-                        {
-                          type: 'text',
-                          value: 'to',
-                        },
-                        {
-                          type: 'address',
-                          value: '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-                        },
-                      ],
-                    },
-                    sender: {
-                      logoUri: null,
-                      name: null,
-                      value: '0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4',
-                    },
-                    transferInfo: {
-                      decimals: 18,
-                      imitation: null,
-                      logoUri:
-                        'https://safe-transaction-assets.safe.global/tokens/logos/0x912CE59144191C1204E64559FE8253a0e49E6548.png',
-                      tokenAddress:
-                        '0x912CE59144191C1204E64559FE8253a0e49E6548',
-                      tokenName: 'Arbitrum',
-                      tokenSymbol: 'ARB',
-                      trusted: null,
-                      type: 'ERC20',
-                      value: '40000000000000000000000',
-                    },
-                    type: 'Transfer',
-                  },
-                  txStatus: 'SUCCESS',
-                },
-                type: 'TRANSACTION',
-              },
-            ]);
-          });
-      });
-    });
-
-    describe('Non-trusted tokens', () => {
-      it('should flag outgoing ERC-20 transfers that imitate a direct predecessor', async () => {
-        // Example taken from arb1:0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4
-        const chain = chainBuilder().build();
-        const safe = safeBuilder()
-          .with('address', '0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4')
-          .with('owners', [
-            '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-            '0xBE7d3f723d069a941228e44e222b37fBCe0731ce',
-          ])
-          .build();
-
-        const results = [
-          {
-            executionDate: '2024-03-20T09:42:58Z',
-            to: '0x0e74DE9501F54610169EDB5D6CC6b559d403D4B7',
-            data: '0x12514bba00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000010000000000000000000000000cdb94376e0330b13f5becaece169602cbb14399c000000000000000000000000a52cd97c022e5373ee305010ff2263d29bb87a7000000000000000000000000000000000000000000000000000000000000000000000000000000000000000009a6de84bf23ed9ba92bdb8027037975ef181b1c4000000000000000000000000345e400b58fbc0f9bc0eb176b6a125f35056ac300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000fd737d98d9f6b566cc104fd40aecc449b8eaa5120000000000000000000000001b4b73713ada8a6f864b58d0dd6099ca54e59aa30000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000878678326eac90000000000000000000000000000000000000000000000000000000000000001ed02f00000000000000000000000000000000000000000000000000000000000000000',
-            txHash:
-              '0xf6ab60f4e79f01e6f9615aa134725d5fe0d7222b47a441fff6233f9219593bb4',
-            blockNumber: 192295013,
-            transfers: [
-              {
-                type: 'ERC20_TRANSFER',
-                executionDate: '2024-03-20T09:42:58Z',
-                blockNumber: 192295013,
-                transactionHash:
-                  '0xf6ab60f4e79f01e6f9615aa134725d5fe0d7222b47a441fff6233f9219593bb4',
-                to: '0xFd737d98d9F6b566cc104Fd40aEcC449b8EaA512',
-                value: '40000000000000000000000',
-                tokenId: null,
-                tokenAddress: '0xcDB94376E0330B13F5Becaece169602cbB14399c',
-                transferId:
-                  'ef6ab60f4e79f01e6f9615aa134725d5fe0d7222b47a441fff6233f9219593bb44',
-                tokenInfo: {
-                  type: 'ERC20',
-                  address: '0xcDB94376E0330B13F5Becaece169602cbB14399c',
-                  name: 'Arbitrum',
-                  symbol: 'ARB',
-                  decimals: 18,
-                  logoUri:
-                    'https://safe-transaction-assets.safe.global/tokens/logos/0xcDB94376E0330B13F5Becaece169602cbB14399c.png',
-                  trusted: false,
-                },
-                from: '0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4',
-              },
-            ],
-            txType: 'ETHEREUM_TRANSACTION',
-            from: '0xA504C7e72AD25927EbFA6ea14aD5EA56fb0aB64a',
-          },
-          {
-            safe: '0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4',
-            to: '0x912CE59144191C1204E64559FE8253a0e49E6548',
-            value: '0',
-            data: '0xa9059cbb000000000000000000000000fd7e78798f312a29bb03133de9d26e151d3aa512000000000000000000000000000000000000000000000878678326eac9000000',
-            operation: 0,
-            gasToken: '0x0000000000000000000000000000000000000000',
-            safeTxGas: 0,
-            baseGas: 0,
-            gasPrice: '0',
-            refundReceiver: '0x0000000000000000000000000000000000000000',
-            nonce: 3,
-            executionDate: '2024-03-20T09:41:25Z',
-            submissionDate: '2024-03-20T09:38:11.447366Z',
-            modified: '2024-03-20T09:41:25Z',
-            blockNumber: 192294646,
-            transactionHash:
-              '0x7e60c76bb3b350dc552f3c261faf7dcdbfe141f7a740d9495efd49f371817813',
-            safeTxHash:
-              '0xa0772fe5d26572fa777e0b4557da9a03d208086078215245ed26502f7a7bf683',
-            proposer: '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-            executor: '0xBE7d3f723d069a941228e44e222b37fBCe0731ce',
-            isExecuted: true,
-            isSuccessful: true,
-            ethGasPrice: '10946000',
-            maxFeePerGas: null,
-            maxPriorityFeePerGas: null,
-            gasUsed: 249105,
-            fee: '2726703330000',
-            origin: '{}',
-            dataDecoded: {
-              method: 'transfer',
-              parameters: [
-                {
-                  name: 'to',
-                  type: 'address',
-                  value: '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-                },
-                {
-                  name: 'value',
-                  type: 'uint256',
-                  value: '40000000000000000000000',
-                },
-              ],
-            },
-            confirmationsRequired: 2,
-            confirmations: [
-              {
-                owner: '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-                submissionDate: '2024-03-20T09:38:11.479197Z',
-                transactionHash: null,
-                signature:
-                  '0x552b4bfaf92e7486785f6f922975e131f244152613486f2567112913a910047f14a5f5ce410d39192d0fbc7df1d9dc43e7c11b64510d44151dd2712be14665eb1c',
-                signatureType: 'EOA',
-              },
-              {
-                owner: '0xBE7d3f723d069a941228e44e222b37fBCe0731ce',
-                submissionDate: '2024-03-20T09:41:25Z',
-                transactionHash: null,
-                signature:
-                  '0x000000000000000000000000be7d3f723d069a941228e44e222b37fbce0731ce000000000000000000000000000000000000000000000000000000000000000001',
-                signatureType: 'APPROVED_HASH',
-              },
-            ],
-            trusted: true,
-            signatures:
-              '0x000000000000000000000000be7d3f723d069a941228e44e222b37fbce0731ce000000000000000000000000000000000000000000000000000000000000000001552b4bfaf92e7486785f6f922975e131f244152613486f2567112913a910047f14a5f5ce410d39192d0fbc7df1d9dc43e7c11b64510d44151dd2712be14665eb1c',
-            transfers: [
-              {
-                type: 'ERC20_TRANSFER',
-                executionDate: '2024-03-20T09:41:25Z',
-                blockNumber: 192294646,
-                transactionHash:
-                  '0x7e60c76bb3b350dc552f3c261faf7dcdbfe141f7a740d9495efd49f371817813',
-                to: '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-                value: '40000000000000000000000',
-                tokenId: null,
-                tokenAddress: '0x912CE59144191C1204E64559FE8253a0e49E6548',
-                transferId:
-                  'e7e60c76bb3b350dc552f3c261faf7dcdbfe141f7a740d9495efd49f3718178133',
-                tokenInfo: {
-                  type: 'ERC20',
-                  address: '0x912CE59144191C1204E64559FE8253a0e49E6548',
-                  name: 'Arbitrum',
-                  symbol: 'ARB',
-                  decimals: 18,
-                  logoUri:
-                    'https://safe-transaction-assets.safe.global/tokens/logos/0x912CE59144191C1204E64559FE8253a0e49E6548.png',
-                  trusted: false,
-                },
-                from: '0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4',
-              },
-            ],
-            txType: 'MULTISIG_TRANSACTION',
-          },
-        ];
-
-        const getChainUrl = `${safeConfigUrl}/api/v1/chains/${chain.chainId}`;
-        const getAllTransactionsUrl = `${chain.transactionService}/api/v1/safes/${safe.address}/all-transactions/`;
-        const getSafeUrl = `${chain.transactionService}/api/v1/safes/${safe.address}`;
-        const getImitationTokenAddressUrl = `${chain.transactionService}/api/v1/tokens/${results[0].transfers[0].tokenAddress}`;
-        const getTokenAddressUrl = `${chain.transactionService}/api/v1/tokens/${results[1].transfers[0].tokenAddress}`;
-        networkService.get.mockImplementation(({ url }) => {
-          if (url === getChainUrl) {
-            return Promise.resolve({ data: chain, status: 200 });
-          }
-          if (url === getAllTransactionsUrl) {
-            return Promise.resolve({
-              data: pageBuilder().with('results', results).build(),
-              status: 200,
-            });
-          }
-          if (url === getSafeUrl) {
-            return Promise.resolve({ data: safe, status: 200 });
-          }
-          if (url === getImitationTokenAddressUrl) {
-            return Promise.resolve({
-              data: results[0].transfers[0].tokenInfo,
-              status: 200,
-            });
-          }
-          if (url === getTokenAddressUrl) {
-            return Promise.resolve({
-              data: results[1].transfers[0].tokenInfo,
-              status: 200,
-            });
-          }
-          return Promise.reject(new Error(`Could not match ${url}`));
-        });
-
-        await request(app.getHttpServer())
-          .get(
-            `/v1/chains/${chain.chainId}/safes/${safe.address}/transactions/history?trusted=false`,
-          )
-          .expect(200)
-          .then(({ body }) => {
-            expect(body.results).toStrictEqual([
-              {
-                timestamp: 1710927778000,
-                type: 'DATE_LABEL',
-              },
-              {
-                conflictType: 'None',
-                transaction: {
-                  executionInfo: null,
-                  id: 'transfer_0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4_ef6ab60f4e79f01e6f9615aa134725d5fe0d7222b47a441fff6233f9219593bb44',
-                  safeAppInfo: null,
-                  timestamp: 1710927778000,
-                  txInfo: {
-                    direction: 'OUTGOING',
-                    humanDescription: null,
-                    recipient: {
-                      logoUri: null,
-                      name: null,
-                      value: '0xFd737d98d9F6b566cc104Fd40aEcC449b8EaA512',
-                    },
-                    richDecodedInfo: null,
-                    sender: {
-                      logoUri: null,
-                      name: null,
-                      value: '0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4',
-                    },
-                    transferInfo: {
-                      decimals: 18,
-                      imitation: true,
-                      logoUri:
-                        'https://safe-transaction-assets.safe.global/tokens/logos/0xcDB94376E0330B13F5Becaece169602cbB14399c.png',
-                      tokenAddress:
-                        '0xcDB94376E0330B13F5Becaece169602cbB14399c',
-                      tokenName: 'Arbitrum',
-                      tokenSymbol: 'ARB',
-                      trusted: false,
-                      type: 'ERC20',
-                      value: '40000000000000000000000',
-                    },
-                    type: 'Transfer',
-                  },
-                  txStatus: 'SUCCESS',
-                },
-                type: 'TRANSACTION',
-              },
-              {
-                conflictType: 'None',
-                transaction: {
-                  executionInfo: {
-                    confirmationsRequired: 2,
-                    confirmationsSubmitted: 2,
-                    missingSigners: null,
-                    nonce: 3,
-                    type: 'MULTISIG',
-                  },
-                  id: 'multisig_0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4_0xa0772fe5d26572fa777e0b4557da9a03d208086078215245ed26502f7a7bf683',
-                  safeAppInfo: null,
-                  timestamp: 1710927685000,
-                  txInfo: {
-                    direction: 'OUTGOING',
-                    humanDescription: 'Send 40000 ARB to 0xFd7e...A512',
-                    recipient: {
-                      logoUri: null,
-                      name: null,
-                      value: '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-                    },
-                    richDecodedInfo: {
-                      fragments: [
-                        {
-                          type: 'text',
-                          value: 'Send',
-                        },
-                        {
-                          logoUri:
-                            'https://safe-transaction-assets.safe.global/tokens/logos/0x912CE59144191C1204E64559FE8253a0e49E6548.png',
-                          symbol: 'ARB',
-                          type: 'tokenValue',
-                          value: '40000',
-                        },
-                        {
-                          type: 'text',
-                          value: 'to',
-                        },
-                        {
-                          type: 'address',
-                          value: '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-                        },
-                      ],
-                    },
-                    sender: {
-                      logoUri: null,
-                      name: null,
-                      value: '0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4',
-                    },
-                    transferInfo: {
-                      decimals: 18,
-                      imitation: null,
-                      logoUri:
-                        'https://safe-transaction-assets.safe.global/tokens/logos/0x912CE59144191C1204E64559FE8253a0e49E6548.png',
-                      tokenAddress:
-                        '0x912CE59144191C1204E64559FE8253a0e49E6548',
-                      tokenName: 'Arbitrum',
-                      tokenSymbol: 'ARB',
-                      trusted: null,
-                      type: 'ERC20',
-                      value: '40000000000000000000000',
-                    },
-                    type: 'Transfer',
-                  },
-                  txStatus: 'SUCCESS',
-                },
-                type: 'TRANSACTION',
-              },
-            ]);
-          });
-      });
-
-      it('should filter out outgoing ERC-20 transfers that imitate a direct predecessor', async () => {
-        // Example taken from arb1:0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4
-        const chain = chainBuilder().build();
-        const safe = safeBuilder()
-          .with('address', '0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4')
-          .with('owners', [
-            '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-            '0xBE7d3f723d069a941228e44e222b37fBCe0731ce',
-          ])
-          .build();
-
-        const results = [
-          {
-            executionDate: '2024-03-20T09:42:58Z',
-            to: '0x0e74DE9501F54610169EDB5D6CC6b559d403D4B7',
-            data: '0x12514bba00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000010000000000000000000000000cdb94376e0330b13f5becaece169602cbb14399c000000000000000000000000a52cd97c022e5373ee305010ff2263d29bb87a7000000000000000000000000000000000000000000000000000000000000000000000000000000000000000009a6de84bf23ed9ba92bdb8027037975ef181b1c4000000000000000000000000345e400b58fbc0f9bc0eb176b6a125f35056ac300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000fd737d98d9f6b566cc104fd40aecc449b8eaa5120000000000000000000000001b4b73713ada8a6f864b58d0dd6099ca54e59aa30000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000878678326eac90000000000000000000000000000000000000000000000000000000000000001ed02f00000000000000000000000000000000000000000000000000000000000000000',
-            txHash:
-              '0xf6ab60f4e79f01e6f9615aa134725d5fe0d7222b47a441fff6233f9219593bb4',
-            blockNumber: 192295013,
-            transfers: [
-              {
-                type: 'ERC20_TRANSFER',
-                executionDate: '2024-03-20T09:42:58Z',
-                blockNumber: 192295013,
-                transactionHash:
-                  '0xf6ab60f4e79f01e6f9615aa134725d5fe0d7222b47a441fff6233f9219593bb4',
-                to: '0xFd737d98d9F6b566cc104Fd40aEcC449b8EaA512',
-                value: '40000000000000000000000',
-                tokenId: null,
-                tokenAddress: '0xcDB94376E0330B13F5Becaece169602cbB14399c',
-                transferId:
-                  'ef6ab60f4e79f01e6f9615aa134725d5fe0d7222b47a441fff6233f9219593bb44',
-                tokenInfo: {
-                  type: 'ERC20',
-                  address: '0xcDB94376E0330B13F5Becaece169602cbB14399c',
-                  name: 'Arbitrum',
-                  symbol: 'ARB',
-                  decimals: 18,
-                  logoUri:
-                    'https://safe-transaction-assets.safe.global/tokens/logos/0xcDB94376E0330B13F5Becaece169602cbB14399c.png',
-                  trusted: false,
-                },
-                from: '0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4',
-              },
-            ],
-            txType: 'ETHEREUM_TRANSACTION',
-            from: '0xA504C7e72AD25927EbFA6ea14aD5EA56fb0aB64a',
-          },
-          {
-            safe: '0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4',
-            to: '0x912CE59144191C1204E64559FE8253a0e49E6548',
-            value: '0',
-            data: '0xa9059cbb000000000000000000000000fd7e78798f312a29bb03133de9d26e151d3aa512000000000000000000000000000000000000000000000878678326eac9000000',
-            operation: 0,
-            gasToken: '0x0000000000000000000000000000000000000000',
-            safeTxGas: 0,
-            baseGas: 0,
-            gasPrice: '0',
-            refundReceiver: '0x0000000000000000000000000000000000000000',
-            nonce: 3,
-            executionDate: '2024-03-20T09:41:25Z',
-            submissionDate: '2024-03-20T09:38:11.447366Z',
-            modified: '2024-03-20T09:41:25Z',
-            blockNumber: 192294646,
-            transactionHash:
-              '0x7e60c76bb3b350dc552f3c261faf7dcdbfe141f7a740d9495efd49f371817813',
-            safeTxHash:
-              '0xa0772fe5d26572fa777e0b4557da9a03d208086078215245ed26502f7a7bf683',
-            proposer: '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-            executor: '0xBE7d3f723d069a941228e44e222b37fBCe0731ce',
-            isExecuted: true,
-            isSuccessful: true,
-            ethGasPrice: '10946000',
-            maxFeePerGas: null,
-            maxPriorityFeePerGas: null,
-            gasUsed: 249105,
-            fee: '2726703330000',
-            origin: '{}',
-            dataDecoded: {
-              method: 'transfer',
-              parameters: [
-                {
-                  name: 'to',
-                  type: 'address',
-                  value: '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-                },
-                {
-                  name: 'value',
-                  type: 'uint256',
-                  value: '40000000000000000000000',
-                },
-              ],
-            },
-            confirmationsRequired: 2,
-            confirmations: [
-              {
-                owner: '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-                submissionDate: '2024-03-20T09:38:11.479197Z',
-                transactionHash: null,
-                signature:
-                  '0x552b4bfaf92e7486785f6f922975e131f244152613486f2567112913a910047f14a5f5ce410d39192d0fbc7df1d9dc43e7c11b64510d44151dd2712be14665eb1c',
-                signatureType: 'EOA',
-              },
-              {
-                owner: '0xBE7d3f723d069a941228e44e222b37fBCe0731ce',
-                submissionDate: '2024-03-20T09:41:25Z',
-                transactionHash: null,
-                signature:
-                  '0x000000000000000000000000be7d3f723d069a941228e44e222b37fbce0731ce000000000000000000000000000000000000000000000000000000000000000001',
-                signatureType: 'APPROVED_HASH',
-              },
-            ],
-            trusted: true,
-            signatures:
-              '0x000000000000000000000000be7d3f723d069a941228e44e222b37fbce0731ce000000000000000000000000000000000000000000000000000000000000000001552b4bfaf92e7486785f6f922975e131f244152613486f2567112913a910047f14a5f5ce410d39192d0fbc7df1d9dc43e7c11b64510d44151dd2712be14665eb1c',
-            transfers: [
-              {
-                type: 'ERC20_TRANSFER',
-                executionDate: '2024-03-20T09:41:25Z',
-                blockNumber: 192294646,
-                transactionHash:
-                  '0x7e60c76bb3b350dc552f3c261faf7dcdbfe141f7a740d9495efd49f371817813',
-                to: '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-                value: '40000000000000000000000',
-                tokenId: null,
-                tokenAddress: '0x912CE59144191C1204E64559FE8253a0e49E6548',
-                transferId:
-                  'e7e60c76bb3b350dc552f3c261faf7dcdbfe141f7a740d9495efd49f3718178133',
-                tokenInfo: {
-                  type: 'ERC20',
-                  address: '0x912CE59144191C1204E64559FE8253a0e49E6548',
-                  name: 'Arbitrum',
-                  symbol: 'ARB',
-                  decimals: 18,
-                  logoUri:
-                    'https://safe-transaction-assets.safe.global/tokens/logos/0x912CE59144191C1204E64559FE8253a0e49E6548.png',
-                  trusted: false,
-                },
-                from: '0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4',
-              },
-            ],
-            txType: 'MULTISIG_TRANSACTION',
-          },
-        ];
-
-        const getChainUrl = `${safeConfigUrl}/api/v1/chains/${chain.chainId}`;
-        const getAllTransactionsUrl = `${chain.transactionService}/api/v1/safes/${safe.address}/all-transactions/`;
-        const getSafeUrl = `${chain.transactionService}/api/v1/safes/${safe.address}`;
-        const getImitationTokenAddressUrl = `${chain.transactionService}/api/v1/tokens/${results[0].transfers[0].tokenAddress}`;
-        const getTokenAddressUrl = `${chain.transactionService}/api/v1/tokens/${results[1].transfers[0].tokenAddress}`;
-        networkService.get.mockImplementation(({ url }) => {
-          if (url === getChainUrl) {
-            return Promise.resolve({ data: chain, status: 200 });
-          }
-          if (url === getAllTransactionsUrl) {
-            return Promise.resolve({
-              data: pageBuilder().with('results', results).build(),
-              status: 200,
-            });
-          }
-          if (url === getSafeUrl) {
-            return Promise.resolve({ data: safe, status: 200 });
-          }
-          if (url === getImitationTokenAddressUrl) {
-            return Promise.resolve({
-              data: results[0].transfers[0].tokenInfo,
-              status: 200,
-            });
-          }
-          if (url === getTokenAddressUrl) {
-            return Promise.resolve({
-              data: results[1].transfers[0].tokenInfo,
-              status: 200,
-            });
-          }
-          return Promise.reject(new Error(`Could not match ${url}`));
-        });
-
-        await request(app.getHttpServer())
-          .get(
-            `/v1/chains/${chain.chainId}/safes/${safe.address}/transactions/history?trusted=false&imitation=false`,
-          )
-          .expect(200)
-          .then(({ body }) => {
-            expect(body.results).toStrictEqual([
-              {
-                timestamp: 1710927685000,
-                type: 'DATE_LABEL',
-              },
-              {
-                conflictType: 'None',
-                transaction: {
-                  executionInfo: {
-                    confirmationsRequired: 2,
-                    confirmationsSubmitted: 2,
-                    missingSigners: null,
-                    nonce: 3,
-                    type: 'MULTISIG',
-                  },
-                  id: 'multisig_0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4_0xa0772fe5d26572fa777e0b4557da9a03d208086078215245ed26502f7a7bf683',
-                  safeAppInfo: null,
-                  timestamp: 1710927685000,
-                  txInfo: {
-                    direction: 'OUTGOING',
-                    humanDescription: 'Send 40000 ARB to 0xFd7e...A512',
-                    recipient: {
-                      logoUri: null,
-                      name: null,
-                      value: '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-                    },
-                    richDecodedInfo: {
-                      fragments: [
-                        {
-                          type: 'text',
-                          value: 'Send',
-                        },
-                        {
-                          logoUri:
-                            'https://safe-transaction-assets.safe.global/tokens/logos/0x912CE59144191C1204E64559FE8253a0e49E6548.png',
-                          symbol: 'ARB',
-                          type: 'tokenValue',
-                          value: '40000',
-                        },
-                        {
-                          type: 'text',
-                          value: 'to',
-                        },
-                        {
-                          type: 'address',
-                          value: '0xFd7e78798f312A29bb03133de9D26E151D3aA512',
-                        },
-                      ],
-                    },
-                    sender: {
-                      logoUri: null,
-                      name: null,
-                      value: '0x9a6dE84bF23ed9ba92BDB8027037975ef181b1c4',
-                    },
-                    transferInfo: {
-                      decimals: 18,
-                      imitation: null,
-                      logoUri:
-                        'https://safe-transaction-assets.safe.global/tokens/logos/0x912CE59144191C1204E64559FE8253a0e49E6548.png',
-                      tokenAddress:
-                        '0x912CE59144191C1204E64559FE8253a0e49E6548',
-                      tokenName: 'Arbitrum',
-                      tokenSymbol: 'ARB',
-                      trusted: null,
-                      type: 'ERC20',
-                      value: '40000000000000000000000',
-                    },
-                    type: 'Transfer',
-                  },
-                  txStatus: 'SUCCESS',
-                },
-                type: 'TRANSACTION',
-              },
-            ]);
-          });
-      });
-    });
   });
 });

@@ -19,20 +19,22 @@ export class MessagesRepository implements IMessagesRepository {
     chainId: string;
     messageHash: string;
   }): Promise<Message> {
-    const transactionService =
-      await this.transactionApiManager.getTransactionApi(args.chainId);
+    const transactionService = await this.transactionApiManager.getApi(
+      args.chainId,
+    );
     const message = await transactionService.getMessageByHash(args.messageHash);
     return MessageSchema.parse(message);
   }
 
   async getMessagesBySafe(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
     limit?: number | undefined;
     offset?: number | undefined;
   }): Promise<Page<Message>> {
-    const transactionService =
-      await this.transactionApiManager.getTransactionApi(args.chainId);
+    const transactionService = await this.transactionApiManager.getApi(
+      args.chainId,
+    );
     const page = await transactionService.getMessagesBySafe({
       safeAddress: args.safeAddress,
       limit: args.limit,
@@ -44,13 +46,14 @@ export class MessagesRepository implements IMessagesRepository {
 
   async createMessage(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
     message: unknown;
     safeAppId: number | null;
     signature: string;
   }): Promise<unknown> {
-    const transactionService =
-      await this.transactionApiManager.getTransactionApi(args.chainId);
+    const transactionService = await this.transactionApiManager.getApi(
+      args.chainId,
+    );
 
     return transactionService.postMessage({
       safeAddress: args.safeAddress,
@@ -65,8 +68,9 @@ export class MessagesRepository implements IMessagesRepository {
     messageHash: string;
     signature: `0x${string}`;
   }): Promise<unknown> {
-    const transactionService =
-      await this.transactionApiManager.getTransactionApi(args.chainId);
+    const transactionService = await this.transactionApiManager.getApi(
+      args.chainId,
+    );
 
     return transactionService.postMessageSignature({
       messageHash: args.messageHash,
@@ -76,11 +80,9 @@ export class MessagesRepository implements IMessagesRepository {
 
   async clearMessagesBySafe(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
   }): Promise<void> {
-    const api = await this.transactionApiManager.getTransactionApi(
-      args.chainId,
-    );
+    const api = await this.transactionApiManager.getApi(args.chainId);
     await api.clearMessagesBySafe(args);
   }
 
@@ -88,9 +90,7 @@ export class MessagesRepository implements IMessagesRepository {
     chainId: string;
     messageHash: string;
   }): Promise<void> {
-    const api = await this.transactionApiManager.getTransactionApi(
-      args.chainId,
-    );
+    const api = await this.transactionApiManager.getApi(args.chainId);
     await api.clearMessagesByHash(args);
   }
 }

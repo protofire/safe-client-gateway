@@ -1,7 +1,7 @@
 import { faker } from '@faker-js/faker';
 import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import * as request from 'supertest';
+import request from 'supertest';
 import { TestAppProvider } from '@/__tests__/test-app.provider';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import configuration from '@/config/entities/__tests__/configuration';
@@ -34,14 +34,13 @@ import { CacheModule } from '@/datasources/cache/cache.module';
 import { RequestScopedLoggingModule } from '@/logging/logging.module';
 import { NetworkModule } from '@/datasources/network/network.module';
 import { NetworkResponseError } from '@/datasources/network/entities/network.error.entity';
-import { AccountDataSourceModule } from '@/datasources/account/account.datasource.module';
-import { TestAccountDataSourceModule } from '@/datasources/account/__tests__/test.account.datasource.module';
 import { getAddress } from 'viem';
 import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
 import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
+import { Server } from 'net';
 
 describe('List incoming transfers by Safe - Transactions Controller (Unit)', () => {
-  let app: INestApplication;
+  let app: INestApplication<Server>;
   let safeConfigUrl: string;
   let networkService: jest.MockedObjectDeep<INetworkService>;
 
@@ -51,8 +50,6 @@ describe('List incoming transfers by Safe - Transactions Controller (Unit)', () 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(configuration)],
     })
-      .overrideModule(AccountDataSourceModule)
-      .useModule(TestAccountDataSourceModule)
       .overrideModule(CacheModule)
       .useModule(TestCacheModule)
       .overrideModule(RequestScopedLoggingModule)
@@ -63,8 +60,10 @@ describe('List incoming transfers by Safe - Transactions Controller (Unit)', () 
       .useModule(TestQueuesApiModule)
       .compile();
 
-    const configurationService = moduleFixture.get(IConfigurationService);
-    safeConfigUrl = configurationService.get('safeConfig.baseUri');
+    const configurationService = moduleFixture.get<IConfigurationService>(
+      IConfigurationService,
+    );
+    safeConfigUrl = configurationService.getOrThrow('safeConfig.baseUri');
     networkService = moduleFixture.get(NetworkService);
 
     app = await new TestAppProvider().provide(moduleFixture);
@@ -112,7 +111,8 @@ describe('List incoming transfers by Safe - Transactions Controller (Unit)', () 
     });
     const error = new NetworkResponseError(
       new URL(
-        `${chainResponse.transactionService}/v1/chains/${chainId}/safes/${safeAddress}/incoming-transfers/?cursor=limit%3D${limit}%26offset%3D${offset}`,
+        // Param ValidationPipe checksums address
+        `${chainResponse.transactionService}/v1/chains/${chainId}/safes/${getAddress(safeAddress)}/incoming-transfers/?cursor=limit%3D${limit}%26offset%3D${offset}`,
       ),
       { status: 500 } as Response,
     );
@@ -133,7 +133,8 @@ describe('List incoming transfers by Safe - Transactions Controller (Unit)', () 
       url: `${safeConfigUrl}/api/v1/chains/${chainId}`,
     });
     expect(networkService.get).toHaveBeenCalledWith({
-      url: `${chainResponse.transactionService}/api/v1/safes/${safeAddress}/incoming-transfers/`,
+      // Param ValidationPipe checksums address
+      url: `${chainResponse.transactionService}/api/v1/safes/${getAddress(safeAddress)}/incoming-transfers/`,
       networkRequest: expect.objectContaining({
         params: expect.objectContaining({ offset, limit }),
       }),
@@ -232,6 +233,7 @@ describe('List incoming transfers by Safe - Transactions Controller (Unit)', () 
               type: 'TRANSACTION',
               transaction: {
                 id: `transfer_${safe.address}_e1015fc6905`,
+                txHash: erc20Transfer.transactionHash,
                 executionInfo: null,
                 safeAppInfo: null,
                 timestamp: erc20Transfer.executionDate.getTime(),
@@ -316,6 +318,7 @@ describe('List incoming transfers by Safe - Transactions Controller (Unit)', () 
               type: 'TRANSACTION',
               transaction: {
                 id: `transfer_${safe.address}_e1015fc6905`,
+                txHash: erc20Transfer.transactionHash,
                 executionInfo: null,
                 safeAppInfo: null,
                 timestamp: erc20Transfer.executionDate.getTime(),
@@ -452,6 +455,7 @@ describe('List incoming transfers by Safe - Transactions Controller (Unit)', () 
               type: 'TRANSACTION',
               transaction: {
                 id: `transfer_${safe.address}_e1015fc6905`,
+                txHash: erc721Transfer.transactionHash,
                 timestamp: erc721Transfer.executionDate.getTime(),
                 txStatus: 'SUCCESS',
                 txInfo: {
@@ -522,6 +526,7 @@ describe('List incoming transfers by Safe - Transactions Controller (Unit)', () 
               type: 'TRANSACTION',
               transaction: {
                 id: `transfer_${safe.address}_e1015fc690`,
+                txHash: nativeTokenTransfer.transactionHash,
                 timestamp: nativeTokenTransfer.executionDate.getTime(),
                 txStatus: 'SUCCESS',
                 txInfo: {

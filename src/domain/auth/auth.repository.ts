@@ -20,12 +20,16 @@ export class AuthRepository implements IAuthRepository {
   signToken<T extends AuthPayloadDto>(
     payload: T,
     options?: {
-      expiresIn?: number;
-      notBefore?: number;
+      exp?: Date;
+      nbf?: Date;
     },
   ): string {
-    // TODO: Verify payload before signing it
-    return this.jwtService.sign(payload, options);
+    const authPayloadDto = AuthPayloadDtoSchema.parse(payload);
+    return this.jwtService.sign({
+      ...authPayloadDto,
+      exp: options?.exp,
+      nbf: options?.nbf,
+    });
   }
 
   verifyToken(accessToken: string): AuthPayloadDto {

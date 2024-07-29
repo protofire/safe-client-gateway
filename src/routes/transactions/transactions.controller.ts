@@ -38,6 +38,7 @@ import { TransactionsService } from '@/routes/transactions/transactions.service'
 import { DeleteTransactionDto } from '@/routes/transactions/entities/delete-transaction.dto.entity';
 import { ValidationPipe } from '@/validation/pipes/validation.pipe';
 import { DeleteTransactionDtoSchema } from '@/routes/transactions/entities/schemas/delete-transaction.dto.schema';
+import { AddressSchema } from '@/validation/entities/schemas/address.schema';
 
 @ApiTags('transactions')
 @Controller({
@@ -72,7 +73,8 @@ export class TransactionsController {
     @Param('chainId') chainId: string,
     @RouteUrlDecorator() routeUrl: URL,
     @PaginationDataDecorator() paginationData: PaginationData,
-    @Param('safeAddress') safeAddress: string,
+    @Param('safeAddress', new ValidationPipe(AddressSchema))
+    safeAddress: `0x${string}`,
     @Query('execution_date__gte') executionDateGte?: string,
     @Query('execution_date__lte') executionDateLte?: string,
     @Query('to') to?: string,
@@ -118,15 +120,18 @@ export class TransactionsController {
     @Param('chainId') chainId: string,
     @RouteUrlDecorator() routeUrl: URL,
     @PaginationDataDecorator() paginationData: PaginationData,
-    @Param('safeAddress') safeAddress: string,
+    @Param('safeAddress', new ValidationPipe(AddressSchema))
+    safeAddress: `0x${string}`,
     @Query('to') to?: string,
     @Query('module') module?: string,
+    @Query('transaction_hash') txHash?: string,
   ): Promise<Page<ModuleTransaction>> {
     return this.transactionsService.getModuleTransactions({
       chainId,
       routeUrl,
       safeAddress,
       to,
+      txHash,
       module,
       paginationData,
     });
@@ -159,7 +164,8 @@ export class TransactionsController {
   async getIncomingTransfers(
     @Param('chainId') chainId: string,
     @RouteUrlDecorator() routeUrl: URL,
-    @Param('safeAddress') safeAddress: string,
+    @Param('safeAddress', new ValidationPipe(AddressSchema))
+    safeAddress: `0x${string}`,
     @PaginationDataDecorator() paginationData: PaginationData,
     @Query('trusted', new DefaultValuePipe(true), ParseBoolPipe)
     trusted: boolean,
@@ -188,7 +194,8 @@ export class TransactionsController {
   @Post('chains/:chainId/transactions/:safeAddress/preview')
   async previewTransaction(
     @Param('chainId') chainId: string,
-    @Param('safeAddress') safeAddress: string,
+    @Param('safeAddress', new ValidationPipe(AddressSchema))
+    safeAddress: `0x${string}`,
     @Body(new ValidationPipe(PreviewTransactionDtoSchema))
     previewTransactionDto: PreviewTransactionDto,
   ): Promise<TransactionPreview> {
@@ -206,7 +213,8 @@ export class TransactionsController {
   async getTransactionQueue(
     @Param('chainId') chainId: string,
     @RouteUrlDecorator() routeUrl: URL,
-    @Param('safeAddress') safeAddress: string,
+    @Param('safeAddress', new ValidationPipe(AddressSchema))
+    safeAddress: `0x${string}`,
     @PaginationDataDecorator() paginationData: PaginationData,
     @Query('trusted', new DefaultValuePipe(true), ParseBoolPipe)
     trusted: boolean,
@@ -227,7 +235,8 @@ export class TransactionsController {
   async getTransactionsHistory(
     @Param('chainId') chainId: string,
     @RouteUrlDecorator() routeUrl: URL,
-    @Param('safeAddress') safeAddress: string,
+    @Param('safeAddress', new ValidationPipe(AddressSchema))
+    safeAddress: `0x${string}`,
     @PaginationDataDecorator() paginationData: PaginationData,
     @Query('timezone_offset', new DefaultValuePipe(0), ParseIntPipe)
     timezoneOffsetMs: number,
@@ -252,7 +261,8 @@ export class TransactionsController {
   @Post('chains/:chainId/transactions/:safeAddress/propose')
   async proposeTransaction(
     @Param('chainId') chainId: string,
-    @Param('safeAddress') safeAddress: string,
+    @Param('safeAddress', new ValidationPipe(AddressSchema))
+    safeAddress: `0x${string}`,
     @Body(new ValidationPipe(ProposeTransactionDtoSchema))
     proposeTransactionDto: ProposeTransactionDto,
   ): Promise<TransactionDetails> {

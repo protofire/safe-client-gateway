@@ -6,7 +6,8 @@ import {
 } from '@nestjs/common';
 import { CacheControlInterceptor } from '@/routes/common/interceptors/cache-control.interceptor';
 import { Test } from '@nestjs/testing';
-import * as request from 'supertest';
+import request from 'supertest';
+import { Server } from 'net';
 
 @Controller()
 @UseInterceptors(CacheControlInterceptor)
@@ -18,7 +19,7 @@ class TestController {
 }
 
 describe('CacheControlInterceptor tests', () => {
-  let app: INestApplication;
+  let app: INestApplication<Server>;
 
   beforeEach(async () => {
     const module = await Test.createTestingModule({

@@ -40,12 +40,18 @@ export const RootConfigurationSchema = z.object({
   LOG_LEVEL: z
     .enum(['error', 'warn', 'info', 'http', 'verbose', 'debug', 'silly'])
     .optional(),
+  // TODO: Reassess EMAIL_ keys after email integration
   EMAIL_API_APPLICATION_CODE: z.string(),
   EMAIL_API_FROM_EMAIL: z.string().email(),
   EMAIL_API_KEY: z.string(),
   EMAIL_TEMPLATE_RECOVERY_TX: z.string(),
   EMAIL_TEMPLATE_UNKNOWN_RECOVERY_TX: z.string(),
   EMAIL_TEMPLATE_VERIFICATION_CODE: z.string(),
+  INFURA_API_KEY: z.string(),
+  PUSH_NOTIFICATIONS_API_PROJECT: z.string(),
+  PUSH_NOTIFICATIONS_API_SERVICE_ACCOUNT_CLIENT_EMAIL: z.string().email(),
+  PUSH_NOTIFICATIONS_API_SERVICE_ACCOUNT_PRIVATE_KEY: z.string(),
+  RELAY_PROVIDER_API_KEY_ARBITRUM_ONE: z.string(),
   RELAY_PROVIDER_API_KEY_GNOSIS_CHAIN: z.string(),
   RELAY_PROVIDER_API_KEY_SEPOLIA: z.string(),
 });

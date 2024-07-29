@@ -1,7 +1,7 @@
 import { Body, Controller, Get, INestApplication, Post } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { TestAppProvider } from '@/__tests__/test-app.provider';
-import * as request from 'supertest';
+import request from 'supertest';
 import { APP_FILTER } from '@nestjs/core';
 import { TestLoggingModule } from '@/logging/__tests__/test.logging.module';
 import { ConfigurationModule } from '@/config/configuration.module';
@@ -10,6 +10,7 @@ import { ZodErrorFilter } from '@/routes/common/filters/zod-error.filter';
 import { z } from 'zod';
 import { ValidationPipe } from '@/validation/pipes/validation.pipe';
 import { faker } from '@faker-js/faker';
+import { Server } from 'net';
 
 const ZodSchema = z.object({
   value: z.string(),
@@ -32,36 +33,36 @@ const ZodNestedUnionSchema = z.union([
 @Controller({})
 class TestController {
   @Post('zod-exception')
-  async zodError(
+  zodError(
     @Body(new ValidationPipe(ZodSchema)) body: z.infer<typeof ZodSchema>,
-  ): Promise<z.infer<typeof ZodSchema>> {
+  ): z.infer<typeof ZodSchema> {
     return body;
   }
 
   @Post('zod-union-exception')
-  async zodUnionError(
+  zodUnionError(
     @Body(new ValidationPipe(ZodUnionSchema))
     body: z.infer<typeof ZodUnionSchema>,
-  ): Promise<z.infer<typeof ZodUnionSchema>> {
+  ): z.infer<typeof ZodUnionSchema> {
     return body;
   }
 
   @Post('zod-nested-union-exception')
-  async zodNestedUnionError(
+  zodNestedUnionError(
     @Body(new ValidationPipe(ZodNestedUnionSchema))
     body: z.infer<typeof ZodNestedUnionSchema>,
-  ): Promise<z.infer<typeof ZodNestedUnionSchema>> {
+  ): z.infer<typeof ZodNestedUnionSchema> {
     return body;
   }
 
   @Get('non-zod-exception')
-  async nonZodException(): Promise<void> {
+  nonZodException(): void {
     throw new Error('Some random error');
   }
 }
 
 describe('ZodErrorFilter tests', () => {
-  let app: INestApplication;
+  let app: INestApplication<Server>;
 
   beforeEach(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({

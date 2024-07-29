@@ -2,7 +2,7 @@ import { faker } from '@faker-js/faker';
 import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { omit } from 'lodash';
-import * as request from 'supertest';
+import request from 'supertest';
 import { TestAppProvider } from '@/__tests__/test-app.provider';
 import { TestCacheModule } from '@/datasources/cache/__tests__/test.cache.module';
 import { TestNetworkModule } from '@/datasources/network/__tests__/test.network.module';
@@ -24,14 +24,13 @@ import { createDelegateDtoBuilder } from '@/routes/delegates/entities/__tests__/
 import { deleteDelegateDtoBuilder } from '@/routes/delegates/entities/__tests__/delete-delegate.dto.builder';
 import { deleteSafeDelegateDtoBuilder } from '@/routes/delegates/entities/__tests__/delete-safe-delegate.dto.builder';
 import { NetworkResponseError } from '@/datasources/network/entities/network.error.entity';
-import { AccountDataSourceModule } from '@/datasources/account/account.datasource.module';
-import { TestAccountDataSourceModule } from '@/datasources/account/__tests__/test.account.datasource.module';
 import { getAddress } from 'viem';
 import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
 import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
+import { Server } from 'net';
 
 describe('Delegates controller', () => {
-  let app: INestApplication;
+  let app: INestApplication<Server>;
   let safeConfigUrl: string;
   let networkService: jest.MockedObjectDeep<INetworkService>;
 
@@ -41,8 +40,6 @@ describe('Delegates controller', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(configuration)],
     })
-      .overrideModule(AccountDataSourceModule)
-      .useModule(TestAccountDataSourceModule)
       .overrideModule(CacheModule)
       .useModule(TestCacheModule)
       .overrideModule(RequestScopedLoggingModule)
@@ -53,8 +50,10 @@ describe('Delegates controller', () => {
       .useModule(TestQueuesApiModule)
       .compile();
 
-    const configurationService = moduleFixture.get(IConfigurationService);
-    safeConfigUrl = configurationService.get('safeConfig.baseUri');
+    const configurationService = moduleFixture.get<IConfigurationService>(
+      IConfigurationService,
+    );
+    safeConfigUrl = configurationService.getOrThrow('safeConfig.baseUri');
     networkService = moduleFixture.get(NetworkService);
 
     app = await new TestAppProvider().provide(moduleFixture);

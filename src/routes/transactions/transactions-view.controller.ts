@@ -25,10 +25,14 @@ import {
   TransactionDataDto,
   TransactionDataDtoSchema,
 } from '@/routes/common/entities/transaction-data.dto.entity';
-import { SetPreSignatureDecoderModule } from '@/domain/swaps/contracts/decoders/set-pre-signature-decoder.helper';
+import { GPv2DecoderModule } from '@/domain/swaps/contracts/decoders/gp-v2-decoder.helper';
 import { ValidationPipe } from '@/validation/pipes/validation.pipe';
 import { NumericStringSchema } from '@/validation/entities/schemas/numeric-string.schema';
 import { AddressSchema } from '@/validation/entities/schemas/address.schema';
+import { TwapOrderHelperModule } from '@/routes/transactions/helpers/twap-order.helper';
+import { SwapsRepositoryModule } from '@/domain/swaps/swaps-repository.module';
+import { ComposableCowDecoder } from '@/domain/swaps/contracts/decoders/composable-cow-decoder.helper';
+import { SwapAppsHelperModule } from '@/routes/transactions/helpers/swap-apps.helper';
 
 @ApiTags('transactions')
 @Controller({
@@ -62,6 +66,7 @@ export class TransactionsViewController {
   ): Promise<ConfirmationView> {
     return this.service.getTransactionConfirmationView({
       chainId,
+      safeAddress,
       transactionDataDto,
     });
   }
@@ -70,10 +75,13 @@ export class TransactionsViewController {
 @Module({
   imports: [
     DataDecodedRepositoryModule,
-    SetPreSignatureDecoderModule,
+    GPv2DecoderModule,
     SwapOrderHelperModule,
+    TwapOrderHelperModule,
+    SwapsRepositoryModule,
+    SwapAppsHelperModule,
   ],
-  providers: [TransactionsViewService],
+  providers: [TransactionsViewService, ComposableCowDecoder],
   controllers: [TransactionsViewController],
 })
 export class TransactionsViewControllerModule {}

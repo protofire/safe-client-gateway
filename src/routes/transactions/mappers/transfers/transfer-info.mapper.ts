@@ -5,46 +5,112 @@ import { Token } from '@/domain/tokens/entities/token.entity';
 import { TokenRepository } from '@/domain/tokens/token.repository';
 import { ITokenRepository } from '@/domain/tokens/token.repository.interface';
 import { AddressInfoHelper } from '@/routes/common/address-info/address-info.helper';
-import { TransferTransactionInfo } from '@/routes/transactions/entities/transfer-transaction-info.entity';
+import {
+  TransferDirection,
+  TransferTransactionInfo,
+} from '@/routes/transactions/entities/transfer-transaction-info.entity';
 import { Erc20Transfer } from '@/routes/transactions/entities/transfers/erc20-transfer.entity';
 import { Erc721Transfer } from '@/routes/transactions/entities/transfers/erc721-transfer.entity';
 import { NativeCoinTransfer } from '@/routes/transactions/entities/transfers/native-coin-transfer.entity';
 import { getTransferDirection } from '@/routes/transactions/mappers/common/transfer-direction.helper';
 import { Transfer } from '@/routes/transactions/entities/transfers/transfer.entity';
+import { IConfigurationService } from '@/config/configuration.service.interface';
+import { SwapTransferInfoMapper } from '@/routes/transactions/mappers/transfers/swap-transfer-info.mapper';
+import { SwapTransferTransactionInfo } from '@/routes/transactions/swap-transfer-transaction-info.entity';
+import { AddressInfo } from '@/routes/common/entities/address-info.entity';
+import { LoggingService, ILoggingService } from '@/logging/logging.interface';
 
 @Injectable()
 export class TransferInfoMapper {
+  private readonly isSwapsDecodingEnabled: boolean;
+  private readonly isTwapsDecodingEnabled: boolean;
+
   constructor(
+    @Inject(IConfigurationService)
+    private readonly configurationService: IConfigurationService,
     @Inject(ITokenRepository) private readonly tokenRepository: TokenRepository,
+    private readonly swapTransferInfoMapper: SwapTransferInfoMapper,
     private readonly addressInfoHelper: AddressInfoHelper,
-  ) {}
+    @Inject(LoggingService) private readonly loggingService: ILoggingService,
+  ) {
+    this.isSwapsDecodingEnabled = this.configurationService.getOrThrow(
+      'features.swapsDecoding',
+    );
+    this.isTwapsDecodingEnabled = this.configurationService.getOrThrow(
+      'features.twapsDecoding',
+    );
+  }
 
   async mapTransferInfo(
     chainId: string,
     domainTransfer: DomainTransfer,
     safe: Safe,
-  ): Promise<TransferTransactionInfo> {
+  ): Promise<SwapTransferTransactionInfo | TransferTransactionInfo> {
     const { from, to } = domainTransfer;
-    const sender = await this.addressInfoHelper.getOrDefault(chainId, from, [
-      'TOKEN',
-      'CONTRACT',
-    ]);
 
-    const recipient = await this.addressInfoHelper.getOrDefault(chainId, to, [
-      'TOKEN',
-      'CONTRACT',
+    const [sender, recipient, transferInfo] = await Promise.all([
+      this.addressInfoHelper.getOrDefault(chainId, from, ['TOKEN', 'CONTRACT']),
+      this.addressInfoHelper.getOrDefault(chainId, to, ['TOKEN', 'CONTRACT']),
+      this.getTransferByType(chainId, domainTransfer),
     ]);
 
     const direction = getTransferDirection(safe.address, from, to);
+
+    if (this.isSwapsDecodingEnabled && this.isTwapsDecodingEnabled) {
+      // If the transaction is a swap-based transfer, we return it immediately
+      const swapTransfer = await this.mapSwapTransfer({
+        sender,
+        recipient,
+        direction,
+        transferInfo,
+        chainId,
+        safeAddress: safe.address,
+        domainTransfer,
+      });
+
+      if (swapTransfer) {
+        return swapTransfer;
+      }
+    }
 
     return new TransferTransactionInfo(
       sender,
       recipient,
       direction,
-      await this.getTransferByType(chainId, domainTransfer),
+      transferInfo,
       null,
       null,
     );
+  }
+
+  /**
+   * Maps a swap transfer transaction.
+   * If the transaction is not a swap transfer, it returns null.
+   *
+   * @param args.sender - {@link AddressInfo} sender of the transfer
+   * @param args.recipient - {@link AddressInfo} recipient of the transfer
+   * @param args.direction - {@link TransferDirection} of the transfer
+   * @param args.chainId - chain id of the transfer
+   * @param args.safeAddress - safe address of the transfer
+   * @param args.transferInfo - {@link Transfer} info
+   * @param args.domainTransfer - {@link DomainTransfer} domain transfer
+   */
+  private async mapSwapTransfer(args: {
+    sender: AddressInfo;
+    recipient: AddressInfo;
+    direction: TransferDirection;
+    chainId: string;
+    safeAddress: `0x${string}`;
+    transferInfo: Transfer;
+    domainTransfer: DomainTransfer;
+  }): Promise<SwapTransferTransactionInfo | null> {
+    try {
+      return await this.swapTransferInfoMapper.mapSwapTransferInfo(args);
+    } catch (error) {
+      // There were either issues mapping the swap transfer or it is a "normal" transfer
+      this.loggingService.warn(error);
+      return null;
+    }
   }
 
   private async getTransferByType(

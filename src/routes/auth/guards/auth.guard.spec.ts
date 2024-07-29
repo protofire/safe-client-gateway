@@ -10,26 +10,26 @@ import { AuthGuard } from '@/routes/auth/guards/auth.guard';
 import { faker } from '@faker-js/faker';
 import { Controller, Get, INestApplication, UseGuards } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import * as request from 'supertest';
+import request from 'supertest';
 import { AuthRepositoryModule } from '@/domain/auth/auth.repository.interface';
-import { getSecondsUntil } from '@/domain/common/utils/time';
 import {
   JWT_CONFIGURATION_MODULE,
   JwtConfigurationModule,
 } from '@/datasources/jwt/configuration/jwt.configuration.module';
 import jwtConfiguration from '@/datasources/jwt/configuration/__tests__/jwt.configuration';
+import { Server } from 'net';
 
 @Controller()
 class TestController {
   @Get('valid')
   @UseGuards(AuthGuard)
-  async validRoute(): Promise<{ secret: string }> {
+  validRoute(): { secret: string } {
     return { secret: 'This is a secret message' };
   }
 }
 
 describe('AuthGuard', () => {
-  let app: INestApplication;
+  let app: INestApplication<Server>;
   let jwtService: IJwtService;
 
   beforeEach(async () => {
@@ -95,9 +95,9 @@ describe('AuthGuard', () => {
 
   it('should not allow access if a token is not yet valid', async () => {
     const authPayloadDto = authPayloadDtoBuilder().build();
-    const notBefore = faker.date.future();
-    const accessToken = jwtService.sign(authPayloadDto, {
-      notBefore: getSecondsUntil(notBefore),
+    const accessToken = jwtService.sign({
+      ...authPayloadDto,
+      nbf: faker.date.future(),
     });
 
     expect(() => jwtService.verify(accessToken)).toThrow('jwt not active');
@@ -115,9 +115,9 @@ describe('AuthGuard', () => {
 
   it('should not allow access if a token has expired', async () => {
     const authPayloadDto = authPayloadDtoBuilder().build();
-    const expiresIn = 0; // Now
-    const accessToken = jwtService.sign(authPayloadDto, {
-      expiresIn,
+    const accessToken = jwtService.sign({
+      ...authPayloadDto,
+      exp: new Date(), // Now
     });
     jest.advanceTimersByTime(1_000);
 
@@ -154,7 +154,7 @@ describe('AuthGuard', () => {
   });
 
   describe('should allow access if the AuthPayload is valid', () => {
-    it('when notBefore nor expiresIn is specified', async () => {
+    it('when nbf nor exp is specified', async () => {
       const authPayloadDto = authPayloadDtoBuilder().build();
       const accessToken = jwtService.sign(authPayloadDto);
 
@@ -167,11 +167,11 @@ describe('AuthGuard', () => {
         .expect({ secret: 'This is a secret message' });
     });
 
-    it('when notBefore is and expirationTime is not specified', async () => {
+    it('when nbf is and exp is not specified', async () => {
       const authPayloadDto = authPayloadDtoBuilder().build();
-      const notBefore = faker.date.past();
-      const accessToken = jwtService.sign(authPayloadDto, {
-        notBefore: getSecondsUntil(notBefore),
+      const accessToken = jwtService.sign({
+        ...authPayloadDto,
+        nbf: faker.date.past(),
       });
 
       expect(() => jwtService.verify(accessToken)).not.toThrow();
@@ -183,11 +183,11 @@ describe('AuthGuard', () => {
         .expect({ secret: 'This is a secret message' });
     });
 
-    it('when expiresIn is and notBefore is not specified', async () => {
+    it('when exp is and nbf is not specified', async () => {
       const authPayloadDto = authPayloadDtoBuilder().build();
-      const expiresIn = faker.date.future();
-      const accessToken = jwtService.sign(authPayloadDto, {
-        expiresIn: getSecondsUntil(expiresIn),
+      const accessToken = jwtService.sign({
+        ...authPayloadDto,
+        exp: faker.date.future(),
       });
 
       expect(() => jwtService.verify(accessToken)).not.toThrow();
@@ -199,13 +199,12 @@ describe('AuthGuard', () => {
         .expect({ secret: 'This is a secret message' });
     });
 
-    it('when notBefore and expirationTime are specified', async () => {
+    it('when nbf and exp are specified', async () => {
       const authPayloadDto = authPayloadDtoBuilder().build();
-      const notBefore = faker.date.past();
-      const expiresIn = faker.date.future();
-      const accessToken = jwtService.sign(authPayloadDto, {
-        notBefore: getSecondsUntil(notBefore),
-        expiresIn: getSecondsUntil(expiresIn),
+      const accessToken = jwtService.sign({
+        ...authPayloadDto,
+        nbf: faker.date.past(),
+        exp: faker.date.future(),
       });
 
       expect(() => jwtService.verify(accessToken)).not.toThrow();

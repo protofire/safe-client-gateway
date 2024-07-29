@@ -14,15 +14,16 @@ export class DelegateRepository implements IDelegateRepository {
 
   async getDelegates(args: {
     chainId: string;
-    safeAddress?: string;
-    delegate?: string;
-    delegator?: string;
+    safeAddress?: `0x${string}`;
+    delegate?: `0x${string}`;
+    delegator?: `0x${string}`;
     label?: string;
     limit?: number;
     offset?: number;
   }): Promise<Page<Delegate>> {
-    const transactionService =
-      await this.transactionApiManager.getTransactionApi(args.chainId);
+    const transactionService = await this.transactionApiManager.getApi(
+      args.chainId,
+    );
     const page = await transactionService.getDelegates({
       safeAddress: args.safeAddress,
       delegate: args.delegate,
@@ -43,8 +44,9 @@ export class DelegateRepository implements IDelegateRepository {
     signature: string;
     label: string;
   }): Promise<void> {
-    const transactionService =
-      await this.transactionApiManager.getTransactionApi(args.chainId);
+    const transactionService = await this.transactionApiManager.getApi(
+      args.chainId,
+    );
     await transactionService.postDelegate({
       safeAddress: args.safeAddress,
       delegate: args.delegate,
@@ -56,12 +58,13 @@ export class DelegateRepository implements IDelegateRepository {
 
   async deleteDelegate(args: {
     chainId: string;
-    delegate: string;
-    delegator: string;
+    delegate: `0x${string}`;
+    delegator: `0x${string}`;
     signature: string;
   }): Promise<unknown> {
-    const transactionService =
-      await this.transactionApiManager.getTransactionApi(args.chainId);
+    const transactionService = await this.transactionApiManager.getApi(
+      args.chainId,
+    );
     return transactionService.deleteDelegate({
       delegate: args.delegate,
       delegator: args.delegator,
@@ -71,12 +74,13 @@ export class DelegateRepository implements IDelegateRepository {
 
   async deleteSafeDelegate(args: {
     chainId: string;
-    delegate: string;
-    safeAddress: string;
+    delegate: `0x${string}`;
+    safeAddress: `0x${string}`;
     signature: string;
   }): Promise<unknown> {
-    const transactionService =
-      await this.transactionApiManager.getTransactionApi(args.chainId);
+    const transactionService = await this.transactionApiManager.getApi(
+      args.chainId,
+    );
     return transactionService.deleteSafeDelegate({
       delegate: args.delegate,
       safeAddress: args.safeAddress,

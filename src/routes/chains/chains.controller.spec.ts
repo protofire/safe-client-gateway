@@ -1,7 +1,7 @@
 import { faker } from '@faker-js/faker';
 import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import * as request from 'supertest';
+import request from 'supertest';
 import { TestAppProvider } from '@/__tests__/test-app.provider';
 import { AppModule } from '@/app.module';
 import { IConfigurationService } from '@/config/configuration.service.interface';
@@ -26,14 +26,13 @@ import { Page } from '@/domain/entities/page.entity';
 import { TestLoggingModule } from '@/logging/__tests__/test.logging.module';
 import { RequestScopedLoggingModule } from '@/logging/logging.module';
 import { PaginationData } from '@/routes/common/pagination/pagination.data';
-import { AccountDataSourceModule } from '@/datasources/account/account.datasource.module';
-import { TestAccountDataSourceModule } from '@/datasources/account/__tests__/test.account.datasource.module';
 import { getAddress } from 'viem';
 import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
 import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
+import { Server } from 'net';
 
 describe('Chains Controller (Unit)', () => {
-  let app: INestApplication;
+  let app: INestApplication<Server>;
 
   let safeConfigUrl: string;
   let name: string;
@@ -57,8 +56,6 @@ describe('Chains Controller (Unit)', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(configuration)],
     })
-      .overrideModule(AccountDataSourceModule)
-      .useModule(TestAccountDataSourceModule)
       .overrideModule(CacheModule)
       .useModule(TestCacheModule)
       .overrideModule(RequestScopedLoggingModule)
@@ -69,11 +66,13 @@ describe('Chains Controller (Unit)', () => {
       .useModule(TestQueuesApiModule)
       .compile();
 
-    const configurationService = moduleFixture.get(IConfigurationService);
-    safeConfigUrl = configurationService.get('safeConfig.baseUri');
-    name = configurationService.get('about.name');
-    version = configurationService.get('about.version');
-    buildNumber = configurationService.get('about.buildNumber');
+    const configurationService = moduleFixture.get<IConfigurationService>(
+      IConfigurationService,
+    );
+    safeConfigUrl = configurationService.getOrThrow('safeConfig.baseUri');
+    name = configurationService.getOrThrow('about.name');
+    version = configurationService.getOrThrow('about.version');
+    buildNumber = configurationService.getOrThrow('about.buildNumber');
     networkService = moduleFixture.get(NetworkService);
 
     app = await new TestAppProvider().provide(moduleFixture);
@@ -117,6 +116,8 @@ describe('Chains Controller (Unit)', () => {
               ),
               disabledWallets: chainsResponse.results[0].disabledWallets,
               features: chainsResponse.results[0].features,
+              balancesProvider: chainsResponse.results[0].balancesProvider,
+              contractAddresses: chainsResponse.results[0].contractAddresses,
             },
             {
               chainId: chainsResponse.results[1].chainId,
@@ -140,6 +141,8 @@ describe('Chains Controller (Unit)', () => {
               ),
               disabledWallets: chainsResponse.results[1].disabledWallets,
               features: chainsResponse.results[1].features,
+              balancesProvider: chainsResponse.results[1].balancesProvider,
+              contractAddresses: chainsResponse.results[1].contractAddresses,
             },
           ],
         });
@@ -235,6 +238,8 @@ describe('Chains Controller (Unit)', () => {
         ensRegistryAddress: chainDomain.ensRegistryAddress
           ? getAddress(chainDomain.ensRegistryAddress)
           : chainDomain.ensRegistryAddress,
+        balancesProvider: chainDomain.balancesProvider,
+        contractAddresses: chainDomain.contractAddresses,
       };
       networkService.get.mockResolvedValueOnce({
         data: chainDomain,

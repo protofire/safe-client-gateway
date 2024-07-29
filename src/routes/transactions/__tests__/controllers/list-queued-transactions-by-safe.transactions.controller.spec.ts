@@ -1,7 +1,7 @@
 import { faker } from '@faker-js/faker';
 import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import * as request from 'supertest';
+import request from 'supertest';
 import { TestAppProvider } from '@/__tests__/test-app.provider';
 import { TestCacheModule } from '@/datasources/cache/__tests__/test.cache.module';
 import { TestNetworkModule } from '@/datasources/network/__tests__/test.network.module';
@@ -25,9 +25,10 @@ import {
 } from '@/datasources/network/network.service.interface';
 import { pageBuilder } from '@/domain/entities/__tests__/page.builder';
 import { getAddress } from 'viem';
+import { Server } from 'net';
 
 describe('List queued transactions by Safe - Transactions Controller (Unit)', () => {
-  let app: INestApplication;
+  let app: INestApplication<Server>;
   let safeConfigUrl: string;
   let networkService: jest.MockedObjectDeep<INetworkService>;
 
@@ -46,8 +47,10 @@ describe('List queued transactions by Safe - Transactions Controller (Unit)', ()
       ],
     }).compile();
 
-    const configurationService = moduleFixture.get(IConfigurationService);
-    safeConfigUrl = configurationService.get('safeConfig.baseUri');
+    const configurationService = moduleFixture.get<IConfigurationService>(
+      IConfigurationService,
+    );
+    safeConfigUrl = configurationService.getOrThrow('safeConfig.baseUri');
     networkService = moduleFixture.get(NetworkService);
 
     app = await new TestAppProvider().provide(moduleFixture);
