@@ -5,7 +5,8 @@ import {
   ICacheService,
 } from '@/datasources/cache/cache.service.interface';
 import { MAX_TTL } from '@/datasources/cache/constants';
-import { CacheDir } from '@/datasources/cache/entities/cache-dir.entity';
+import { CachedQueryResolver } from '@/datasources/db/cached-query-resolver';
+import { ICachedQueryResolver } from '@/datasources/db/cached-query-resolver.interface';
 import { AccountDataSetting } from '@/domain/accounts/entities/account-data-setting.entity';
 import { AccountDataType } from '@/domain/accounts/entities/account-data-type.entity';
 import { Account } from '@/domain/accounts/entities/account.entity';
@@ -16,7 +17,6 @@ import { asError } from '@/logging/utils';
 import {
   Inject,
   Injectable,
-  InternalServerErrorException,
   NotFoundException,
   OnModuleInit,
   UnprocessableEntityException,
@@ -30,6 +30,8 @@ export class AccountsDatasource implements IAccountsDatasource, OnModuleInit {
   constructor(
     @Inject(CacheService) private readonly cacheService: ICacheService,
     @Inject('DB_INSTANCE') private readonly sql: postgres.Sql,
+    @Inject(ICachedQueryResolver)
+    private readonly cachedQueryResolver: CachedQueryResolver,
     @Inject(LoggingService) private readonly loggingService: ILoggingService,
     @Inject(IConfigurationService)
     private readonly configurationService: IConfigurationService,
@@ -71,11 +73,11 @@ export class AccountsDatasource implements IAccountsDatasource, OnModuleInit {
 
   async getAccount(address: `0x${string}`): Promise<Account> {
     const cacheDir = CacheRouter.getAccountCacheDir(address);
-    const [account] = await this.getFromCacheOrExecuteAndCache<Account[]>(
+    const [account] = await this.cachedQueryResolver.get<Account[]>({
       cacheDir,
-      this.sql<Account[]>`SELECT * FROM accounts WHERE address = ${address}`,
-      this.defaultExpirationTimeInSeconds,
-    );
+      query: this.sql`SELECT * FROM accounts WHERE address = ${address}`,
+      ttl: this.defaultExpirationTimeInSeconds,
+    });
 
     if (!account) {
       throw new NotFoundException('Error getting account.');
@@ -94,18 +96,22 @@ export class AccountsDatasource implements IAccountsDatasource, OnModuleInit {
         );
       }
     } finally {
-      const { key } = CacheRouter.getAccountCacheDir(address);
-      await this.cacheService.deleteByKey(key);
+      const keys = [
+        CacheRouter.getAccountCacheDir(address).key,
+        CacheRouter.getAccountDataSettingsCacheDir(address).key,
+        CacheRouter.getCounterfactualSafesCacheDir(address).key,
+      ];
+      await Promise.all(keys.map((key) => this.cacheService.deleteByKey(key)));
     }
   }
 
   async getDataTypes(): Promise<AccountDataType[]> {
     const cacheDir = CacheRouter.getAccountDataTypesCacheDir();
-    return this.getFromCacheOrExecuteAndCache<AccountDataType[]>(
+    return this.cachedQueryResolver.get<AccountDataType[]>({
       cacheDir,
-      this.sql<AccountDataType[]>`SELECT * FROM account_data_types`,
-      MAX_TTL,
-    );
+      query: this.sql`SELECT * FROM account_data_types`,
+      ttl: MAX_TTL,
+    });
   }
 
   async getAccountDataSettings(
@@ -113,14 +119,14 @@ export class AccountsDatasource implements IAccountsDatasource, OnModuleInit {
   ): Promise<AccountDataSetting[]> {
     const account = await this.getAccount(address);
     const cacheDir = CacheRouter.getAccountDataSettingsCacheDir(address);
-    return this.getFromCacheOrExecuteAndCache<AccountDataSetting[]>(
+    return this.cachedQueryResolver.get<AccountDataSetting[]>({
       cacheDir,
-      this.sql<AccountDataSetting[]>`
-        SELECT ads.* FROM account_data_settings ads INNER JOIN account_data_types adt
-          ON ads.account_data_type_id = adt.id
+      query: this.sql`
+        SELECT ads.* FROM account_data_settings ads
+          INNER JOIN account_data_types adt ON ads.account_data_type_id = adt.id
         WHERE ads.account_id = ${account.id} AND adt.is_active IS TRUE;`,
-      this.defaultExpirationTimeInSeconds,
-    );
+      ttl: this.defaultExpirationTimeInSeconds,
+    });
   }
 
   /**
@@ -134,13 +140,13 @@ export class AccountsDatasource implements IAccountsDatasource, OnModuleInit {
    * @param upsertAccountDataSettings {@link UpsertAccountDataSettingsDto} object.
    * @returns {Array<AccountDataSetting>} inserted account data settings.
    */
-  async upsertAccountDataSettings(
-    address: `0x${string}`,
-    upsertAccountDataSettings: UpsertAccountDataSettingsDto,
-  ): Promise<AccountDataSetting[]> {
-    const { accountDataSettings } = upsertAccountDataSettings;
+  async upsertAccountDataSettings(args: {
+    address: `0x${string}`;
+    upsertAccountDataSettingsDto: UpsertAccountDataSettingsDto;
+  }): Promise<AccountDataSetting[]> {
+    const { accountDataSettings } = args.upsertAccountDataSettingsDto;
     await this.checkDataTypes(accountDataSettings);
-    const account = await this.getAccount(address);
+    const account = await this.getAccount(args.address);
 
     const result = await this.sql.begin(async (sql) => {
       await Promise.all(
@@ -160,7 +166,7 @@ export class AccountsDatasource implements IAccountsDatasource, OnModuleInit {
         SELECT * FROM account_data_settings WHERE account_id = ${account.id}`;
     });
 
-    const cacheDir = CacheRouter.getAccountDataSettingsCacheDir(address);
+    const cacheDir = CacheRouter.getAccountDataSettingsCacheDir(args.address);
     await this.cacheService.set(
       cacheDir,
       JSON.stringify(result),
@@ -185,40 +191,5 @@ export class AccountsDatasource implements IAccountsDatasource, OnModuleInit {
         `Data types not found or not active.`,
       );
     }
-  }
-
-  /**
-   * Returns the content from cache or executes the query and caches the result.
-   * If the specified {@link CacheDir} is empty, the query is executed and the result is cached.
-   * If the specified {@link CacheDir} is not empty, the pointed content is returned.
-   *
-   * @param cacheDir {@link CacheDir} to use for caching
-   * @param query query to execute
-   * @param ttl time to live for the cache
-   * @returns content from cache or query result
-   */
-  private async getFromCacheOrExecuteAndCache<T extends postgres.MaybeRow[]>(
-    cacheDir: CacheDir,
-    query: postgres.PendingQuery<T>,
-    ttl: number,
-  ): Promise<T> {
-    const { key, field } = cacheDir;
-    const cached = await this.cacheService.get(cacheDir);
-    if (cached != null) {
-      this.loggingService.debug({ type: 'cache_hit', key, field });
-      return JSON.parse(cached);
-    }
-    this.loggingService.debug({ type: 'cache_miss', key, field });
-
-    // log & hide database errors
-    const result = await query.catch((e) => {
-      this.loggingService.error(asError(e).message);
-      throw new InternalServerErrorException();
-    });
-
-    if (result.count > 0) {
-      await this.cacheService.set(cacheDir, JSON.stringify(result), ttl);
-    }
-    return result;
   }
 }

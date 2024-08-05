@@ -2,7 +2,9 @@ import { TestDbFactory } from '@/__tests__/db.factory';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import { AccountsDatasource } from '@/datasources/accounts/accounts.datasource';
 import { FakeCacheService } from '@/datasources/cache/__tests__/fake.cache.service';
+import { MAX_TTL } from '@/datasources/cache/constants';
 import { CacheDir } from '@/datasources/cache/entities/cache-dir.entity';
+import { CachedQueryResolver } from '@/datasources/db/cached-query-resolver';
 import { PostgresDatabaseMigrator } from '@/datasources/db/postgres-database.migrator';
 import { accountDataTypeBuilder } from '@/domain/accounts/entities/__tests__/account-data-type.builder';
 import { upsertAccountDataSettingsDtoBuilder } from '@/domain/accounts/entities/__tests__/upsert-account-data-settings.dto.entity.builder';
@@ -42,6 +44,7 @@ describe('AccountsDatasource tests', () => {
     target = new AccountsDatasource(
       fakeCacheService,
       sql,
+      new CachedQueryResolver(mockLoggingService, fakeCacheService),
       mockLoggingService,
       mockConfigurationService,
     );
@@ -200,13 +203,42 @@ describe('AccountsDatasource tests', () => {
         }),
       );
 
+      // store settings and counterfactual safes in the cache
+      const accountDataSettingsCacheDir = new CacheDir(
+        `account_data_settings_${address}`,
+        '',
+      );
+      await fakeCacheService.set(
+        accountDataSettingsCacheDir,
+        faker.string.alpha(),
+        MAX_TTL,
+      );
+      const counterfactualSafesCacheDir = new CacheDir(
+        `counterfactual_safes_${address}`,
+        '',
+      );
+      await fakeCacheService.set(
+        counterfactualSafesCacheDir,
+        faker.string.alpha(),
+        MAX_TTL,
+      );
+
       // the account is deleted from the database and the cache
       await expect(target.deleteAccount(address)).resolves.not.toThrow();
       await expect(target.getAccount(address)).rejects.toThrow();
-      const cached = await fakeCacheService.get(
-        new CacheDir(`account_${address}`, ''),
-      );
+      const accountCacheDir = new CacheDir(`account_${address}`, '');
+      const cached = await fakeCacheService.get(accountCacheDir);
       expect(cached).toBeUndefined();
+
+      // the settings and counterfactual safes are deleted from the cache
+      const accountDataSettingsCached = await fakeCacheService.get(
+        accountDataSettingsCacheDir,
+      );
+      expect(accountDataSettingsCached).toBeUndefined();
+      const counterfactualSafesCached = await fakeCacheService.get(
+        counterfactualSafesCacheDir,
+      );
+      expect(counterfactualSafesCached).toBeUndefined();
 
       expect(mockLoggingService.debug).toHaveBeenCalledTimes(2);
       expect(mockLoggingService.debug).toHaveBeenNthCalledWith(1, {
@@ -450,10 +482,10 @@ describe('AccountsDatasource tests', () => {
         .with('accountDataSettings', accountDataSettings)
         .build();
 
-      const actual = await target.upsertAccountDataSettings(
+      const actual = await target.upsertAccountDataSettings({
         address,
         upsertAccountDataSettingsDto,
-      );
+      });
 
       const expected = accountDataSettings.map((accountDataSetting) => ({
         account_id: account.id,
@@ -483,10 +515,10 @@ describe('AccountsDatasource tests', () => {
         .with('accountDataSettings', accountDataSettings)
         .build();
 
-      await target.upsertAccountDataSettings(
+      await target.upsertAccountDataSettings({
         address,
         upsertAccountDataSettingsDto,
-      );
+      });
 
       // check the account data settings are stored in the cache
       const cacheDir = new CacheDir(`account_data_settings_${address}`, '');
@@ -521,10 +553,10 @@ describe('AccountsDatasource tests', () => {
         .with('accountDataSettings', accountDataSettings)
         .build();
 
-      const beforeUpdate = await target.upsertAccountDataSettings(
+      const beforeUpdate = await target.upsertAccountDataSettings({
         address,
         upsertAccountDataSettingsDto,
-      );
+      });
 
       expect(beforeUpdate).toStrictEqual(
         expect.arrayContaining(
@@ -547,10 +579,10 @@ describe('AccountsDatasource tests', () => {
           .with('accountDataSettings', accountDataSettings2)
           .build();
 
-      const afterUpdate = await target.upsertAccountDataSettings(
+      const afterUpdate = await target.upsertAccountDataSettings({
         address,
-        upsertAccountDataSettingsDto2,
-      );
+        upsertAccountDataSettingsDto: upsertAccountDataSettingsDto2,
+      });
 
       expect(afterUpdate).toStrictEqual(
         expect.arrayContaining(
@@ -582,7 +614,10 @@ describe('AccountsDatasource tests', () => {
         .build();
 
       await expect(
-        target.upsertAccountDataSettings(address, upsertAccountDataSettingsDto),
+        target.upsertAccountDataSettings({
+          address,
+          upsertAccountDataSettingsDto,
+        }),
       ).rejects.toThrow('Error getting account.');
     });
 
@@ -608,7 +643,10 @@ describe('AccountsDatasource tests', () => {
       });
 
       await expect(
-        target.upsertAccountDataSettings(address, upsertAccountDataSettingsDto),
+        target.upsertAccountDataSettings({
+          address,
+          upsertAccountDataSettingsDto,
+        }),
       ).rejects.toThrow('Data types not found or not active.');
     });
 
@@ -630,7 +668,10 @@ describe('AccountsDatasource tests', () => {
         .build();
 
       await expect(
-        target.upsertAccountDataSettings(address, upsertAccountDataSettingsDto),
+        target.upsertAccountDataSettings({
+          address,
+          upsertAccountDataSettingsDto,
+        }),
       ).rejects.toThrow(`Data types not found or not active.`);
     });
   });

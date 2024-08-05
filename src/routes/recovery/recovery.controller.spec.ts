@@ -40,9 +40,11 @@ import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-
 import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 import { authPayloadDtoBuilder } from '@/domain/auth/entities/__tests__/auth-payload-dto.entity.builder';
 import { IJwtService } from '@/datasources/jwt/jwt.service.interface';
-import { getSecondsUntil } from '@/domain/common/utils/time';
 import { getAddress } from 'viem';
 import { Server } from 'net';
+import { RecoveryController } from '@/routes/recovery/recovery.controller';
+import { checkGuardIsApplied } from '@/__tests__/util/check-guard';
+import { AuthGuard } from '@/routes/auth/guards/auth.guard';
 
 describe('Recovery (Unit)', () => {
   let app: INestApplication<Server>;
@@ -107,6 +109,16 @@ describe('Recovery (Unit)', () => {
     jest.useRealTimers();
   });
 
+  describe('AuthGuard', () => {
+    it('checks that the AuthGuard is applied to the proper controller endpoints', () => {
+      const protectedEndpoints = [
+        RecoveryController.prototype.addRecoveryModule,
+        RecoveryController.prototype.deleteRecoveryModule,
+      ];
+      protectedEndpoints.forEach((fn) => checkGuardIsApplied(AuthGuard, fn));
+    });
+  });
+
   describe('POST add recovery module for a Safe', () => {
     it('Success', async () => {
       const addRecoveryModuleDto = addRecoveryModuleDtoBuilder().build();
@@ -151,87 +163,6 @@ describe('Recovery (Unit)', () => {
         .set('Cookie', [`access_token=${accessToken}`])
         .send(addRecoveryModuleDto)
         .expect(200);
-    });
-
-    it('should return 403 if no token is present', async () => {
-      const addRecoveryModuleDto = addRecoveryModuleDtoBuilder().build();
-      const chain = chainBuilder().build();
-      const safe = safeBuilder().build();
-
-      await request(app.getHttpServer())
-        .post(`/v1/chains/${chain.chainId}/safes/${safe.address}/recovery`)
-        .send(addRecoveryModuleDto)
-        .expect(403);
-
-      expect(networkService.get).not.toHaveBeenCalled();
-      expect(networkService.post).not.toHaveBeenCalled();
-    });
-
-    it('should return 403 if token is not a JWT', async () => {
-      const addRecoveryModuleDto = addRecoveryModuleDtoBuilder().build();
-      const chain = chainBuilder().build();
-      const safe = safeBuilder().build();
-      const accessToken = faker.string.alphanumeric();
-
-      expect(() => jwtService.verify(accessToken)).toThrow('jwt malformed');
-      await request(app.getHttpServer())
-        .post(`/v1/chains/${chain.chainId}/safes/${safe.address}/recovery`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .send(addRecoveryModuleDto)
-        .expect(403);
-
-      expect(networkService.get).not.toHaveBeenCalled();
-      expect(networkService.post).not.toHaveBeenCalled();
-    });
-
-    it('should return 403 if token is not yet valid', async () => {
-      const addRecoveryModuleDto = addRecoveryModuleDtoBuilder().build();
-      const chain = chainBuilder().build();
-      const safe = safeBuilder().build();
-      const signerAddress = safe.owners[0];
-      const authPayloadDto = authPayloadDtoBuilder()
-        .with('chain_id', chain.chainId)
-        .with('signer_address', signerAddress)
-        .build();
-      const notBefore = faker.date.future();
-      const accessToken = jwtService.sign(authPayloadDto, {
-        notBefore: getSecondsUntil(notBefore),
-      });
-
-      expect(() => jwtService.verify(accessToken)).toThrow('jwt not active');
-      await request(app.getHttpServer())
-        .post(`/v1/chains/${chain.chainId}/safes/${safe.address}/recovery`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .send(addRecoveryModuleDto)
-        .expect(403);
-
-      expect(networkService.get).not.toHaveBeenCalled();
-      expect(networkService.post).not.toHaveBeenCalled();
-    });
-
-    it('should return 403 if token has expired', async () => {
-      const addRecoveryModuleDto = addRecoveryModuleDtoBuilder().build();
-      const chain = chainBuilder().build();
-      const safe = safeBuilder().build();
-      const signerAddress = safe.owners[0];
-      const authPayloadDto = authPayloadDtoBuilder()
-        .with('chain_id', chain.chainId)
-        .with('signer_address', signerAddress)
-        .build();
-      const accessToken = jwtService.sign(authPayloadDto, {
-        expiresIn: 0, // Now
-      });
-      jest.advanceTimersByTime(1_000);
-
-      expect(() => jwtService.verify(accessToken)).toThrow('jwt expired');
-      await request(app.getHttpServer())
-        .post(`/v1/chains/${chain.chainId}/safes/${safe.address}/recovery`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .send(addRecoveryModuleDto)
-        .expect(403);
-
-      expect(networkService.get).not.toHaveBeenCalled();
-      expect(networkService.post).not.toHaveBeenCalled();
     });
 
     it('should return 401 if chain_id does not match that of the request', async () => {
@@ -504,91 +435,6 @@ describe('Recovery (Unit)', () => {
         )
         .set('Cookie', [`access_token=${accessToken}`])
         .expect(204);
-    });
-
-    it('should return 403 if no token is present', async () => {
-      const moduleAddress = getAddress(faker.finance.ethereumAddress());
-      const chain = chainBuilder().build();
-      const safe = safeBuilder().build();
-
-      await request(app.getHttpServer())
-        .delete(
-          `/v1/chains/${chain.chainId}/safes/${safe.address}/recovery/${moduleAddress}`,
-        )
-        .expect(403);
-
-      expect(networkService.get).not.toHaveBeenCalled();
-      expect(networkService.delete).not.toHaveBeenCalled();
-    });
-
-    it('should return 403 if token is not a JWT', async () => {
-      const moduleAddress = getAddress(faker.finance.ethereumAddress());
-      const chain = chainBuilder().build();
-      const safe = safeBuilder().build();
-      const accessToken = faker.string.alphanumeric();
-
-      expect(() => jwtService.verify(accessToken)).toThrow('jwt malformed');
-      await request(app.getHttpServer())
-        .delete(
-          `/v1/chains/${chain.chainId}/safes/${safe.address}/recovery/${moduleAddress}`,
-        )
-        .set('Cookie', [`access_token=${accessToken}`])
-        .expect(403);
-
-      expect(networkService.get).not.toHaveBeenCalled();
-      expect(networkService.delete).not.toHaveBeenCalled();
-    });
-
-    it('should return 403 if token is not yet valid', async () => {
-      const moduleAddress = getAddress(faker.finance.ethereumAddress());
-      const chain = chainBuilder().build();
-      const safe = safeBuilder().build();
-      const signerAddress = safe.owners[0];
-      const authPayloadDto = authPayloadDtoBuilder()
-        .with('chain_id', chain.chainId)
-        .with('signer_address', signerAddress)
-        .build();
-      const notBefore = faker.date.future();
-      const accessToken = jwtService.sign(authPayloadDto, {
-        notBefore: getSecondsUntil(notBefore),
-      });
-
-      expect(() => jwtService.verify(accessToken)).toThrow('jwt not active');
-      await request(app.getHttpServer())
-        .delete(
-          `/v1/chains/${chain.chainId}/safes/${safe.address}/recovery/${moduleAddress}`,
-        )
-        .set('Cookie', [`access_token=${accessToken}`])
-        .expect(403);
-
-      expect(networkService.get).not.toHaveBeenCalled();
-      expect(networkService.delete).not.toHaveBeenCalled();
-    });
-
-    it('should return 403 if token has expired', async () => {
-      const moduleAddress = getAddress(faker.finance.ethereumAddress());
-      const chain = chainBuilder().build();
-      const safe = safeBuilder().build();
-      const signerAddress = safe.owners[0];
-      const authPayloadDto = authPayloadDtoBuilder()
-        .with('chain_id', chain.chainId)
-        .with('signer_address', signerAddress)
-        .build();
-      const accessToken = jwtService.sign(authPayloadDto, {
-        expiresIn: 0, // Now
-      });
-      jest.advanceTimersByTime(1_000);
-
-      expect(() => jwtService.verify(accessToken)).toThrow('jwt expired');
-      await request(app.getHttpServer())
-        .delete(
-          `/v1/chains/${chain.chainId}/safes/${safe.address}/recovery/${moduleAddress}`,
-        )
-        .set('Cookie', [`access_token=${accessToken}`])
-        .expect(403);
-
-      expect(networkService.get).not.toHaveBeenCalled();
-      expect(networkService.delete).not.toHaveBeenCalled();
     });
 
     it('should return 401 if chain_id does not match that of the request', async () => {

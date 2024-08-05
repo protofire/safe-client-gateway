@@ -170,6 +170,8 @@ export default () => ({
     swapsDecoding: process.env.FF_SWAPS_DECODING?.toLowerCase() === 'true',
     twapsDecoding: process.env.FF_TWAPS_DECODING?.toLowerCase() === 'true',
     debugLogs: process.env.FF_DEBUG_LOGS?.toLowerCase() === 'true',
+    configHooksDebugLogs:
+      process.env.FF_CONFIG_HOOKS_DEBUG_LOGS?.toLowerCase() === 'true',
     imitationMapping:
       process.env.FF_IMITATION_MAPPING?.toLowerCase() === 'true',
     auth: process.env.FF_AUTH?.toLowerCase() === 'true',
@@ -214,6 +216,18 @@ export default () => ({
     },
     safe: {
       maxOverviews: parseInt(process.env.MAX_SAFE_OVERVIEWS ?? `${10}`),
+    },
+  },
+  pushNotifications: {
+    baseUri:
+      process.env.PUSH_NOTIFICATIONS_API_BASE_URI ||
+      'https://fcm.googleapis.com/v1/projects',
+    project: process.env.PUSH_NOTIFICATIONS_API_PROJECT,
+    serviceAccount: {
+      clientEmail:
+        process.env.PUSH_NOTIFICATIONS_API_SERVICE_ACCOUNT_CLIENT_EMAIL,
+      privateKey:
+        process.env.PUSH_NOTIFICATIONS_API_SERVICE_ACCOUNT_PRIVATE_KEY,
     },
   },
   redis: {

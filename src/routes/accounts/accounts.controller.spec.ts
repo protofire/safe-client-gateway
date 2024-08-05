@@ -1,8 +1,11 @@
 import { TestAppProvider } from '@/__tests__/test-app.provider';
+import { checkGuardIsApplied } from '@/__tests__/util/check-guard';
 import { AppModule } from '@/app.module';
 import configuration from '@/config/entities/__tests__/configuration';
 import { TestAccountsDataSourceModule } from '@/datasources/accounts/__tests__/test.accounts.datasource.module';
 import { AccountsDatasourceModule } from '@/datasources/accounts/accounts.datasource.module';
+import { TestCounterfactualSafesDataSourceModule } from '@/datasources/accounts/counterfactual-safes/__tests__/test.counterfactual-safes.datasource.module';
+import { CounterfactualSafesDatasourceModule } from '@/datasources/accounts/counterfactual-safes/counterfactual-safes.datasource.module';
 import { TestCacheModule } from '@/datasources/cache/__tests__/test.cache.module';
 import { CacheModule } from '@/datasources/cache/cache.module';
 import jwtConfiguration from '@/datasources/jwt/configuration/__tests__/jwt.configuration';
@@ -21,11 +24,12 @@ import { accountBuilder } from '@/domain/accounts/entities/__tests__/account.bui
 import { upsertAccountDataSettingsDtoBuilder } from '@/domain/accounts/entities/__tests__/upsert-account-data-settings.dto.entity.builder';
 import { authPayloadDtoBuilder } from '@/domain/auth/entities/__tests__/auth-payload-dto.entity.builder';
 import { chainBuilder } from '@/domain/chains/entities/__tests__/chain.builder';
-import { getSecondsUntil } from '@/domain/common/utils/time';
 import { IAccountsDatasource } from '@/domain/interfaces/accounts.datasource.interface';
 import { TestLoggingModule } from '@/logging/__tests__/test.logging.module';
 import { RequestScopedLoggingModule } from '@/logging/logging.module';
+import { AccountsController } from '@/routes/accounts/accounts.controller';
 import { Account } from '@/routes/accounts/entities/account.entity';
+import { AuthGuard } from '@/routes/auth/guards/auth.guard';
 import { faker } from '@faker-js/faker';
 import {
   ConflictException,
@@ -61,6 +65,8 @@ describe('AccountsController', () => {
       .useModule(JwtConfigurationModule.register(jwtConfiguration))
       .overrideModule(AccountsDatasourceModule)
       .useModule(TestAccountsDataSourceModule)
+      .overrideModule(CounterfactualSafesDatasourceModule)
+      .useModule(TestCounterfactualSafesDataSourceModule)
       .overrideModule(CacheModule)
       .useModule(TestCacheModule)
       .overrideModule(RequestScopedLoggingModule)
@@ -90,6 +96,19 @@ describe('AccountsController', () => {
     await app.close();
   });
 
+  describe('AuthGuard', () => {
+    it('checks that the AuthGuard is applied to the proper controller endpoints', () => {
+      const protectedEndpoints = [
+        AccountsController.prototype.createAccount,
+        AccountsController.prototype.getAccountDataSettings,
+        AccountsController.prototype.upsertAccountDataSettings,
+        AccountsController.prototype.getAccount,
+        AccountsController.prototype.deleteAccount,
+      ];
+      protectedEndpoints.forEach((fn) => checkGuardIsApplied(AuthGuard, fn));
+    });
+  });
+
   describe('Create accounts', () => {
     it('should create an account', async () => {
       const address = getAddress(faker.finance.ethereumAddress());
@@ -111,105 +130,6 @@ describe('AccountsController', () => {
       expect(accountDataSource.createAccount).toHaveBeenCalledTimes(1);
       // Check the address was checksummed
       expect(accountDataSource.createAccount).toHaveBeenCalledWith(address);
-    });
-
-    it('Returns 403 if no token is present', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-
-      await request(app.getHttpServer())
-        .post(`/v1/accounts`)
-        .send({ address })
-        .expect(403);
-
-      expect(accountDataSource.getAccount).not.toHaveBeenCalled();
-    });
-
-    it('returns 403 if token is not a valid JWT', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-      const accessToken = faker.string.sample();
-
-      expect(() => jwtService.verify(accessToken)).toThrow('jwt malformed');
-      await request(app.getHttpServer())
-        .post(`/v1/accounts`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .send({ address })
-        .expect(403);
-
-      expect(accountDataSource.getAccount).not.toHaveBeenCalled();
-    });
-
-    it('returns 403 is token it not yet valid', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-      const chain = chainBuilder().build();
-      const authPayloadDto = authPayloadDtoBuilder()
-        .with('chain_id', chain.chainId)
-        .with('signer_address', address)
-        .build();
-      const accessToken = jwtService.sign(authPayloadDto, {
-        notBefore: getSecondsUntil(faker.date.future()),
-      });
-
-      await request(app.getHttpServer())
-        .post(`/v1/accounts`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .send({ address })
-        .expect(403);
-
-      expect(accountDataSource.getAccount).not.toHaveBeenCalled();
-    });
-
-    it('returns 403 if token has expired', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-      const chain = chainBuilder().build();
-      const authPayloadDto = authPayloadDtoBuilder()
-        .with('chain_id', chain.chainId)
-        .with('signer_address', address)
-        .build();
-      const accessToken = jwtService.sign(authPayloadDto, { expiresIn: 0 });
-      jest.advanceTimersByTime(1_000);
-
-      await request(app.getHttpServer())
-        .post(`/v1/accounts`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .send({ address })
-        .expect(403);
-
-      expect(accountDataSource.getAccount).not.toHaveBeenCalled();
-    });
-
-    it('returns 403 if signer_address is not a valid Ethereum address', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-      const chain = chainBuilder().build();
-      const authPayloadDto = authPayloadDtoBuilder()
-        .with('chain_id', chain.chainId)
-        .with('signer_address', faker.string.hexadecimal() as `0x${string}`)
-        .build();
-      const accessToken = jwtService.sign(authPayloadDto);
-
-      await request(app.getHttpServer())
-        .post(`/v1/accounts`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .send({ address })
-        .expect(403);
-
-      expect(accountDataSource.getAccount).not.toHaveBeenCalled();
-    });
-
-    it('returns 403 if chain_id is not a valid chain ID', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-      const authPayloadDto = authPayloadDtoBuilder()
-        .with('chain_id', faker.lorem.sentence())
-        .with('signer_address', address)
-        .build();
-      const accessToken = jwtService.sign(authPayloadDto);
-
-      await request(app.getHttpServer())
-        .post(`/v1/accounts`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .send({ address })
-        .expect(403);
-
-      expect(accountDataSource.getAccount).not.toHaveBeenCalled();
     });
 
     it('should propagate errors', async () => {
@@ -256,7 +176,7 @@ describe('AccountsController', () => {
       const account = accountBuilder().with('group_id', null).build();
       accountDataSource.getAccount.mockResolvedValue(account);
       const expected: Account = {
-        accountId: account.id.toString(),
+        id: account.id.toString(),
         groupId: null,
         address: account.address,
       };
@@ -284,7 +204,7 @@ describe('AccountsController', () => {
       const account = accountBuilder().with('group_id', groupId).build();
       accountDataSource.getAccount.mockResolvedValue(account);
       const expected: Account = {
-        accountId: account.id.toString(),
+        id: account.id.toString(),
         groupId: groupId.toString(),
         address: account.address,
       };
@@ -298,99 +218,6 @@ describe('AccountsController', () => {
       expect(accountDataSource.getAccount).toHaveBeenCalledTimes(1);
       // Check the address was checksummed
       expect(accountDataSource.getAccount).toHaveBeenCalledWith(address);
-    });
-
-    it('Returns 403 if no token is present', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-
-      await request(app.getHttpServer())
-        .get(`/v1/accounts/${address}`)
-        .expect(403);
-
-      expect(accountDataSource.getAccount).not.toHaveBeenCalled();
-    });
-
-    it('returns 403 if token is not a valid JWT', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-      const accessToken = faker.string.sample();
-
-      expect(() => jwtService.verify(accessToken)).toThrow('jwt malformed');
-      await request(app.getHttpServer())
-        .get(`/v1/accounts/${address}`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .expect(403);
-
-      expect(accountDataSource.getAccount).not.toHaveBeenCalled();
-    });
-
-    it('returns 403 is token it not yet valid', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-      const chain = chainBuilder().build();
-      const authPayloadDto = authPayloadDtoBuilder()
-        .with('chain_id', chain.chainId)
-        .with('signer_address', address)
-        .build();
-      const accessToken = jwtService.sign(authPayloadDto, {
-        notBefore: getSecondsUntil(faker.date.future()),
-      });
-
-      await request(app.getHttpServer())
-        .get(`/v1/accounts/${address}`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .expect(403);
-
-      expect(accountDataSource.getAccount).not.toHaveBeenCalled();
-    });
-
-    it('returns 403 if token has expired', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-      const chain = chainBuilder().build();
-      const authPayloadDto = authPayloadDtoBuilder()
-        .with('chain_id', chain.chainId)
-        .with('signer_address', address)
-        .build();
-      const accessToken = jwtService.sign(authPayloadDto, { expiresIn: 0 });
-      jest.advanceTimersByTime(1_000);
-
-      await request(app.getHttpServer())
-        .get(`/v1/accounts/${address}`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .expect(403);
-
-      expect(accountDataSource.getAccount).not.toHaveBeenCalled();
-    });
-
-    it('returns 403 if signer_address is not a valid Ethereum address', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-      const chain = chainBuilder().build();
-      const authPayloadDto = authPayloadDtoBuilder()
-        .with('chain_id', chain.chainId)
-        .with('signer_address', faker.string.hexadecimal() as `0x${string}`)
-        .build();
-      const accessToken = jwtService.sign(authPayloadDto);
-
-      await request(app.getHttpServer())
-        .get(`/v1/accounts/${address}`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .expect(403);
-
-      expect(accountDataSource.getAccount).not.toHaveBeenCalled();
-    });
-
-    it('returns 403 if chain_id is not a valid chain ID', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-      const authPayloadDto = authPayloadDtoBuilder()
-        .with('chain_id', faker.lorem.sentence())
-        .with('signer_address', address)
-        .build();
-      const accessToken = jwtService.sign(authPayloadDto);
-
-      await request(app.getHttpServer())
-        .get(`/v1/accounts/${address}`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .expect(403);
-
-      expect(accountDataSource.getAccount).not.toHaveBeenCalled();
     });
 
     it('should propagate errors', async () => {
@@ -441,93 +268,6 @@ describe('AccountsController', () => {
       expect(accountDataSource.deleteAccount).toHaveBeenCalledTimes(1);
       // Check the address was checksummed
       expect(accountDataSource.deleteAccount).toHaveBeenCalledWith(address);
-    });
-
-    it('Returns 403 if no token is present', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-
-      await request(app.getHttpServer())
-        .delete(`/v1/accounts/${address}`)
-        .send({ address })
-        .expect(403);
-    });
-
-    it('returns 403 if token is not a valid JWT', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-      const accessToken = faker.string.sample();
-
-      expect(() => jwtService.verify(accessToken)).toThrow('jwt malformed');
-      await request(app.getHttpServer())
-        .delete(`/v1/accounts/${address}`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .send({ address })
-        .expect(403);
-    });
-
-    it('returns 403 is token it not yet valid', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-      const chain = chainBuilder().build();
-      const authPayloadDto = authPayloadDtoBuilder()
-        .with('chain_id', chain.chainId)
-        .with('signer_address', address)
-        .build();
-      const accessToken = jwtService.sign(authPayloadDto, {
-        notBefore: getSecondsUntil(faker.date.future()),
-      });
-
-      await request(app.getHttpServer())
-        .delete(`/v1/accounts/${address}`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .send({ address })
-        .expect(403);
-    });
-
-    it('returns 403 if token has expired', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-      const chain = chainBuilder().build();
-      const authPayloadDto = authPayloadDtoBuilder()
-        .with('chain_id', chain.chainId)
-        .with('signer_address', address)
-        .build();
-      const accessToken = jwtService.sign(authPayloadDto, { expiresIn: 0 });
-      jest.advanceTimersByTime(1_000);
-
-      await request(app.getHttpServer())
-        .delete(`/v1/accounts/${address}`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .send({ address })
-        .expect(403);
-    });
-
-    it('returns 403 if signer_address is not a valid Ethereum address', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-      const chain = chainBuilder().build();
-      const authPayloadDto = authPayloadDtoBuilder()
-        .with('chain_id', chain.chainId)
-        .with('signer_address', faker.string.hexadecimal() as `0x${string}`)
-        .build();
-      const accessToken = jwtService.sign(authPayloadDto);
-
-      await request(app.getHttpServer())
-        .delete(`/v1/accounts/${address}`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .send({ address })
-        .expect(403);
-    });
-
-    it('returns 403 if chain_id is not a valid chain ID', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-      const authPayloadDto = authPayloadDtoBuilder()
-        .with('chain_id', faker.lorem.sentence())
-        .with('signer_address', address)
-        .build();
-      const accessToken = jwtService.sign(authPayloadDto);
-
-      await request(app.getHttpServer())
-        .delete(`/v1/accounts/${address}`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .send({ address })
-        .expect(403);
     });
 
     it('should propagate errors', async () => {
@@ -627,10 +367,10 @@ describe('AccountsController', () => {
       expect(accountDataSource.upsertAccountDataSettings).toHaveBeenCalledTimes(
         1,
       );
-      expect(accountDataSource.upsertAccountDataSettings).toHaveBeenCalledWith(
+      expect(accountDataSource.upsertAccountDataSettings).toHaveBeenCalledWith({
         address,
         upsertAccountDataSettingsDto,
-      );
+      });
     });
 
     it('should accept a empty array of data settings', async () => {
@@ -652,93 +392,6 @@ describe('AccountsController', () => {
       expect(
         accountDataSource.upsertAccountDataSettings,
       ).not.toHaveBeenCalled();
-    });
-
-    it('Returns 403 if no token is present', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-
-      await request(app.getHttpServer())
-        .put(`/v1/accounts/${address}/data-settings`)
-        .send({ address })
-        .expect(403);
-    });
-
-    it('returns 403 if token is not a valid JWT', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-      const accessToken = faker.string.sample();
-
-      expect(() => jwtService.verify(accessToken)).toThrow('jwt malformed');
-      await request(app.getHttpServer())
-        .put(`/v1/accounts/${address}/data-settings`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .send({ address })
-        .expect(403);
-    });
-
-    it('returns 403 is token it not yet valid', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-      const chain = chainBuilder().build();
-      const authPayloadDto = authPayloadDtoBuilder()
-        .with('chain_id', chain.chainId)
-        .with('signer_address', address)
-        .build();
-      const accessToken = jwtService.sign(authPayloadDto, {
-        notBefore: getSecondsUntil(faker.date.future()),
-      });
-
-      await request(app.getHttpServer())
-        .put(`/v1/accounts/${address}/data-settings`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .send({ address })
-        .expect(403);
-    });
-
-    it('returns 403 if token has expired', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-      const chain = chainBuilder().build();
-      const authPayloadDto = authPayloadDtoBuilder()
-        .with('chain_id', chain.chainId)
-        .with('signer_address', address)
-        .build();
-      const accessToken = jwtService.sign(authPayloadDto, { expiresIn: 0 });
-      jest.advanceTimersByTime(1_000);
-
-      await request(app.getHttpServer())
-        .put(`/v1/accounts/${address}/data-settings`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .send({ address })
-        .expect(403);
-    });
-
-    it('returns 403 if signer_address is not a valid Ethereum address', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-      const chain = chainBuilder().build();
-      const authPayloadDto = authPayloadDtoBuilder()
-        .with('chain_id', chain.chainId)
-        .with('signer_address', faker.string.hexadecimal() as `0x${string}`)
-        .build();
-      const accessToken = jwtService.sign(authPayloadDto);
-
-      await request(app.getHttpServer())
-        .put(`/v1/accounts/${address}/data-settings`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .send({ address })
-        .expect(403);
-    });
-
-    it('returns 403 if chain_id is not a valid chain ID', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-      const authPayloadDto = authPayloadDtoBuilder()
-        .with('chain_id', faker.lorem.sentence())
-        .with('signer_address', address)
-        .build();
-      const accessToken = jwtService.sign(authPayloadDto);
-
-      await request(app.getHttpServer())
-        .put(`/v1/accounts/${address}/data-settings`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .send({ address })
-        .expect(403);
     });
 
     it('should throw an error if the datasource fails', async () => {
@@ -807,93 +460,6 @@ describe('AccountsController', () => {
       expect(accountDataSource.getAccountDataSettings).toHaveBeenCalledWith(
         address,
       );
-    });
-
-    it('Returns 403 if no token is present', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-
-      await request(app.getHttpServer())
-        .get(`/v1/accounts/${address}/data-settings`)
-        .send({ address })
-        .expect(403);
-    });
-
-    it('returns 403 if token is not a valid JWT', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-      const accessToken = faker.string.sample();
-
-      expect(() => jwtService.verify(accessToken)).toThrow('jwt malformed');
-      await request(app.getHttpServer())
-        .get(`/v1/accounts/${address}/data-settings`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .send({ address })
-        .expect(403);
-    });
-
-    it('returns 403 is token it not yet valid', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-      const chain = chainBuilder().build();
-      const authPayloadDto = authPayloadDtoBuilder()
-        .with('chain_id', chain.chainId)
-        .with('signer_address', address)
-        .build();
-      const accessToken = jwtService.sign(authPayloadDto, {
-        notBefore: getSecondsUntil(faker.date.future()),
-      });
-
-      await request(app.getHttpServer())
-        .get(`/v1/accounts/${address}/data-settings`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .send({ address })
-        .expect(403);
-    });
-
-    it('returns 403 if token has expired', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-      const chain = chainBuilder().build();
-      const authPayloadDto = authPayloadDtoBuilder()
-        .with('chain_id', chain.chainId)
-        .with('signer_address', address)
-        .build();
-      const accessToken = jwtService.sign(authPayloadDto, { expiresIn: 0 });
-      jest.advanceTimersByTime(1_000);
-
-      await request(app.getHttpServer())
-        .get(`/v1/accounts/${address}/data-settings`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .send({ address })
-        .expect(403);
-    });
-
-    it('returns 403 if signer_address is not a valid Ethereum address', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-      const chain = chainBuilder().build();
-      const authPayloadDto = authPayloadDtoBuilder()
-        .with('chain_id', chain.chainId)
-        .with('signer_address', faker.string.hexadecimal() as `0x${string}`)
-        .build();
-      const accessToken = jwtService.sign(authPayloadDto);
-
-      await request(app.getHttpServer())
-        .get(`/v1/accounts/${address}/data-settings`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .send({ address })
-        .expect(403);
-    });
-
-    it('returns 403 if chain_id is not a valid chain ID', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
-      const authPayloadDto = authPayloadDtoBuilder()
-        .with('chain_id', faker.lorem.sentence())
-        .with('signer_address', address)
-        .build();
-      const accessToken = jwtService.sign(authPayloadDto);
-
-      await request(app.getHttpServer())
-        .get(`/v1/accounts/${address}/data-settings`)
-        .set('Cookie', [`access_token=${accessToken}`])
-        .send({ address })
-        .expect(403);
     });
 
     it('should throw an error if the datasource fails', async () => {

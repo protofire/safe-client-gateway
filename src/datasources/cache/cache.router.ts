@@ -10,8 +10,11 @@ export class CacheRouter {
   private static readonly CHAIN_KEY = 'chain';
   private static readonly CHAINS_KEY = 'chains';
   private static readonly CONTRACT_KEY = 'contract';
+  private static readonly COUNTERFACTUAL_SAFE_KEY = 'counterfactual_safe';
+  private static readonly COUNTERFACTUAL_SAFES_KEY = 'counterfactual_safes';
   private static readonly CREATION_TRANSACTION_KEY = 'creation_transaction';
   private static readonly DELEGATES_KEY = 'delegates';
+  private static readonly FIREBASE_OAUTH2_TOKEN_KEY = 'firebase_oauth2_token';
   private static readonly INCOMING_TRANSFERS_KEY = 'incoming_transfers';
   private static readonly MESSAGE_KEY = 'message';
   private static readonly MESSAGES_KEY = 'messages';
@@ -186,6 +189,10 @@ export class CacheRouter {
       `${args.chainId}_${CacheRouter.DELEGATES_KEY}_${args.safeAddress}`,
       `${args.delegate}_${args.delegator}_${args.label}_${args.limit}_${args.offset}`,
     );
+  }
+
+  static getFirebaseOAuth2TokenCacheDir(): CacheDir {
+    return new CacheDir(CacheRouter.FIREBASE_OAUTH2_TOKEN_KEY, '');
   }
 
   static getTransferCacheDir(args: {
@@ -505,6 +512,23 @@ export class CacheRouter {
   static getAccountDataSettingsCacheDir(address: `0x${string}`): CacheDir {
     return new CacheDir(
       `${CacheRouter.ACCOUNT_DATA_SETTINGS_KEY}_${address}`,
+      '',
+    );
+  }
+
+  static getCounterfactualSafeCacheDir(
+    chainId: string,
+    predictedAddress: `0x${string}`,
+  ): CacheDir {
+    return new CacheDir(
+      `${chainId}_${CacheRouter.COUNTERFACTUAL_SAFE_KEY}_${predictedAddress}`,
+      '',
+    );
+  }
+
+  static getCounterfactualSafesCacheDir(address: `0x${string}`): CacheDir {
+    return new CacheDir(
+      `${CacheRouter.COUNTERFACTUAL_SAFES_KEY}_${address}`,
       '',
     );
   }
