@@ -13,14 +13,17 @@ export default (): ReturnType<typeof configuration> => ({
     queue: faker.string.sample(),
     prefetch: faker.number.int(),
   },
-  applicationPort: faker.internet.port().toString(),
+  application: {
+    isProduction: faker.datatype.boolean(),
+    runMigrations: true,
+    port: faker.internet.port().toString(),
+  },
   auth: {
     token: faker.string.hexadecimal({ length: 32 }),
     nonceTtlSeconds: faker.number.int(),
     maxValidityPeriodSeconds: faker.number.int({ min: 1, max: 60 * 1_000 }),
   },
   balances: {
-    balancesTtlSeconds: faker.number.int(),
     providers: {
       safe: {
         prices: {
@@ -109,7 +112,9 @@ export default (): ReturnType<typeof configuration> => ({
     email: false,
     zerionBalancesChainIds: ['137'],
     swapsDecoding: true,
-    historyDebugLogs: false,
+    twapsDecoding: true,
+    debugLogs: false,
+    configHooksDebugLogs: false,
     imitationMapping: false,
     auth: false,
     confirmationView: false,
@@ -142,6 +147,14 @@ export default (): ReturnType<typeof configuration> => ({
   owners: {
     ownersTtlSeconds: faker.number.int(),
   },
+  pushNotifications: {
+    baseUri: faker.internet.url({ appendSlash: false }),
+    project: faker.word.noun(),
+    serviceAccount: {
+      clientEmail: faker.internet.email(),
+      privateKey: faker.string.alphanumeric(),
+    },
+  },
   redis: {
     host: process.env.REDIS_HOST || 'localhost',
     port: process.env.REDIS_PORT || '6379',
@@ -167,13 +180,14 @@ export default (): ReturnType<typeof configuration> => ({
   },
   swaps: {
     api: {
-      1: faker.internet.url(),
-      100: faker.internet.url(),
-      42161: faker.internet.url(),
-      11155111: faker.internet.url(),
+      1: faker.internet.url({ appendSlash: false }),
+      100: faker.internet.url({ appendSlash: false }),
+      42161: faker.internet.url({ appendSlash: false }),
+      11155111: faker.internet.url({ appendSlash: false }),
     },
     explorerBaseUri: faker.internet.url(),
     restrictApps: false,
     allowedApps: [],
+    maxNumberOfParts: faker.number.int(),
   },
 });

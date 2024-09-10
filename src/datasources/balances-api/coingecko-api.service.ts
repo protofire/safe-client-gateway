@@ -16,7 +16,7 @@ import {
   NetworkService,
   INetworkService,
 } from '@/datasources/network/network.service.interface';
-import { difference, get } from 'lodash';
+import { difference, get, random } from 'lodash';
 import { LoggingService, ILoggingService } from '@/logging/logging.interface';
 import { NetworkResponseError } from '@/datasources/network/entities/network.error.entity';
 import { asError } from '@/logging/utils';
@@ -35,7 +35,7 @@ export class CoingeckoApi implements IPricesApi {
   /**
    * Time range in seconds used to get a random value when calculating a TTL for not-found token prices.
    */
-  static readonly NOT_FOUND_TTL_RANGE_SECONDS: number = 60 * 60 * 24;
+  static readonly NOT_FOUND_TTL_RANGE_SECONDS: number = 600; // 10 minutes
   private readonly apiKey: string | undefined;
   private readonly baseUrl: string;
   private readonly defaultExpirationTimeInSeconds: number;
@@ -116,8 +116,11 @@ export class CoingeckoApi implements IPricesApi {
     fiatCode: string;
   }): Promise<number | null> {
     try {
-      const lowerCaseFiatCode = args.fiatCode.toLowerCase();
       const nativeCoinId = args.chain.pricesProvider.nativeCoin;
+      if (nativeCoinId == null) {
+        throw new DataSourceError('pricesProvider.nativeCoinId is not defined');
+      }
+      const lowerCaseFiatCode = args.fiatCode.toLowerCase();
       const cacheDir = CacheRouter.getNativeCoinPriceCacheDir({
         nativeCoinId,
         fiatCode: lowerCaseFiatCode,
@@ -145,7 +148,7 @@ export class CoingeckoApi implements IPricesApi {
       // Error at this level are logged out, but not thrown to the upper layers.
       // The service won't throw an error if a single coin price retrieval fails.
       this.loggingService.error(
-        `Error while getting native coin price: ${asError(error)} `,
+        `Error getting native coin price: ${asError(error)} `,
       );
       return null;
     }
@@ -166,11 +169,14 @@ export class CoingeckoApi implements IPricesApi {
     fiatCode: string;
   }): Promise<AssetPrice[]> {
     try {
+      const chainName = args.chain.pricesProvider.chainName;
+      if (chainName == null) {
+        throw new DataSourceError('pricesProvider.chainName is not defined');
+      }
       const lowerCaseFiatCode = args.fiatCode.toLowerCase();
       const lowerCaseTokenAddresses = args.tokenAddresses.map((address) =>
         address.toLowerCase(),
       );
-      const chainName = args.chain.pricesProvider.chainName;
       const pricesFromCache = await this._getTokenPricesFromCache({
         chainName,
         tokenAddresses: lowerCaseTokenAddresses,
@@ -193,7 +199,7 @@ export class CoingeckoApi implements IPricesApi {
       // Error at this level are logged out, but not thrown to the upper layers.
       // The service won't throw an error if a single token price retrieval fails.
       this.loggingService.error(
-        `Error while getting token prices: ${asError(error)} `,
+        `Error getting token prices: ${asError(error)} `,
       );
       return [];
     }
@@ -219,7 +225,7 @@ export class CoingeckoApi implements IPricesApi {
       return result.map((item) => item.toUpperCase());
     } catch (error) {
       this.loggingService.error(
-        `CoinGecko error while getting fiat codes: ${asError(error)} `,
+        `CoinGecko error getting fiat codes: ${asError(error)} `,
       );
       return [];
     }
@@ -343,14 +349,13 @@ export class CoingeckoApi implements IPricesApi {
   }
 
   /**
-   * Gets a random integer value between (notFoundPriceTtlSeconds - notFoundTtlRangeSeconds)
-   * and (notFoundPriceTtlSeconds + notFoundTtlRangeSeconds).
+   * Gets a random integer value between notFoundPriceTtlSeconds and (notFoundPriceTtlSeconds + notFoundTtlRangeSeconds).
+   * The minimum result will be greater than notFoundTtlRangeSeconds to avoid having a negative TTL.
    */
   private _getRandomNotFoundTokenPriceTtl(): number {
-    const min =
-      this.notFoundPriceTtlSeconds - CoingeckoApi.NOT_FOUND_TTL_RANGE_SECONDS;
-    const max =
-      this.notFoundPriceTtlSeconds + CoingeckoApi.NOT_FOUND_TTL_RANGE_SECONDS;
-    return Math.floor(Math.random() * (max - min) + min);
+    return random(
+      this.notFoundPriceTtlSeconds,
+      this.notFoundPriceTtlSeconds + CoingeckoApi.NOT_FOUND_TTL_RANGE_SECONDS,
+    );
   }
 }

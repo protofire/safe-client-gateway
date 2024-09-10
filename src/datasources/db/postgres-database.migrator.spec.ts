@@ -1,8 +1,9 @@
-import { dbFactory } from '@/__tests__/db.factory';
-import postgres from 'postgres';
-import path from 'node:path';
-import fs from 'node:fs';
+import { TestDbFactory } from '@/__tests__/db.factory';
 import { PostgresDatabaseMigrator } from '@/datasources/db/postgres-database.migrator';
+import { faker } from '@faker-js/faker';
+import fs from 'node:fs';
+import path from 'node:path';
+import postgres from 'postgres';
 
 const folder = path.join(__dirname, 'migrations');
 const migrations: Array<{
@@ -45,23 +46,24 @@ const migrations: Array<{
     },
   },
 ];
+type TestRow = { a: string; b: number };
+type ExtendedTestRow = { a: string; b: number; c: Date };
 
 describe('PostgresDatabaseMigrator tests', () => {
   let sql: postgres.Sql;
   let target: PostgresDatabaseMigrator;
+  const testDbFactory = new TestDbFactory();
 
-  beforeEach(() => {
-    sql = dbFactory();
+  beforeAll(async () => {
+    sql = await testDbFactory.createTestDatabase(faker.string.uuid());
     target = new PostgresDatabaseMigrator(sql);
   });
 
-  afterEach(async () => {
-    // Drop example table after each test
-    await sql`drop table if exists test`;
+  afterAll(async () => {
+    await testDbFactory.destroyTestDatabase(sql);
+  });
 
-    // Close connection after each test
-    await sql.end();
-
+  afterEach(() => {
     // Remove migrations folder after each test
     fs.rmSync(folder, { recursive: true, force: true });
   });
@@ -196,8 +198,9 @@ describe('PostgresDatabaseMigrator tests', () => {
       await expect(
         target.test({
           migration: migration1.name,
-          before: (sql) => sql`SELECT * FROM test`,
-          after: (sql) => sql`SELECT * FROM test`,
+          before: (sql) => sql`SELECT * FROM test`.catch(() => undefined),
+          after: (sql): Promise<TestRow[]> =>
+            sql<TestRow[]>`SELECT * FROM test`,
           folder,
         }),
       ).resolves.toStrictEqual({
@@ -227,8 +230,10 @@ describe('PostgresDatabaseMigrator tests', () => {
       await expect(
         target.test({
           migration: migration2.name,
-          before: (sql) => sql`SELECT * FROM test`,
-          after: (sql) => sql`SELECT * FROM test`,
+          before: (sql): Promise<TestRow[]> =>
+            sql<TestRow[]>`SELECT * FROM test`,
+          after: (sql): Promise<ExtendedTestRow[]> =>
+            sql<ExtendedTestRow[]>`SELECT * FROM test`,
           folder,
         }),
       ).resolves.toStrictEqual({
@@ -265,7 +270,7 @@ describe('PostgresDatabaseMigrator tests', () => {
         target.test({
           migration: migration3.name,
           before: (sql) => sql`SELECT * FROM test`,
-          after: (sql) => sql`SELECT * FROM test`,
+          after: (sql) => sql`SELECT * FROM test`.catch(() => undefined),
           folder,
         }),
       ).resolves.toStrictEqual({

@@ -7,20 +7,24 @@ import {
   ApiProperty,
   ApiPropertyOptional,
 } from '@nestjs/swagger';
-import { OrderClass, OrderStatus } from '@/domain/swaps/entities/order.entity';
+import {
+  OrderClass,
+  OrderKind,
+  OrderStatus,
+} from '@/domain/swaps/entities/order.entity';
 import { TokenInfo } from '@/routes/transactions/entities/swaps/token-info.entity';
 
 export interface OrderInfo {
   uid: string;
   status: OrderStatus;
-  kind: 'buy' | 'sell';
+  kind: OrderKind;
   orderClass: OrderClass;
   validUntil: number;
   sellAmount: string;
   buyAmount: string;
   executedSellAmount: string;
   executedBuyAmount: string;
-  explorerUrl: URL;
+  explorerUrl: string;
   executedSurplusFee: string | null;
   receiver: string | null;
   owner: `0x${string}`;
@@ -43,8 +47,8 @@ export class SwapOrderTransactionInfo
   })
   status: OrderStatus;
 
-  @ApiProperty({ enum: ['buy', 'sell'] })
-  kind: 'buy' | 'sell';
+  @ApiProperty({ enum: Object.values(OrderKind) })
+  kind: OrderKind;
 
   @ApiProperty({
     enum: OrderClass,
@@ -84,7 +88,7 @@ export class SwapOrderTransactionInfo
     type: String,
     description: 'The URL to the explorer page of the order',
   })
-  explorerUrl: URL;
+  explorerUrl: string;
 
   @ApiPropertyOptional({
     type: String,
@@ -115,7 +119,7 @@ export class SwapOrderTransactionInfo
   constructor(args: {
     uid: string;
     orderStatus: OrderStatus;
-    kind: 'buy' | 'sell';
+    kind: OrderKind;
     class: OrderClass;
     validUntil: number;
     sellAmount: string;
@@ -124,7 +128,7 @@ export class SwapOrderTransactionInfo
     executedBuyAmount: string;
     sellToken: TokenInfo;
     buyToken: TokenInfo;
-    explorerUrl: URL;
+    explorerUrl: string;
     executedSurplusFee: string | null;
     receiver: string | null;
     owner: `0x${string}`;

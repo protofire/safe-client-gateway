@@ -23,7 +23,13 @@ export default () => ({
         ? parseInt(process.env.AMQP_PREFETCH)
         : 100,
   },
-  applicationPort: process.env.APPLICATION_PORT || '3000',
+  application: {
+    isProduction: process.env.CGW_ENV === 'production',
+    // Enables/disables the execution of migrations on startup.
+    // Defaults to true.
+    runMigrations: process.env.RUN_MIGRATIONS?.toLowerCase() !== 'false',
+    port: process.env.APPLICATION_PORT || '3000',
+  },
   auth: {
     token: process.env.AUTH_TOKEN,
     nonceTtlSeconds: parseInt(
@@ -34,7 +40,6 @@ export default () => ({
     ),
   },
   balances: {
-    balancesTtlSeconds: parseInt(process.env.BALANCES_TTL_SECONDS ?? `${300}`),
     providers: {
       safe: {
         prices: {
@@ -105,7 +110,7 @@ export default () => ({
   },
   blockchain: {
     infura: {
-      apiKey: process.env.INFURA_API_KEY,
+      apiKey: process.env.INFURA_API_KEY || '',
     },
   },
   db: {
@@ -163,8 +168,10 @@ export default () => ({
     zerionBalancesChainIds:
       process.env.FF_ZERION_BALANCES_CHAIN_IDS?.split(',') ?? [],
     swapsDecoding: process.env.FF_SWAPS_DECODING?.toLowerCase() === 'true',
-    historyDebugLogs:
-      process.env.FF_HISTORY_DEBUG_LOGS?.toLowerCase() === 'true',
+    twapsDecoding: process.env.FF_TWAPS_DECODING?.toLowerCase() === 'true',
+    debugLogs: process.env.FF_DEBUG_LOGS?.toLowerCase() === 'true',
+    configHooksDebugLogs:
+      process.env.FF_CONFIG_HOOKS_DEBUG_LOGS?.toLowerCase() === 'true',
     imitationMapping:
       process.env.FF_IMITATION_MAPPING?.toLowerCase() === 'true',
     auth: process.env.FF_AUTH?.toLowerCase() === 'true',
@@ -211,6 +218,18 @@ export default () => ({
       maxOverviews: parseInt(process.env.MAX_SAFE_OVERVIEWS ?? `${10}`),
     },
   },
+  pushNotifications: {
+    baseUri:
+      process.env.PUSH_NOTIFICATIONS_API_BASE_URI ||
+      'https://fcm.googleapis.com/v1/projects',
+    project: process.env.PUSH_NOTIFICATIONS_API_PROJECT || '',
+    serviceAccount: {
+      clientEmail:
+        process.env.PUSH_NOTIFICATIONS_API_SERVICE_ACCOUNT_CLIENT_EMAIL || '',
+      privateKey:
+        process.env.PUSH_NOTIFICATIONS_API_SERVICE_ACCOUNT_PRIVATE_KEY || '',
+    },
+  },
   redis: {
     host: process.env.REDIS_HOST || 'localhost',
     port: process.env.REDIS_PORT || '6379',
@@ -255,5 +274,11 @@ export default () => ({
     // The app names should match the "App Code" of the metadata provided to CoW Swap.
     // See https://explorer.cow.fi/appdata?tab=encode
     allowedApps: process.env.SWAPS_ALLOWED_APPS?.split(',') || [],
+    // Upper limit of parts we will request from CoW for TWAP orders, after
+    // which we return base values for those orders
+    // Note: 11 is the average number of parts, confirmed by CoW
+    maxNumberOfParts: parseInt(
+      process.env.SWAPS_MAX_NUMBER_OF_PARTS ?? `${11}`,
+    ),
   },
 });
