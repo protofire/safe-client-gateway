@@ -16,6 +16,18 @@ import { Erc721Transfer } from '@/routes/transactions/entities/transfers/erc721-
 import { NativeCoinTransfer } from '@/routes/transactions/entities/transfers/native-coin-transfer.entity';
 import { TransferInfoMapper } from '@/routes/transactions/mappers/transfers/transfer-info.mapper';
 import { getAddress } from 'viem';
+import { IConfigurationService } from '@/config/configuration.service.interface';
+import { SwapTransferInfoMapper } from '@/routes/transactions/mappers/transfers/swap-transfer-info.mapper';
+import { ILoggingService } from '@/logging/logging.interface';
+
+const configurationService = jest.mocked({
+  getOrThrow: jest.fn(),
+} as jest.MockedObjectDeep<IConfigurationService>);
+
+// Note: we mock this as there is a dedicated test for this mapper
+const swapTransferInfoMapper = jest.mocked({
+  mapSwapTransferInfo: jest.fn(),
+} as jest.MockedObjectDeep<SwapTransferInfoMapper>);
 
 const addressInfoHelper = jest.mocked({
   getOrDefault: jest.fn(),
@@ -25,12 +37,22 @@ const tokenRepository = jest.mocked({
   getToken: jest.fn(),
 } as jest.MockedObjectDeep<TokenRepository>);
 
+const mockLoggingService = jest.mocked({
+  warn: jest.fn(),
+} as jest.MockedObjectDeep<ILoggingService>);
+
 describe('Transfer Info mapper (Unit)', () => {
   let mapper: TransferInfoMapper;
 
   beforeEach(() => {
     jest.resetAllMocks();
-    mapper = new TransferInfoMapper(tokenRepository, addressInfoHelper);
+    mapper = new TransferInfoMapper(
+      configurationService,
+      tokenRepository,
+      swapTransferInfoMapper,
+      addressInfoHelper,
+      mockLoggingService,
+    );
   });
 
   it('should build an ERC20 TransferTransactionInfo', async () => {
@@ -47,6 +69,9 @@ describe('Transfer Info mapper (Unit)', () => {
     const actual = await mapper.mapTransferInfo(chainId, transfer, safe);
 
     expect(actual).toBeInstanceOf(TransferTransactionInfo);
+    if (!(actual instanceof TransferTransactionInfo)) {
+      throw new Error('Not a TransferTransactionInfo instance');
+    }
     expect(actual.transferInfo).toBeInstanceOf(Erc20Transfer);
     expect(actual).toEqual(
       expect.objectContaining({
@@ -80,6 +105,9 @@ describe('Transfer Info mapper (Unit)', () => {
     const actual = await mapper.mapTransferInfo(chainId, transfer, safe);
 
     expect(actual).toBeInstanceOf(TransferTransactionInfo);
+    if (!(actual instanceof TransferTransactionInfo)) {
+      throw new Error('Not a TransferTransactionInfo instance');
+    }
     expect(actual.transferInfo).toBeInstanceOf(Erc721Transfer);
     expect(actual).toEqual(
       expect.objectContaining({
@@ -110,6 +138,9 @@ describe('Transfer Info mapper (Unit)', () => {
     const actual = await mapper.mapTransferInfo(chainId, transfer, safe);
 
     expect(actual).toBeInstanceOf(TransferTransactionInfo);
+    if (!(actual instanceof TransferTransactionInfo)) {
+      throw new Error('Not a TransferTransactionInfo instance');
+    }
     expect(actual.transferInfo).toBeInstanceOf(NativeCoinTransfer);
     expect(actual).toEqual(
       expect.objectContaining({

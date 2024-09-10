@@ -7,6 +7,7 @@ import { HttpErrorFactory } from '@/datasources/errors/http-error-factory';
 import { chainBuilder } from '@/domain/chains/entities/__tests__/chain.builder';
 import { DataSourceError } from '@/domain/errors/data-source.error';
 import { safeAppBuilder } from '@/domain/safe-apps/entities/__tests__/safe-app.builder';
+import { ILoggingService } from '@/logging/logging.interface';
 import { faker } from '@faker-js/faker';
 
 const dataSource = {
@@ -25,6 +26,10 @@ const httpErrorFactory = {
 } as jest.MockedObjectDeep<HttpErrorFactory>;
 const mockHttpErrorFactory = jest.mocked(httpErrorFactory);
 
+const mockLoggingService = {
+  info: jest.fn(),
+} as jest.MockedObjectDeep<ILoggingService>;
+
 describe('ConfigApi', () => {
   const baseUri = faker.internet.url({ appendSlash: false });
   const expirationTimeInSeconds = faker.number.int();
@@ -32,7 +37,7 @@ describe('ConfigApi', () => {
   let fakeConfigurationService: FakeConfigurationService;
   let service: ConfigApi;
 
-  beforeAll(async () => {
+  beforeAll(() => {
     fakeConfigurationService = new FakeConfigurationService();
     fakeConfigurationService.set('safeConfig.baseUri', baseUri);
     fakeConfigurationService.set(
@@ -43,15 +48,17 @@ describe('ConfigApi', () => {
       'expirationTimeInSeconds.notFound.default',
       notFoundExpirationTimeInSeconds,
     );
+    fakeConfigurationService.set('features.configHooksDebugLogs', false);
   });
 
-  beforeEach(async () => {
+  beforeEach(() => {
     jest.resetAllMocks();
     service = new ConfigApi(
       dataSource,
       mockCacheService,
       fakeConfigurationService,
       mockHttpErrorFactory,
+      mockLoggingService,
     );
   });
 
@@ -65,6 +72,7 @@ describe('ConfigApi', () => {
           mockCacheService,
           fakeConfigurationService,
           mockHttpErrorFactory,
+          mockLoggingService,
         ),
     ).toThrow();
   });

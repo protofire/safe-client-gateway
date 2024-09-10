@@ -14,7 +14,7 @@ export class NotificationsRepository implements INotificationsRepository {
     device: Device,
     safeRegistration: SafeRegistration,
   ): Promise<SafeRegistration> {
-    const api = await this.transactionApiManager.getTransactionApi(
+    const api = await this.transactionApiManager.getApi(
       safeRegistration.chainId,
     );
     await api.postDeviceRegistration({
@@ -29,20 +29,16 @@ export class NotificationsRepository implements INotificationsRepository {
     chainId: string;
     uuid: string;
   }): Promise<void> {
-    const api = await this.transactionApiManager.getTransactionApi(
-      args.chainId,
-    );
+    const api = await this.transactionApiManager.getApi(args.chainId);
     return api.deleteDeviceRegistration(args.uuid);
   }
 
   async unregisterSafe(args: {
     chainId: string;
     uuid: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
   }): Promise<void> {
-    const api = await this.transactionApiManager.getTransactionApi(
-      args.chainId,
-    );
+    const api = await this.transactionApiManager.getApi(args.chainId);
     return api.deleteSafeRegistration({
       uuid: args.uuid,
       safeAddress: args.safeAddress,

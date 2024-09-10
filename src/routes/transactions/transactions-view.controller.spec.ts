@@ -6,8 +6,6 @@ import {
 import configuration from '@/config/entities/__tests__/configuration';
 import { Test, TestingModule } from '@nestjs/testing';
 import { AppModule } from '@/app.module';
-import { AccountDataSourceModule } from '@/datasources/account/account.datasource.module';
-import { TestAccountDataSourceModule } from '@/datasources/account/__tests__/test.account.datasource.module';
 import { CacheModule } from '@/datasources/cache/cache.module';
 import { TestCacheModule } from '@/datasources/cache/__tests__/test.cache.module';
 import { RequestScopedLoggingModule } from '@/logging/logging.module';
@@ -16,23 +14,26 @@ import { NetworkModule } from '@/datasources/network/network.module';
 import { TestNetworkModule } from '@/datasources/network/__tests__/test.network.module';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import { TestAppProvider } from '@/__tests__/test-app.provider';
-import * as request from 'supertest';
+import request from 'supertest';
 import { safeBuilder } from '@/domain/safe/entities/__tests__/safe.builder';
 import { chainBuilder } from '@/domain/chains/entities/__tests__/chain.builder';
 import { dataDecodedBuilder } from '@/domain/data-decoder/entities/__tests__/data-decoded.builder';
 import { orderBuilder } from '@/domain/swaps/entities/__tests__/order.builder';
 import { tokenBuilder } from '@/domain/tokens/__tests__/token.builder';
-import { setPreSignatureEncoder } from '@/domain/swaps/contracts/__tests__/encoders/set-pre-signature-encoder.builder';
+import { setPreSignatureEncoder } from '@/domain/swaps/contracts/__tests__/encoders/gp-v2-encoder.builder';
 import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
 import { faker } from '@faker-js/faker';
+import { Server } from 'net';
+import { getAddress } from 'viem';
 
 describe('TransactionsViewController tests', () => {
-  let app: INestApplication;
+  let app: INestApplication<Server>;
   let safeConfigUrl: string;
   let swapsApiUrl: string;
   let networkService: jest.MockedObjectDeep<INetworkService>;
   const verifiedApp = faker.company.buzzNoun();
+  const chainId = '1';
 
   beforeEach(async () => {
     jest.resetAllMocks();
@@ -54,8 +55,6 @@ describe('TransactionsViewController tests', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(testConfiguration)],
     })
-      .overrideModule(AccountDataSourceModule)
-      .useModule(TestAccountDataSourceModule)
       .overrideModule(CacheModule)
       .useModule(TestCacheModule)
       .overrideModule(RequestScopedLoggingModule)
@@ -66,9 +65,11 @@ describe('TransactionsViewController tests', () => {
       .useModule(TestQueuesApiModule)
       .compile();
 
-    const configurationService = moduleFixture.get(IConfigurationService);
-    safeConfigUrl = configurationService.get('safeConfig.baseUri');
-    swapsApiUrl = configurationService.get('swaps.api.1');
+    const configurationService = moduleFixture.get<IConfigurationService>(
+      IConfigurationService,
+    );
+    safeConfigUrl = configurationService.getOrThrow('safeConfig.baseUri');
+    swapsApiUrl = configurationService.getOrThrow(`swaps.api.${chainId}`);
     networkService = moduleFixture.get(NetworkService);
 
     app = await new TestAppProvider().provide(moduleFixture);
@@ -112,7 +113,7 @@ describe('TransactionsViewController tests', () => {
   });
 
   it('Gets swap confirmation view with swap data', async () => {
-    const chain = chainBuilder().with('chainId', '1').build();
+    const chain = chainBuilder().with('chainId', chainId).build();
     const safe = safeBuilder().build();
     const dataDecoded = dataDecodedBuilder().build();
     const preSignatureEncoder = setPreSignatureEncoder();
@@ -194,13 +195,83 @@ describe('TransactionsViewController tests', () => {
           },
           receiver: order.receiver,
           owner: order.owner,
-          fullAppData: JSON.parse(order.fullAppData),
+          fullAppData: JSON.parse(order.fullAppData as string),
+        }),
+      );
+  });
+
+  it('gets TWAP confirmation view with TWAP data', async () => {
+    const ComposableCowAddress = '0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74';
+    /**
+     * @see https://sepolia.etherscan.io/address/0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74
+     */
+    const chain = chainBuilder().with('chainId', chainId).build();
+    const safe = safeBuilder()
+      .with('address', '0x31eaC7F0141837B266De30f4dc9aF15629Bd5381')
+      .build();
+    const data =
+      '0x0d0d9800000000000000000000000000000000000000000000000000000000000000008000000000000000000000000052ed56da04309aca4c3fecc595298d80c2f16bac000000000000000000000000000000000000000000000000000000000000024000000000000000000000000000000000000000000000000000000000000000010000000000000000000000006cf1e9ca41f7611def408122793c358a3d11e5a500000000000000000000000000000000000000000000000000000019011f294a00000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000140000000000000000000000000be72e441bf55620febc26715db68d3494213d8cb000000000000000000000000fff9976782d46cc05630d1f6ebab18b2324d6b1400000000000000000000000031eac7f0141837b266de30f4dc9af15629bd538100000000000000000000000000000000000000000000000b941d039eed310b36000000000000000000000000000000000000000000000000087bbc924df9167e0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000007080000000000000000000000000000000000000000000000000000000000000000f7be7261f56698c258bf75f888d68a00c85b22fb21958b9009c719eb88aebda00000000000000000000000000000000000000000000000000000000000000000';
+    const appDataHash =
+      '0xf7be7261f56698c258bf75f888d68a00c85b22fb21958b9009c719eb88aebda0';
+    const fullAppData = {
+      fullAppData: JSON.stringify({ appCode: verifiedApp }),
+    };
+    const dataDecoded = dataDecodedBuilder().build();
+    const buyToken = tokenBuilder()
+      .with('address', getAddress('0xfff9976782d46cc05630d1f6ebab18b2324d6b14'))
+      .build();
+    const sellToken = tokenBuilder()
+      .with('address', getAddress('0xbe72e441bf55620febc26715db68d3494213d8cb'))
+      .build();
+    networkService.get.mockImplementation(({ url }) => {
+      if (url === `${safeConfigUrl}/api/v1/chains/${chain.chainId}`) {
+        return Promise.resolve({ data: chain, status: 200 });
+      }
+      if (
+        url === `${chain.transactionService}/api/v1/tokens/${buyToken.address}`
+      ) {
+        return Promise.resolve({ data: buyToken, status: 200 });
+      }
+      if (
+        url === `${chain.transactionService}/api/v1/tokens/${sellToken.address}`
+      ) {
+        return Promise.resolve({ data: sellToken, status: 200 });
+      }
+      if (url === `${swapsApiUrl}/api/v1/app_data/${appDataHash}`) {
+        return Promise.resolve({ data: fullAppData, status: 200 });
+      }
+      return Promise.reject(new Error(`Could not match ${url}`));
+    });
+    networkService.post.mockImplementation(({ url }) => {
+      if (url === `${chain.transactionService}/api/v1/data-decoder/`) {
+        return Promise.resolve({
+          data: dataDecoded,
+          status: 200,
+        });
+      }
+      return Promise.reject(new Error(`Could not match ${url}`));
+    });
+
+    await request(app.getHttpServer())
+      .post(
+        `/v1/chains/${chain.chainId}/safes/${safe.address}/views/transaction-confirmation`,
+      )
+      .send({
+        data,
+        to: ComposableCowAddress,
+      })
+      .expect(200)
+      .expect(({ body }) =>
+        expect(body).toMatchObject({
+          type: 'COW_SWAP_TWAP_ORDER',
+          method: dataDecoded.method,
+          parameters: dataDecoded.parameters,
         }),
       );
   });
 
   it('Gets Generic confirmation view if order data is not available', async () => {
-    const chain = chainBuilder().with('chainId', '1').build();
+    const chain = chainBuilder().with('chainId', chainId).build();
     const safe = safeBuilder().build();
     const dataDecoded = dataDecodedBuilder().build();
     const preSignatureEncoder = setPreSignatureEncoder();
@@ -244,7 +315,7 @@ describe('TransactionsViewController tests', () => {
   });
 
   it('Gets Generic confirmation view if buy token data is not available', async () => {
-    const chain = chainBuilder().with('chainId', '1').build();
+    const chain = chainBuilder().with('chainId', chainId).build();
     const safe = safeBuilder().build();
     const dataDecoded = dataDecodedBuilder().build();
     const preSignatureEncoder = setPreSignatureEncoder();
@@ -299,7 +370,7 @@ describe('TransactionsViewController tests', () => {
   });
 
   it('Gets Generic confirmation view if sell token data is not available', async () => {
-    const chain = chainBuilder().with('chainId', '1').build();
+    const chain = chainBuilder().with('chainId', chainId).build();
     const safe = safeBuilder().build();
     const dataDecoded = dataDecodedBuilder().build();
     const preSignatureEncoder = setPreSignatureEncoder();
@@ -354,14 +425,15 @@ describe('TransactionsViewController tests', () => {
   });
 
   it('Gets Generic confirmation view if swap app is restricted', async () => {
-    const chain = chainBuilder().with('chainId', '1').build();
+    const chain = chainBuilder().with('chainId', chainId).build();
     const safe = safeBuilder().build();
     const dataDecoded = dataDecodedBuilder().build();
     const preSignatureEncoder = setPreSignatureEncoder();
     const preSignature = preSignatureEncoder.build();
     const order = orderBuilder()
       .with('uid', preSignature.orderUid)
-      .with('fullAppData', `{ "appCode": "${faker.company.buzzNoun()}" }`)
+      // We don't use buzzNoun here as it can generate the same value as verifiedApp
+      .with('fullAppData', `{ "appCode": "restrited app code" }`)
       .build();
     const buyToken = tokenBuilder().with('address', order.buyToken).build();
     const sellToken = tokenBuilder().with('address', order.sellToken).build();
@@ -410,7 +482,7 @@ describe('TransactionsViewController tests', () => {
   });
 
   it('executedSurplusFee is rendered as null if not available', async () => {
-    const chain = chainBuilder().with('chainId', '1').build();
+    const chain = chainBuilder().with('chainId', chainId).build();
     const safe = safeBuilder().build();
     const dataDecoded = dataDecodedBuilder().build();
     const preSignatureEncoder = setPreSignatureEncoder();

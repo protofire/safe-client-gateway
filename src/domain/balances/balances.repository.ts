@@ -14,13 +14,14 @@ export class BalancesRepository implements IBalancesRepository {
 
   async getBalances(args: {
     chain: Chain;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
     fiatCode: string;
     trusted?: boolean;
     excludeSpam?: boolean;
   }): Promise<Balance[]> {
-    const api = await this.balancesApiManager.getBalancesApi(
+    const api = await this.balancesApiManager.getApi(
       args.chain.chainId,
+      args.safeAddress,
     );
     const balances = await api.getBalances(args);
     return balances.map((balance) => BalanceSchema.parse(balance));
@@ -28,13 +29,20 @@ export class BalancesRepository implements IBalancesRepository {
 
   async clearBalances(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
   }): Promise<void> {
-    const api = await this.balancesApiManager.getBalancesApi(args.chainId);
+    const api = await this.balancesApiManager.getApi(
+      args.chainId,
+      args.safeAddress,
+    );
     await api.clearBalances(args);
   }
 
   async getFiatCodes(): Promise<string[]> {
     return this.balancesApiManager.getFiatCodes();
+  }
+
+  clearApi(chainId: string): void {
+    this.balancesApiManager.destroyApi(chainId);
   }
 }

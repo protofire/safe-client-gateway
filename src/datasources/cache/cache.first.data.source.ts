@@ -21,6 +21,7 @@ import {
 } from '@/domain/safe/entities/transaction.entity';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import { isArray } from 'lodash';
+import { Safe } from '@/domain/safe/entities/safe.entity';
 
 /**
  * A data source which tries to retrieve values from cache using
@@ -33,7 +34,8 @@ import { isArray } from 'lodash';
  */
 @Injectable()
 export class CacheFirstDataSource {
-  private readonly isHistoryDebugLogsEnabled: boolean;
+  private readonly areDebugLogsEnabled: boolean;
+  private readonly areConfigHooksDebugLogsEnabled: boolean;
 
   constructor(
     @Inject(CacheService) private readonly cacheService: ICacheService,
@@ -42,9 +44,11 @@ export class CacheFirstDataSource {
     @Inject(IConfigurationService)
     private readonly configurationService: IConfigurationService,
   ) {
-    this.isHistoryDebugLogsEnabled =
+    this.areDebugLogsEnabled =
+      this.configurationService.getOrThrow<boolean>('features.debugLogs');
+    this.areConfigHooksDebugLogsEnabled =
       this.configurationService.getOrThrow<boolean>(
-        'features.historyDebugLogs',
+        'features.configHooksDebugLogs',
       );
   }
 
@@ -97,11 +101,10 @@ export class CacheFirstDataSource {
     this.loggingService.debug({ type: 'cache_hit', key, field });
     const cachedData = JSON.parse(cached);
     if (cachedData?.response?.status === 404) {
-      throw new NetworkResponseError(
-        cachedData.url,
-        cachedData.response,
-        cachedData?.data,
-      );
+      // TODO: create a CachedData type with guard to avoid these type assertions.
+      const url: URL = cachedData.url;
+      const response: Response = cachedData.response;
+      throw new NetworkResponseError(url, response, cachedData?.data);
     }
     return cachedData;
   }
@@ -133,14 +136,30 @@ export class CacheFirstDataSource {
 
       // TODO: transient logging for debugging
       if (
-        this.isHistoryDebugLogsEnabled &&
-        args.url.includes('all-transactions')
+        this.areDebugLogsEnabled &&
+        (args.url.includes('all-transactions') ||
+          args.url.includes('multisig-transactions'))
       ) {
         this.logTransactionsCacheWrite(
           startTimeMs,
           args.cacheDir,
           data as Page<Transaction>,
         );
+      }
+
+      if (this.areDebugLogsEnabled && args.cacheDir.key.includes('_safe_')) {
+        this.logSafeMetadataCacheWrite(
+          startTimeMs,
+          args.cacheDir,
+          data as Safe,
+        );
+      }
+
+      if (
+        this.areConfigHooksDebugLogsEnabled &&
+        args.cacheDir.key.includes('chain')
+      ) {
+        this.logChainUpdateCacheWrite(startTimeMs, args.cacheDir, data);
       }
     }
     return data;
@@ -218,6 +237,8 @@ export class CacheFirstDataSource {
             return {
               txType: 'multisig',
               safeTxHash: transaction.safeTxHash,
+              confirmations: transaction.confirmations,
+              confirmationRequired: transaction.confirmationsRequired,
             };
           } else if (isEthereumTransaction(transaction)) {
             return {
@@ -236,6 +257,46 @@ export class CacheFirstDataSource {
             };
           }
         }),
+    });
+  }
+
+  /**
+   * Logs the Safe metadata retrieved.
+   * NOTE: this is a debugging-only function.
+   * TODO: remove this function after debugging.
+   */
+  private logSafeMetadataCacheWrite(
+    requestStartTime: number,
+    cacheDir: CacheDir,
+    safe: Safe,
+  ): void {
+    this.loggingService.info({
+      type: 'cache_write',
+      cacheKey: cacheDir.key,
+      cacheField: cacheDir.field,
+      cacheWriteTime: new Date(),
+      requestStartTime: new Date(requestStartTime),
+      safe,
+    });
+  }
+
+  /**
+   * Logs the chain/chains retrieved.
+   * NOTE: this is a debugging-only function.
+   * TODO: remove this function after debugging.
+   */
+  private logChainUpdateCacheWrite(
+    requestStartTime: number,
+    cacheDir: CacheDir,
+    data: unknown,
+  ): void {
+    this.loggingService.info({
+      type: 'cache_write',
+      cacheKey: cacheDir.key,
+      cacheField: cacheDir.field,
+      cacheWriteTime: new Date(),
+      requestStartTime: new Date(requestStartTime),
+      data,
     });
   }
 }

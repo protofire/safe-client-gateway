@@ -1,9 +1,12 @@
-import * as postgres from 'postgres';
+import postgres from 'postgres';
 import { Module } from '@nestjs/common';
 import { PostgresDatabaseShutdownHook } from '@/datasources/db/postgres-database.shutdown.hook';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import { PostgresDatabaseMigrationHook } from '@/datasources/db/postgres-database.migration.hook';
-import * as fs from 'fs';
+import fs from 'fs';
+import { PostgresDatabaseMigrator } from '@/datasources/db/postgres-database.migrator';
+import { ICachedQueryResolver } from '@/datasources/db/cached-query-resolver.interface';
+import { CachedQueryResolver } from '@/datasources/db/cached-query-resolver';
 
 function dbFactory(configurationService: IConfigurationService): postgres.Sql {
   const caPath = configurationService.get<string>('db.postgres.ssl.caPath');
@@ -31,6 +34,10 @@ function dbFactory(configurationService: IConfigurationService): postgres.Sql {
   });
 }
 
+function migratorFactory(sql: postgres.Sql): PostgresDatabaseMigrator {
+  return new PostgresDatabaseMigrator(sql);
+}
+
 @Module({
   providers: [
     {
@@ -38,9 +45,18 @@ function dbFactory(configurationService: IConfigurationService): postgres.Sql {
       useFactory: dbFactory,
       inject: [IConfigurationService],
     },
+    {
+      provide: PostgresDatabaseMigrator,
+      useFactory: migratorFactory,
+      inject: ['DB_INSTANCE'],
+    },
+    {
+      provide: ICachedQueryResolver,
+      useClass: CachedQueryResolver,
+    },
     PostgresDatabaseShutdownHook,
     PostgresDatabaseMigrationHook,
   ],
-  exports: ['DB_INSTANCE'],
+  exports: ['DB_INSTANCE', ICachedQueryResolver],
 })
 export class PostgresDatabaseModule {}

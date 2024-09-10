@@ -13,10 +13,12 @@ import { IConfigApi } from '@/domain/interfaces/config-api.interface';
 import { IPricesApi } from '@/datasources/balances-api/prices-api.interface';
 import { Inject, Injectable } from '@nestjs/common';
 import { intersection } from 'lodash';
+import { ITransactionApiManager } from '@/domain/interfaces/transaction-api.manager.interface';
 
 @Injectable()
 export class BalancesApiManager implements IBalancesApiManager {
   private safeBalancesApiMap: Record<string, SafeBalancesApi> = {};
+  private readonly isCounterFactualBalancesEnabled: boolean;
   private readonly zerionChainIds: string[];
   private readonly zerionBalancesApi: IBalancesApi;
   private readonly useVpcUrl: boolean;
@@ -30,7 +32,13 @@ export class BalancesApiManager implements IBalancesApiManager {
     private readonly httpErrorFactory: HttpErrorFactory,
     @Inject(IZerionBalancesApi) zerionBalancesApi: IBalancesApi,
     @Inject(IPricesApi) private readonly coingeckoApi: IPricesApi,
+    @Inject(ITransactionApiManager)
+    private readonly transactionApiManager: ITransactionApiManager,
   ) {
+    this.isCounterFactualBalancesEnabled =
+      this.configurationService.getOrThrow<boolean>(
+        'features.counterfactualBalances',
+      );
     this.zerionChainIds = this.configurationService.getOrThrow<string[]>(
       'features.zerionBalancesChainIds',
     );
@@ -40,11 +48,38 @@ export class BalancesApiManager implements IBalancesApiManager {
     this.zerionBalancesApi = zerionBalancesApi;
   }
 
-  async getBalancesApi(chainId: string): Promise<IBalancesApi> {
+  async getApi(
+    chainId: string,
+    safeAddress: `0x${string}`,
+  ): Promise<IBalancesApi> {
     if (this.zerionChainIds.includes(chainId)) {
       return this.zerionBalancesApi;
     }
+    const transactionApi = await this.transactionApiManager.getApi(chainId);
 
+    if (!this.isCounterFactualBalancesEnabled) {
+      return this._getSafeBalancesApi(chainId);
+    }
+
+    // SafeBalancesApi will be returned only if TransactionApi returns the Safe data.
+    // Otherwise ZerionBalancesApi will be returned as the Safe is considered counterfactual/not deployed.
+    const isSafe = await transactionApi.isSafe(safeAddress);
+    if (isSafe) {
+      return this._getSafeBalancesApi(chainId);
+    } else {
+      return this.zerionBalancesApi;
+    }
+  }
+
+  async getFiatCodes(): Promise<string[]> {
+    const [zerionFiatCodes, safeFiatCodes] = await Promise.all([
+      this.zerionBalancesApi.getFiatCodes(),
+      this.coingeckoApi.getFiatCodes(),
+    ]);
+    return intersection(zerionFiatCodes, safeFiatCodes).sort();
+  }
+
+  private async _getSafeBalancesApi(chainId: string): Promise<SafeBalancesApi> {
     const safeBalancesApi = this.safeBalancesApiMap[chainId];
     if (safeBalancesApi !== undefined) return safeBalancesApi;
 
@@ -61,9 +96,9 @@ export class BalancesApiManager implements IBalancesApiManager {
     return this.safeBalancesApiMap[chainId];
   }
 
-  async getFiatCodes(): Promise<string[]> {
-    const zerionFiatCodes = await this.zerionBalancesApi.getFiatCodes();
-    const safeFiatCodes = await this.coingeckoApi.getFiatCodes();
-    return intersection(zerionFiatCodes, safeFiatCodes).sort();
+  destroyApi(chainId: string): void {
+    if (this.safeBalancesApiMap[chainId] !== undefined) {
+      delete this.safeBalancesApiMap[chainId];
+    }
   }
 }

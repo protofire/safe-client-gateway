@@ -15,9 +15,10 @@ import {
   NetworkResponseError,
 } from '@/datasources/network/entities/network.error.entity';
 import { fakeJson } from '@/__tests__/faker';
+import { Server } from 'net';
 
 describe('NetworkModule', () => {
-  let app: INestApplication;
+  let app: INestApplication<Server>;
   let fetchClient: FetchClient;
   let httpClientTimeout: number;
 
@@ -37,9 +38,13 @@ describe('NetworkModule', () => {
       ],
     }).compile();
 
-    const configurationService = moduleFixture.get(IConfigurationService);
+    const configurationService = moduleFixture.get<IConfigurationService>(
+      IConfigurationService,
+    );
     fetchClient = moduleFixture.get('FetchClient');
-    httpClientTimeout = configurationService.get('httpClient.requestTimeout');
+    httpClientTimeout = configurationService.getOrThrow(
+      'httpClient.requestTimeout',
+    );
 
     app = moduleFixture.createNestApplication();
     await app.init();
