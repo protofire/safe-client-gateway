@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { RpcUriAuthentication } from '@/domain/chains/entities/rpc-uri-authentication.entity';
+import { buildLenientPageSchema } from '@/domain/entities/schemas/page.schema.factory';
 import { AddressSchema } from '@/validation/entities/schemas/address.schema';
-import { buildPageSchema } from '@/domain/entities/schemas/page.schema.factory';
 
 export const NativeCurrencySchema = z.object({
   name: z.string(),
@@ -89,6 +89,10 @@ export const ContractAddressesSchema = z
     safeWebAuthnSignerFactoryAddress: null,
   });
 
+function removeTrailingSlash(url: string): string {
+  return url.replace(/\/$/, '');
+}
+
 export const ChainSchema = z.object({
   chainId: z.string(),
   chainName: z.string(),
@@ -105,8 +109,8 @@ export const ChainSchema = z.object({
   nativeCurrency: NativeCurrencySchema,
   pricesProvider: PricesProviderSchema,
   balancesProvider: BalancesProviderSchema,
-  transactionService: z.string().url(),
-  vpcTransactionService: z.string().url(),
+  transactionService: z.string().url().transform(removeTrailingSlash),
+  vpcTransactionService: z.string().url().transform(removeTrailingSlash),
   theme: ThemeSchema,
   gasPrice: GasPriceSchema,
   ensRegistryAddress: AddressSchema.nullish().default(null),
@@ -118,4 +122,4 @@ export const ChainSchema = z.object({
 
 // TODO: Merge schema definitions with ChainEntity.
 
-export const ChainPageSchema = buildPageSchema(ChainSchema);
+export const ChainLenientPageSchema = buildLenientPageSchema(ChainSchema);

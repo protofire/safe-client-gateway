@@ -7,6 +7,14 @@ export default (): ReturnType<typeof configuration> => ({
     version: faker.system.semver(),
     buildNumber: faker.string.numeric(),
   },
+  accounts: {
+    creationRateLimitPeriodSeconds: faker.number.int(),
+    creationRateLimitCalls: faker.number.int(),
+    counterfactualSafes: {
+      creationRateLimitPeriodSeconds: faker.number.int(),
+      creationRateLimitCalls: faker.number.int(),
+    },
+  },
   amqp: {
     url: faker.internet.url({ appendSlash: false }),
     exchange: { name: faker.string.sample(), mode: faker.string.sample() },
@@ -100,6 +108,10 @@ export default (): ReturnType<typeof configuration> => ({
   },
   expirationTimeInSeconds: {
     default: faker.number.int(),
+    rpc: faker.number.int(),
+    holesky: faker.number.int(),
+    indexing: faker.number.int(),
+    staking: faker.number.int(),
     notFound: {
       default: faker.number.int(),
       contract: faker.number.int(),
@@ -122,6 +134,9 @@ export default (): ReturnType<typeof configuration> => ({
     delegatesV2: false,
     counterfactualBalances: false,
     accounts: false,
+    pushNotifications: false,
+    nativeStaking: false,
+    nativeStakingDecoding: false,
   },
   httpClient: { requestTimeout: faker.number.int() },
   locking: {
@@ -177,6 +192,16 @@ export default (): ReturnType<typeof configuration> => ({
   },
   safeWebApp: {
     baseUri: faker.internet.url({ appendSlash: false }),
+  },
+  staking: {
+    testnet: {
+      baseUri: faker.internet.url({ appendSlash: false }),
+      apiKey: faker.string.hexadecimal({ length: 32 }),
+    },
+    mainnet: {
+      baseUri: faker.internet.url({ appendSlash: false }),
+      apiKey: faker.string.hexadecimal({ length: 32 }),
+    },
   },
   swaps: {
     api: {

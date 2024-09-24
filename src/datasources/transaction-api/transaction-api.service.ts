@@ -14,26 +14,33 @@ import { Delegate } from '@/domain/delegate/entities/delegate.entity';
 import { Page } from '@/domain/entities/page.entity';
 import { Estimation } from '@/domain/estimations/entities/estimation.entity';
 import { GetEstimationDto } from '@/domain/estimations/entities/get-estimation.dto.entity';
+import { IndexingStatus } from '@/domain/indexing/entities/indexing-status.entity';
 import { ITransactionApi } from '@/domain/interfaces/transaction-api.interface';
 import { Message } from '@/domain/messages/entities/message.entity';
-import { Device } from '@/domain/notifications/entities/device.entity';
+import { Device } from '@/domain/notifications/v1/entities/device.entity';
 import { CreationTransaction } from '@/domain/safe/entities/creation-transaction.entity';
 import { ModuleTransaction } from '@/domain/safe/entities/module-transaction.entity';
 import { MultisigTransaction } from '@/domain/safe/entities/multisig-transaction.entity';
 import { SafeList } from '@/domain/safe/entities/safe-list.entity';
 import { Safe } from '@/domain/safe/entities/safe.entity';
-import { Transaction } from '@/domain/safe/entities/transaction.entity';
+import {
+  isMultisigTransaction,
+  Transaction,
+} from '@/domain/safe/entities/transaction.entity';
 import { Transfer } from '@/domain/safe/entities/transfer.entity';
 import { Token } from '@/domain/tokens/entities/token.entity';
 import { AddConfirmationDto } from '@/domain/transactions/entities/add-confirmation.dto.entity';
 import { ProposeTransactionDto } from '@/domain/transactions/entities/propose-transaction.dto.entity';
 import { ILoggingService } from '@/logging/logging.interface';
 import { get } from 'lodash';
+import { getAddress } from 'viem';
 
 export class TransactionApi implements ITransactionApi {
   private static readonly ERROR_ARRAY_PATH = 'nonFieldErrors';
+  private static readonly HOLESKY_CHAIN_ID = '17000';
 
   private readonly defaultExpirationTimeInSeconds: number;
+  private readonly indexingExpirationTimeInSeconds: number;
   private readonly defaultNotFoundExpirationTimeSeconds: number;
   private readonly tokenNotFoundExpirationTimeSeconds: number;
   private readonly contractNotFoundExpirationTimeSeconds: number;
@@ -49,24 +56,42 @@ export class TransactionApi implements ITransactionApi {
     private readonly networkService: INetworkService,
     private readonly loggingService: ILoggingService,
   ) {
-    this.defaultExpirationTimeInSeconds =
+    this.indexingExpirationTimeInSeconds =
       this.configurationService.getOrThrow<number>(
-        'expirationTimeInSeconds.default',
+        'expirationTimeInSeconds.indexing',
       );
-    this.defaultNotFoundExpirationTimeSeconds =
-      this.configurationService.getOrThrow<number>(
-        'expirationTimeInSeconds.notFound.default',
-      );
-    this.tokenNotFoundExpirationTimeSeconds =
-      this.configurationService.getOrThrow<number>(
-        'expirationTimeInSeconds.notFound.token',
-      );
-    this.contractNotFoundExpirationTimeSeconds =
-      this.configurationService.getOrThrow<number>(
-        'expirationTimeInSeconds.notFound.contract',
-      );
-    this.ownersExpirationTimeSeconds =
-      this.configurationService.getOrThrow<number>('owners.ownersTtlSeconds');
+
+    // TODO: Remove temporary cache times for Holesky chain.
+    if (chainId === TransactionApi.HOLESKY_CHAIN_ID) {
+      const holeskyExpirationTime =
+        this.configurationService.getOrThrow<number>(
+          'expirationTimeInSeconds.holesky',
+        );
+      this.defaultExpirationTimeInSeconds = holeskyExpirationTime;
+      this.defaultNotFoundExpirationTimeSeconds = holeskyExpirationTime;
+      this.tokenNotFoundExpirationTimeSeconds = holeskyExpirationTime;
+      this.contractNotFoundExpirationTimeSeconds = holeskyExpirationTime;
+      this.ownersExpirationTimeSeconds = holeskyExpirationTime;
+    } else {
+      this.defaultExpirationTimeInSeconds =
+        this.configurationService.getOrThrow<number>(
+          'expirationTimeInSeconds.default',
+        );
+      this.defaultNotFoundExpirationTimeSeconds =
+        this.configurationService.getOrThrow<number>(
+          'expirationTimeInSeconds.notFound.default',
+        );
+      this.tokenNotFoundExpirationTimeSeconds =
+        this.configurationService.getOrThrow<number>(
+          'expirationTimeInSeconds.notFound.token',
+        );
+      this.contractNotFoundExpirationTimeSeconds =
+        this.configurationService.getOrThrow<number>(
+          'expirationTimeInSeconds.notFound.contract',
+        );
+      this.ownersExpirationTimeSeconds =
+        this.configurationService.getOrThrow<number>('owners.ownersTtlSeconds');
+    }
   }
 
   async getDataDecoded(args: {
@@ -118,6 +143,21 @@ export class TransactionApi implements ITransactionApi {
         url,
         notFoundExpireTimeSeconds: this.defaultNotFoundExpirationTimeSeconds,
         expireTimeSeconds: this.defaultExpirationTimeInSeconds,
+      });
+    } catch (error) {
+      throw this.httpErrorFactory.from(this.mapError(error));
+    }
+  }
+
+  async getIndexingStatus(): Promise<IndexingStatus> {
+    try {
+      const cacheDir = CacheRouter.getIndexingCacheDir(this.chainId);
+      const url = `${this.baseUrl}/api/v1/about/indexing/`;
+      return await this.dataSource.get({
+        cacheDir,
+        url,
+        notFoundExpireTimeSeconds: this.defaultNotFoundExpirationTimeSeconds,
+        expireTimeSeconds: this.indexingExpirationTimeInSeconds,
       });
     } catch (error) {
       throw this.httpErrorFactory.from(this.mapError(error));
@@ -476,6 +516,7 @@ export class TransactionApi implements ITransactionApi {
     to?: string;
     value?: string;
     tokenAddress?: string;
+    txHash?: string;
     limit?: number;
     offset?: number;
   }): Promise<Page<Transfer>> {
@@ -498,6 +539,7 @@ export class TransactionApi implements ITransactionApi {
             token_address: args.tokenAddress,
             limit: args.limit,
             offset: args.offset,
+            transaction_hash: args.txHash,
           },
         },
         expireTimeSeconds: this.defaultExpirationTimeInSeconds,
@@ -607,6 +649,7 @@ export class TransactionApi implements ITransactionApi {
   }
 
   async getMultisigTransactions(args: {
+    // TODO: safeAddress and to should be `0x${string}`
     safeAddress: string;
     ordering?: string;
     executed?: boolean;
@@ -626,28 +669,43 @@ export class TransactionApi implements ITransactionApi {
         ...args,
       });
       const url = `${this.baseUrl}/api/v1/safes/${args.safeAddress}/multisig-transactions/`;
-      return await this.dataSource.get({
-        cacheDir,
-        url,
-        notFoundExpireTimeSeconds: this.defaultNotFoundExpirationTimeSeconds,
-        networkRequest: {
-          params: {
-            safe: args.safeAddress,
-            ordering: args.ordering,
-            executed: args.executed,
-            trusted: args.trusted,
-            execution_date__gte: args.executionDateGte,
-            execution_date__lte: args.executionDateLte,
-            to: args.to,
-            value: args.value,
-            nonce: args.nonce,
-            nonce__gte: args.nonceGte,
-            limit: args.limit,
-            offset: args.offset,
+      return await this.dataSource
+        .get<Page<MultisigTransaction>>({
+          cacheDir,
+          url,
+          notFoundExpireTimeSeconds: this.defaultNotFoundExpirationTimeSeconds,
+          networkRequest: {
+            params: {
+              safe: args.safeAddress,
+              ordering: args.ordering,
+              executed: args.executed,
+              trusted: args.trusted,
+              execution_date__gte: args.executionDateGte,
+              execution_date__lte: args.executionDateLte,
+              to: args.to,
+              value: args.value,
+              nonce: args.nonce,
+              nonce__gte: args.nonceGte,
+              limit: args.limit,
+              offset: args.offset,
+            },
           },
-        },
-        expireTimeSeconds: this.defaultExpirationTimeInSeconds,
-      });
+          expireTimeSeconds: this.defaultExpirationTimeInSeconds,
+        })
+        .then(async (data): Promise<Page<MultisigTransaction>> => {
+          const results = await Promise.all(
+            data.results.map(async (tx) => {
+              return tx.confirmationsRequired !== null
+                ? tx
+                : await this._setConfirmationsRequired(tx);
+            }),
+          );
+
+          return {
+            ...data,
+            results,
+          };
+        });
     } catch (error) {
       throw this.httpErrorFactory.from(this.mapError(error));
     }
@@ -670,15 +728,49 @@ export class TransactionApi implements ITransactionApi {
         safeTransactionHash,
       });
       const url = `${this.baseUrl}/api/v1/multisig-transactions/${safeTransactionHash}/`;
-      return await this.dataSource.get({
-        cacheDir,
-        url,
-        notFoundExpireTimeSeconds: this.defaultNotFoundExpirationTimeSeconds,
-        expireTimeSeconds: this.defaultExpirationTimeInSeconds,
-      });
+      return await this.dataSource
+        .get<MultisigTransaction>({
+          cacheDir,
+          url,
+          notFoundExpireTimeSeconds: this.defaultNotFoundExpirationTimeSeconds,
+          expireTimeSeconds: this.defaultExpirationTimeInSeconds,
+        })
+        .then(async (tx) =>
+          tx.confirmationsRequired !== null
+            ? tx
+            : await this._setConfirmationsRequired(tx),
+        );
     } catch (error) {
       throw this.httpErrorFactory.from(this.mapError(error));
     }
+  }
+
+  /**
+   * The Transaction Service sometimes returns null for confirmationsRequired
+   * TODO: Remove this method once the Transaction Service is fixed
+   * @see https://github.com/safe-global/safe-transaction-service/issues/2170
+   * @param transaction - {@link MultisigTransaction} maybe missing confirmationsRequired
+   * @returns - {@link MultisigTransaction} with confirmationsRequired set
+   */
+  private async _setConfirmationsRequired(
+    transaction: MultisigTransaction & {
+      confirmationsRequired:
+        | MultisigTransaction['confirmationsRequired']
+        | null;
+    },
+  ): Promise<MultisigTransaction> {
+    if (transaction.confirmationsRequired !== null) {
+      return transaction;
+    }
+
+    transaction.confirmationsRequired =
+      transaction.isExecuted && transaction.confirmations !== null
+        ? transaction.confirmations.length
+        : await this.getSafe(getAddress(transaction.safe)).then((safe) => {
+            return safe.threshold;
+          });
+
+    return transaction;
   }
 
   async deleteTransaction(args: {
@@ -742,22 +834,40 @@ export class TransactionApi implements ITransactionApi {
         ...args,
       });
       const url = `${this.baseUrl}/api/v1/safes/${args.safeAddress}/all-transactions/`;
-      return await this.dataSource.get({
-        cacheDir,
-        url,
-        notFoundExpireTimeSeconds: this.defaultNotFoundExpirationTimeSeconds,
-        networkRequest: {
-          params: {
-            safe: args.safeAddress,
-            ordering: args.ordering,
-            executed: args.executed,
-            queued: args.queued,
-            limit: args.limit,
-            offset: args.offset,
+      return await this.dataSource
+        .get<Page<Transaction>>({
+          cacheDir,
+          url,
+          notFoundExpireTimeSeconds: this.defaultNotFoundExpirationTimeSeconds,
+          networkRequest: {
+            params: {
+              safe: args.safeAddress,
+              ordering: args.ordering,
+              executed: args.executed,
+              queued: args.queued,
+              limit: args.limit,
+              offset: args.offset,
+            },
           },
-        },
-        expireTimeSeconds: this.defaultExpirationTimeInSeconds,
-      });
+          expireTimeSeconds: this.defaultExpirationTimeInSeconds,
+        })
+        .then(async (data): Promise<Page<Transaction>> => {
+          const results = await Promise.all(
+            data.results.map(async (tx) => {
+              if (!isMultisigTransaction(tx)) {
+                return tx;
+              }
+              return tx.confirmationsRequired !== null
+                ? tx
+                : await this._setConfirmationsRequired(tx);
+            }),
+          );
+
+          return {
+            ...data,
+            results,
+          };
+        });
     } catch (error) {
       throw this.httpErrorFactory.from(this.mapError(error));
     }

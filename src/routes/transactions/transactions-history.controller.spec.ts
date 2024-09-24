@@ -160,7 +160,10 @@ describe('Transactions History Controller (Unit)', () => {
   it('Failure: data page validation fails', async () => {
     const safeAddress = faker.finance.ethereumAddress();
     const chain = chainBuilder().build();
-    const page = pageBuilder().build();
+    const multisigTransaction = multisigTransactionBuilder().build();
+    // @ts-expect-error - Safe must be defined
+    multisigTransaction.safe = null;
+    const page = pageBuilder().with('results', [multisigTransaction]).build();
     networkService.get.mockImplementation(({ url }) => {
       const getChainUrl = `${safeConfigUrl}/api/v1/chains/${chain.chainId}`;
       // Param ValidationPipe checksums address
@@ -170,7 +173,7 @@ describe('Transactions History Controller (Unit)', () => {
       }
       if (url === getAllTransactions) {
         return Promise.resolve({
-          data: { ...page, results: faker.word.words() },
+          data: page,
           status: 200,
         });
       }
@@ -427,6 +430,62 @@ describe('Transactions History Controller (Unit)', () => {
         expect(body.results[3].transaction.timestamp).toEqual(
           moduleTransaction1.executionDate.getTime(),
         );
+      });
+  });
+
+  it('Should group transactions according to timezone', async () => {
+    const safeAddress = faker.finance.ethereumAddress();
+    const timezone = 'Europe/Berlin';
+    const chainResponse = chainBuilder().build();
+    const chainId = chainResponse.chainId;
+    const moduleTransaction1 = moduleTransactionBuilder()
+      .with('dataDecoded', null)
+      .with('executionDate', new Date('2022-12-31T21:09:36Z'))
+      .build();
+    const moduleTransaction2 = moduleTransactionBuilder()
+      .with('dataDecoded', null)
+      .with('executionDate', new Date('2022-12-31T23:09:36Z'))
+      .build();
+    const safe = safeBuilder().build();
+    const transactionHistoryBuilder = {
+      count: 40,
+      next: `${chainResponse.transactionService}/api/v1/safes/${safeAddress}/all-transactions/?executed=false&limit=10&offset=10&queued=true&trusted=true`,
+      previous: null,
+      results: [
+        moduleTransactionToJson(moduleTransaction2),
+        moduleTransactionToJson(moduleTransaction1),
+      ],
+    };
+    networkService.get.mockImplementation(({ url }) => {
+      const getChainUrl = `${safeConfigUrl}/api/v1/chains/${chainId}`;
+      // Param ValidationPipe checksums address
+      const getAllTransactions = `${chainResponse.transactionService}/api/v1/safes/${getAddress(safeAddress)}/all-transactions/`;
+      const getSafeUrl = `${chainResponse.transactionService}/api/v1/safes/${getAddress(safeAddress)}`;
+      if (url === getChainUrl) {
+        return Promise.resolve({ data: chainResponse, status: 200 });
+      }
+      if (url === getAllTransactions) {
+        return Promise.resolve({
+          data: transactionHistoryBuilder,
+          status: 200,
+        });
+      }
+      if (url === getSafeUrl) {
+        return Promise.resolve({ data: safe, status: 200 });
+      }
+      return Promise.reject(new Error(`Could not match ${url}`));
+    });
+
+    await request(app.getHttpServer())
+      .get(
+        `/v1/chains/${chainId}/safes/${safeAddress}/transactions/history/?timezone=${timezone}`,
+      )
+      .expect(200)
+      .then(({ body }) => {
+        expect(body.results).toHaveLength(4);
+
+        // The first and second transactions should be assigned to different groups, and for that reason, the element at index 2 of the array should be a DATE_LABEL.
+        expect(body.results[2].type).toBe('DATE_LABEL');
       });
   });
 
