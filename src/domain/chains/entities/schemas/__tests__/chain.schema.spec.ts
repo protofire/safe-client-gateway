@@ -1,4 +1,5 @@
 import { balancesProviderBuilder } from '@/domain/chains/entities/__tests__/balances-provider.builder';
+import { beaconChainExplorerUriTemplateBuilder } from '@/domain/chains/entities/__tests__/beacon-chain-explorer-uri-template.builder';
 import { chainBuilder } from '@/domain/chains/entities/__tests__/chain.builder';
 import { contractAddressesBuilder } from '@/domain/chains/entities/__tests__/contract-addresses.builder';
 import { gasPriceFixedEIP1559Builder } from '@/domain/chains/entities/__tests__/gas-price-fixed-eip-1559.builder';
@@ -8,6 +9,7 @@ import { nativeCurrencyBuilder } from '@/domain/chains/entities/__tests__/native
 import { pricesProviderBuilder } from '@/domain/chains/entities/__tests__/prices-provider.builder';
 import { rpcUriBuilder } from '@/domain/chains/entities/__tests__/rpc-uri.builder';
 import { themeBuilder } from '@/domain/chains/entities/__tests__/theme.builder';
+import type { Chain } from '@/domain/chains/entities/chain.entity';
 import {
   ChainSchema,
   BalancesProviderSchema,
@@ -20,7 +22,10 @@ import {
   RpcUriSchema,
   ThemeSchema,
   ContractAddressesSchema,
+  ChainLenientPageSchema,
+  BeaconChainExplorerUriTemplateSchema,
 } from '@/domain/chains/entities/schemas/chain.schema';
+import { pageBuilder } from '@/domain/entities/__tests__/page.builder';
 import { faker } from '@faker-js/faker';
 import { getAddress } from 'viem';
 import { ZodError } from 'zod';
@@ -110,6 +115,73 @@ describe('Chain schemas', () => {
           },
         ]),
       );
+    });
+  });
+
+  describe('BeaconChainExplorerUriTemplate', () => {
+    it('should validate a BeaconChainExplorerUriTemplate', () => {
+      const beaconChainExplorerUriTemplate =
+        beaconChainExplorerUriTemplateBuilder().build();
+
+      const result = BeaconChainExplorerUriTemplateSchema.safeParse(
+        beaconChainExplorerUriTemplate,
+      );
+
+      expect(result.success).toBe(true);
+    });
+
+    it('should allow a string publicKey', () => {
+      const beaconChainExplorerUriTemplate =
+        beaconChainExplorerUriTemplateBuilder()
+          .with(
+            'publicKey',
+            `${faker.internet.url({ appendSlash: false })}/{{publicKey}}`,
+          )
+          .build();
+
+      const result = BeaconChainExplorerUriTemplateSchema.safeParse(
+        beaconChainExplorerUriTemplate,
+      );
+
+      expect(result.success).toBe(true);
+    });
+
+    it('should allow a null publicKey', () => {
+      const beaconChainExplorerUriTemplate =
+        beaconChainExplorerUriTemplateBuilder().with('publicKey', null).build();
+
+      const result = BeaconChainExplorerUriTemplateSchema.safeParse(
+        beaconChainExplorerUriTemplate,
+      );
+
+      expect(result.success).toBe(true);
+    });
+
+    it('should default publicKey to null', () => {
+      const beaconChainExplorerUriTemplate = {
+        publicKey: null,
+      };
+
+      const result = BeaconChainExplorerUriTemplateSchema.safeParse(
+        beaconChainExplorerUriTemplate,
+      );
+
+      expect(result.success && result.data.publicKey).toBe(null);
+    });
+
+    // TODO: Remove after `beaconChainExplorerUriTemplate` field is deployed on Config Service
+    it('should default beaconChainExplorerUriTemplate to have null publicKey', () => {
+      const chain = chainBuilder().build();
+      // @ts-expect-error - inferred types don't allow optional fields
+      delete chain.beaconChainExplorerUriTemplate;
+
+      const result = ChainSchema.safeParse(chain);
+
+      expect(
+        result.success && result.data.beaconChainExplorerUriTemplate,
+      ).toStrictEqual({
+        publicKey: null,
+      });
     });
   });
 
@@ -547,6 +619,30 @@ describe('Chain schemas', () => {
       },
     );
 
+    it.each(['transactionService' as const, 'vpcTransactionService' as const])(
+      'accept non-trailing slash %s as is',
+      (field) => {
+        const url = faker.internet.url({ appendSlash: false });
+        const chain = chainBuilder().with(field, url).build();
+
+        const result = ChainSchema.safeParse(chain);
+
+        expect(result.success && result.data[field]).toBe(url);
+      },
+    );
+
+    it.each(['transactionService' as const, 'vpcTransactionService' as const])(
+      'should remove trailing slashes from %s',
+      (field) => {
+        const url = faker.internet.url({ appendSlash: false });
+        const chain = chainBuilder().with(field, `${url}/`).build();
+
+        const result = ChainSchema.safeParse(chain);
+
+        expect(result.success && result.data[field]).toBe(url);
+      },
+    );
+
     it.each([
       ['chainId' as const],
       ['chainName' as const],
@@ -579,6 +675,8 @@ describe('Chain schemas', () => {
       ['safeAppsRpcUri' as const],
       ['publicRpcUri' as const],
       ['blockExplorerUriTemplate' as const],
+      // TODO: Include after `beaconChainExplorerUriTemplate` field is deployed on Config Service
+      // ['beaconChainExplorerUriTemplate' as const],
       ['nativeCurrency' as const],
       ['pricesProvider' as const],
       ['balancesProvider' as const],
@@ -600,6 +698,44 @@ describe('Chain schemas', () => {
           },
         ]),
       );
+    });
+  });
+
+  describe('ChainLenientPageSchema', () => {
+    it('should validate a valid Chain page', () => {
+      const chains = Array.from(
+        { length: faker.number.int({ min: 1, max: 5 }) },
+        () => chainBuilder().build(),
+      );
+      const chainPage = pageBuilder()
+        .with('results', chains)
+        .with('count', chains.length)
+        .build();
+
+      const result = ChainLenientPageSchema.safeParse(chainPage);
+
+      expect(result.success).toBe(true);
+    });
+
+    it('should exclude invalid Chain items, adjusting the count accordingly', () => {
+      const chains = Array.from(
+        { length: faker.number.int({ min: 1, max: 5 }) },
+        () => chainBuilder().build(),
+      );
+      const chainPage = pageBuilder<Chain>()
+        .with('results', chains)
+        .with('count', chains.length)
+        .build();
+      // @ts-expect-error - results are assumed optional
+      delete chainPage.results[0].chainId;
+
+      const result = ChainLenientPageSchema.safeParse(chainPage);
+
+      expect(result.success).toBe(true);
+      expect(result.success && result.data.results.length).toBe(
+        chains.length - 1,
+      );
+      expect(result.success && result.data.count).toBe(chains.length - 1);
     });
   });
 });

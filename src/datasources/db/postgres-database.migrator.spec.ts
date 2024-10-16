@@ -3,7 +3,7 @@ import { PostgresDatabaseMigrator } from '@/datasources/db/postgres-database.mig
 import { faker } from '@faker-js/faker';
 import fs from 'node:fs';
 import path from 'node:path';
-import postgres from 'postgres';
+import type postgres from 'postgres';
 
 const folder = path.join(__dirname, 'migrations');
 const migrations: Array<{
@@ -83,7 +83,8 @@ describe('PostgresDatabaseMigrator tests', () => {
       }
 
       // Test migration and expect migrations to be recorded
-      await expect(target.migrate(folder)).resolves.not.toThrow();
+      const executed = await target.migrate(folder);
+      expect(executed).toHaveLength(3);
       await expect(sql`SELECT * FROM migrations`).resolves.toStrictEqual([
         {
           id: 1,
@@ -115,7 +116,8 @@ describe('PostgresDatabaseMigrator tests', () => {
       );
 
       // Migrate (only initial migration should be recorded)
-      await target.migrate(folder);
+      const executed = await target.migrate(folder);
+      expect(executed).toHaveLength(1);
       const recordedMigrations = await sql`SELECT * FROM migrations`;
       expect(recordedMigrations).toStrictEqual([
         {
@@ -134,7 +136,8 @@ describe('PostgresDatabaseMigrator tests', () => {
       }
 
       // Migrate from last run migration
-      await target.migrate(folder);
+      const remaining = await target.migrate(folder);
+      expect(remaining).toHaveLength(2);
       await expect(sql`SELECT * FROM migrations`).resolves.toStrictEqual([
         {
           id: 1,

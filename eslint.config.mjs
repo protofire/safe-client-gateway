@@ -28,14 +28,29 @@ export default tseslint.config(
         'warn',
         { assertionStyle: 'as' },
       ],
+      '@typescript-eslint/consistent-type-imports': 'error',
       '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/no-floating-promises': 'warn',
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: '@safe-global/safe-deployments',
+              message:
+                'Please import from @/domain/common/utils/deployments instead.',
+            },
+          ],
+        },
+      ],
       // TODO: Address these rules: (added to update to ESLint 9)
       '@typescript-eslint/no-unsafe-assignment': 'off',
       '@typescript-eslint/no-unsafe-member-access': 'off',
       '@typescript-eslint/no-unsafe-return': 'off',
       '@typescript-eslint/restrict-template-expressions': 'off',
       '@typescript-eslint/unbound-method': 'off',
+      // Added after typescript-eslint 8.1.0
+      '@typescript-eslint/prefer-promise-reject-errors': 'off',
     },
   },
   eslintConfigPrettier,

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { RpcUriAuthentication } from '@/domain/chains/entities/rpc-uri-authentication.entity';
+import { buildLenientPageSchema } from '@/domain/entities/schemas/page.schema.factory';
 import { AddressSchema } from '@/validation/entities/schemas/address.schema';
-import { buildPageSchema } from '@/domain/entities/schemas/page.schema.factory';
 
 export const NativeCurrencySchema = z.object({
   name: z.string(),
@@ -22,6 +22,15 @@ export const BlockExplorerUriTemplateSchema = z.object({
   txHash: z.string(),
   api: z.string(),
 });
+
+export const BeaconChainExplorerUriTemplateSchema = z
+  .object({
+    publicKey: z.string().nullish().default(null),
+  })
+  // TODO: Remove after `beaconChainExplorerUriTemplate` field is deployed on Config Service
+  .catch({
+    publicKey: null,
+  });
 
 export const ThemeSchema = z.object({
   textColor: z.string(),
@@ -89,6 +98,10 @@ export const ContractAddressesSchema = z
     safeWebAuthnSignerFactoryAddress: null,
   });
 
+function removeTrailingSlash(url: string): string {
+  return url.replace(/\/$/, '');
+}
+
 export const ChainSchema = z.object({
   chainId: z.string(),
   chainName: z.string(),
@@ -101,12 +114,13 @@ export const ChainSchema = z.object({
   safeAppsRpcUri: RpcUriSchema,
   publicRpcUri: RpcUriSchema,
   blockExplorerUriTemplate: BlockExplorerUriTemplateSchema,
+  beaconChainExplorerUriTemplate: BeaconChainExplorerUriTemplateSchema,
   contractAddresses: ContractAddressesSchema,
   nativeCurrency: NativeCurrencySchema,
   pricesProvider: PricesProviderSchema,
   balancesProvider: BalancesProviderSchema,
-  transactionService: z.string().url(),
-  vpcTransactionService: z.string().url(),
+  transactionService: z.string().url().transform(removeTrailingSlash),
+  vpcTransactionService: z.string().url().transform(removeTrailingSlash),
   theme: ThemeSchema,
   gasPrice: GasPriceSchema,
   ensRegistryAddress: AddressSchema.nullish().default(null),
@@ -118,4 +132,4 @@ export const ChainSchema = z.object({
 
 // TODO: Merge schema definitions with ChainEntity.
 
-export const ChainPageSchema = buildPageSchema(ChainSchema);
+export const ChainLenientPageSchema = buildLenientPageSchema(ChainSchema);

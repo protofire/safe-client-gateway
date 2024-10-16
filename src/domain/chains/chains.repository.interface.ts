@@ -5,6 +5,7 @@ import { Module } from '@nestjs/common';
 import { ChainsRepository } from '@/domain/chains/chains.repository';
 import { TransactionApiManagerModule } from '@/domain/interfaces/transaction-api.manager.interface';
 import { ConfigApiModule } from '@/datasources/config-api/config-api.module';
+import { IndexingStatus } from '@/domain/indexing/entities/indexing-status.entity';
 
 export const IChainsRepository = Symbol('IChainsRepository');
 
@@ -35,6 +36,20 @@ export interface IChainsRepository {
    * @param chainId
    */
   getSingletons(chainId: string): Promise<Singleton[]>;
+
+  /**
+   * Gets the {@link IndexingStatus} associated with {@link chainId}
+   *
+   * @param chainId
+   */
+  getIndexingStatus(chainId: string): Promise<IndexingStatus>;
+
+  /**
+   * Checks if the {@link Chain} associated with {@link chainId} is supported.
+   *
+   * @param chainId
+   */
+  isSupportedChain(chainId: string): Promise<boolean>;
 }
 
 @Module({

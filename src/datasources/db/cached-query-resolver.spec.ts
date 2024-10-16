@@ -1,10 +1,11 @@
 import { fakeJson } from '@/__tests__/faker';
 import { FakeCacheService } from '@/datasources/cache/__tests__/fake.cache.service';
 import { CachedQueryResolver } from '@/datasources/db/cached-query-resolver';
-import { ILoggingService } from '@/logging/logging.interface';
+import type { ILoggingService } from '@/logging/logging.interface';
 import { faker } from '@faker-js/faker';
 import { InternalServerErrorException } from '@nestjs/common';
-import postgres, { MaybeRow } from 'postgres';
+import type { MaybeRow } from 'postgres';
+import type postgres from 'postgres';
 
 const mockLoggingService = jest.mocked({
   debug: jest.fn(),
@@ -34,7 +35,7 @@ describe('CachedQueryResolver', () => {
       const cacheDir = { key: 'key', field: 'field' };
       const ttl = faker.number.int({ min: 1, max: 1000 });
       const value = fakeJson();
-      await fakeCacheService.set(cacheDir, JSON.stringify(value), ttl);
+      await fakeCacheService.hSet(cacheDir, JSON.stringify(value), ttl);
 
       const actual = await target.get({
         cacheDir,
@@ -68,7 +69,7 @@ describe('CachedQueryResolver', () => {
         key: 'key',
         field: 'field',
       });
-      const cacheContent = await fakeCacheService.get(cacheDir);
+      const cacheContent = await fakeCacheService.hGet(cacheDir);
       expect(cacheContent).toBe(JSON.stringify(dbResult));
     });
 

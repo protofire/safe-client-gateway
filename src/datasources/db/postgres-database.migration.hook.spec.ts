@@ -1,10 +1,10 @@
 import { TestDbFactory } from '@/__tests__/db.factory';
-import { IConfigurationService } from '@/config/configuration.service.interface';
+import type { IConfigurationService } from '@/config/configuration.service.interface';
 import { PostgresDatabaseMigrationHook } from '@/datasources/db/postgres-database.migration.hook';
-import { PostgresDatabaseMigrator } from '@/datasources/db/postgres-database.migrator';
-import { ILoggingService } from '@/logging/logging.interface';
+import type { PostgresDatabaseMigrator } from '@/datasources/db/postgres-database.migrator';
+import type { ILoggingService } from '@/logging/logging.interface';
 import { faker } from '@faker-js/faker';
-import postgres from 'postgres';
+import type postgres from 'postgres';
 
 const migrator = jest.mocked({
   migrate: jest.fn(),
@@ -58,6 +58,19 @@ describe('PostgresDatabaseMigrationHook tests', () => {
     configurationService.getOrThrow.mockImplementation((key) => {
       if (key === 'application.runMigrations') return true;
     });
+    const executed = [
+      {
+        path: faker.system.filePath(),
+        id: faker.number.int(),
+        name: faker.string.sample(),
+      },
+      {
+        path: faker.system.filePath(),
+        id: faker.number.int(),
+        name: faker.string.sample(),
+      },
+    ];
+    migrator.migrate.mockResolvedValue(executed);
     target = new PostgresDatabaseMigrationHook(
       sql,
       migrator,
@@ -70,7 +83,7 @@ describe('PostgresDatabaseMigrationHook tests', () => {
     expect(loggingService.info).toHaveBeenCalledTimes(2);
     expect(loggingService.info).toHaveBeenCalledWith('Checking migrations');
     expect(loggingService.info).toHaveBeenCalledWith(
-      'Pending migrations executed',
+      `Pending migrations executed: [${executed[0].name}, ${executed[1].name}]`,
     );
   });
 });

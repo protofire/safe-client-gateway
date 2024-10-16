@@ -1,5 +1,5 @@
 import { TestDbFactory } from '@/__tests__/db.factory';
-import { IConfigurationService } from '@/config/configuration.service.interface';
+import type { IConfigurationService } from '@/config/configuration.service.interface';
 import { CounterfactualSafesDatasource } from '@/datasources/accounts/counterfactual-safes/counterfactual-safes.datasource';
 import { FakeCacheService } from '@/datasources/cache/__tests__/fake.cache.service';
 import { CacheDir } from '@/datasources/cache/entities/cache-dir.entity';
@@ -7,10 +7,10 @@ import { CachedQueryResolver } from '@/datasources/db/cached-query-resolver';
 import { PostgresDatabaseMigrator } from '@/datasources/db/postgres-database.migrator';
 import { createCounterfactualSafeDtoBuilder } from '@/domain/accounts/counterfactual-safes/entities/__tests__/create-counterfactual-safe.dto.entity.builder';
 import { accountBuilder } from '@/domain/accounts/entities/__tests__/account.builder';
-import { Account } from '@/domain/accounts/entities/account.entity';
-import { ILoggingService } from '@/logging/logging.interface';
+import type { Account } from '@/domain/accounts/entities/account.entity';
+import type { ILoggingService } from '@/logging/logging.interface';
 import { faker } from '@faker-js/faker';
-import postgres from 'postgres';
+import type postgres from 'postgres';
 import { getAddress } from 'viem';
 
 const mockLoggingService = {
@@ -88,6 +88,118 @@ describe('CounterfactualSafesDatasource tests', () => {
       );
     });
 
+    it('should create a Counterfactual Safe if the rate limit is not hit', async () => {
+      const address = getAddress(faker.finance.ethereumAddress());
+      const [account] = await sql<
+        Account[]
+      >`INSERT INTO accounts (address) VALUES (${address}) RETURNING *`;
+      const creationRateLimitCalls = faker.number.int({ min: 5, max: 10 });
+      const createCounterfactualSafes = Array.from(
+        { length: creationRateLimitCalls },
+        (_, i) =>
+          createCounterfactualSafeDtoBuilder()
+            .with('chainId', i.toString())
+            .build(),
+      );
+
+      mockConfigurationService.getOrThrow.mockImplementation((key) => {
+        switch (key) {
+          case 'expirationTimeInSeconds.default':
+            return faker.number.int();
+          case 'accounts.counterfactualSafes.creationRateLimitPeriodSeconds':
+            return faker.number.int({ min: 10 });
+          case 'accounts.counterfactualSafes.creationRateLimitCalls':
+            return creationRateLimitCalls;
+        }
+      });
+
+      target = new CounterfactualSafesDatasource(
+        fakeCacheService,
+        sql,
+        new CachedQueryResolver(mockLoggingService, fakeCacheService),
+        mockLoggingService,
+        mockConfigurationService,
+      );
+
+      for (let i = 0; i < creationRateLimitCalls - 1; i++) {
+        await target.createCounterfactualSafe({
+          account,
+          createCounterfactualSafeDto: createCounterfactualSafes[i],
+        });
+      }
+
+      const lastCounterfactualSafe =
+        createCounterfactualSafes[createCounterfactualSafes.length - 1];
+      const actual = await target.createCounterfactualSafe({
+        account,
+        createCounterfactualSafeDto: lastCounterfactualSafe,
+      });
+      expect(actual).toStrictEqual(
+        expect.objectContaining({
+          id: expect.any(Number),
+          chain_id: lastCounterfactualSafe.chainId,
+          creator: account.address,
+          fallback_handler: lastCounterfactualSafe.fallbackHandler,
+          owners: lastCounterfactualSafe.owners,
+          predicted_address: lastCounterfactualSafe.predictedAddress,
+          salt_nonce: lastCounterfactualSafe.saltNonce,
+          singleton_address: lastCounterfactualSafe.singletonAddress,
+          threshold: lastCounterfactualSafe.threshold,
+          account_id: account.id,
+        }),
+      );
+    });
+
+    it('should fail if the rate limit is hit', async () => {
+      const address = getAddress(faker.finance.ethereumAddress());
+      const [account] = await sql<
+        Account[]
+      >`INSERT INTO accounts (address) VALUES (${address}) RETURNING *`;
+      const creationRateLimitCalls = faker.number.int({ min: 5, max: 10 });
+      const createCounterfactualSafes = Array.from(
+        { length: creationRateLimitCalls },
+        (_, i) =>
+          createCounterfactualSafeDtoBuilder()
+            .with('chainId', i.toString())
+            .build(),
+      );
+
+      mockConfigurationService.getOrThrow.mockImplementation((key) => {
+        switch (key) {
+          case 'expirationTimeInSeconds.default':
+            return faker.number.int();
+          case 'accounts.counterfactualSafes.creationRateLimitPeriodSeconds':
+            return faker.number.int({ min: 10 });
+          case 'accounts.counterfactualSafes.creationRateLimitCalls':
+            return creationRateLimitCalls;
+        }
+      });
+
+      target = new CounterfactualSafesDatasource(
+        fakeCacheService,
+        sql,
+        new CachedQueryResolver(mockLoggingService, fakeCacheService),
+        mockLoggingService,
+        mockConfigurationService,
+      );
+
+      for (let i = 0; i < creationRateLimitCalls; i++) {
+        await target.createCounterfactualSafe({
+          account,
+          createCounterfactualSafeDto: createCounterfactualSafes[i],
+        });
+      }
+
+      await expect(
+        target.createCounterfactualSafe({
+          account,
+          createCounterfactualSafeDto: createCounterfactualSafeDtoBuilder()
+            .with('chainId', '11')
+            .build(),
+        }),
+      ).rejects.toThrow('Counterfactual Safes creation rate limit reached');
+    });
+
     it('should delete the cache for the account Counterfactual Safes', async () => {
       const address = getAddress(faker.finance.ethereumAddress());
       const [account] = await sql<
@@ -98,9 +210,9 @@ describe('CounterfactualSafesDatasource tests', () => {
         createCounterfactualSafeDto:
           createCounterfactualSafeDtoBuilder().build(),
       });
-      await target.getCounterfactualSafesForAccount(account);
+      await target.getCounterfactualSafesForAddress(address);
       const cacheDir = new CacheDir(`counterfactual_safes_${address}`, '');
-      await fakeCacheService.set(
+      await fakeCacheService.hSet(
         cacheDir,
         JSON.stringify([]),
         faker.number.int(),
@@ -112,7 +224,7 @@ describe('CounterfactualSafesDatasource tests', () => {
         createCounterfactualSafeDto:
           createCounterfactualSafeDtoBuilder().build(),
       });
-      expect(await fakeCacheService.get(cacheDir)).toBeUndefined();
+      expect(await fakeCacheService.hGet(cacheDir)).toBeUndefined();
     });
   });
 
@@ -129,6 +241,7 @@ describe('CounterfactualSafesDatasource tests', () => {
       });
 
       const actual = await target.getCounterfactualSafe({
+        address,
         chainId: counterfactualSafe.chain_id,
         predictedAddress: counterfactualSafe.predicted_address,
       });
@@ -148,10 +261,12 @@ describe('CounterfactualSafesDatasource tests', () => {
 
       // first call is not cached
       const actual = await target.getCounterfactualSafe({
+        address,
         chainId: counterfactualSafe.chain_id,
         predictedAddress: counterfactualSafe.predicted_address,
       });
       await target.getCounterfactualSafe({
+        address,
         chainId: counterfactualSafe.chain_id,
         predictedAddress: counterfactualSafe.predicted_address,
       });
@@ -161,7 +276,7 @@ describe('CounterfactualSafesDatasource tests', () => {
         `${counterfactualSafe.chain_id}_counterfactual_safe_${counterfactualSafe.predicted_address}`,
         '',
       );
-      const cacheContent = await fakeCacheService.get(cacheDir);
+      const cacheContent = await fakeCacheService.hGet(cacheDir);
       expect(JSON.parse(cacheContent as string)).toHaveLength(1);
       expect(mockLoggingService.debug).toHaveBeenCalledTimes(2);
       expect(mockLoggingService.debug).toHaveBeenNthCalledWith(1, {
@@ -177,17 +292,20 @@ describe('CounterfactualSafesDatasource tests', () => {
     });
 
     it('should not cache if the Counterfactual Safe is not found', async () => {
+      const address = getAddress(faker.finance.ethereumAddress());
       const counterfactualSafe = createCounterfactualSafeDtoBuilder().build();
 
       // should not cache the Counterfactual Safe
       await expect(
         target.getCounterfactualSafe({
+          address,
           chainId: counterfactualSafe.chainId,
           predictedAddress: counterfactualSafe.predictedAddress,
         }),
       ).rejects.toThrow('Error getting Counterfactual Safe.');
       await expect(
         target.getCounterfactualSafe({
+          address,
           chainId: counterfactualSafe.chainId,
           predictedAddress: counterfactualSafe.predictedAddress,
         }),
@@ -197,7 +315,7 @@ describe('CounterfactualSafesDatasource tests', () => {
         `${counterfactualSafe.chainId}_counterfactual_safe_${counterfactualSafe.predictedAddress}`,
         '',
       );
-      expect(await fakeCacheService.get(cacheDir)).toBeUndefined();
+      expect(await fakeCacheService.hGet(cacheDir)).toBeUndefined();
       expect(mockLoggingService.debug).toHaveBeenCalledTimes(2);
       expect(mockLoggingService.debug).toHaveBeenNthCalledWith(1, {
         type: 'cache_miss',
@@ -212,8 +330,8 @@ describe('CounterfactualSafesDatasource tests', () => {
     });
   });
 
-  describe('getCounterfactualSafesForAccount', () => {
-    it('should get the Counterfactual Safes for an account', async () => {
+  describe('getCounterfactualSafesForAddress', () => {
+    it('should get the Counterfactual Safes for an address', async () => {
       const address = getAddress(faker.finance.ethereumAddress());
       const [account] = await sql<
         Account[]
@@ -233,7 +351,7 @@ describe('CounterfactualSafesDatasource tests', () => {
         }),
       ]);
 
-      const actual = await target.getCounterfactualSafesForAccount(account);
+      const actual = await target.getCounterfactualSafesForAddress(address);
       expect(actual).toStrictEqual(expect.arrayContaining(counterfactualSafes));
     });
 
@@ -258,12 +376,12 @@ describe('CounterfactualSafesDatasource tests', () => {
       ]);
 
       // first call is not cached
-      const actual = await target.getCounterfactualSafesForAccount(account);
-      await target.getCounterfactualSafesForAccount(account);
+      const actual = await target.getCounterfactualSafesForAddress(address);
+      await target.getCounterfactualSafesForAddress(address);
 
       expect(actual).toStrictEqual(expect.arrayContaining(counterfactualSafes));
       const cacheDir = new CacheDir(`counterfactual_safes_${address}`, '');
-      const cacheContent = await fakeCacheService.get(cacheDir);
+      const cacheContent = await fakeCacheService.hGet(cacheDir);
       expect(JSON.parse(cacheContent as string)).toHaveLength(2);
       expect(mockLoggingService.debug).toHaveBeenCalledTimes(2);
       expect(mockLoggingService.debug).toHaveBeenNthCalledWith(1, {
@@ -327,6 +445,7 @@ describe('CounterfactualSafesDatasource tests', () => {
 
       // the Counterfactual Safe is cached
       await target.getCounterfactualSafe({
+        address,
         chainId: counterfactualSafe.chain_id,
         predictedAddress: counterfactualSafe.predicted_address,
       });
@@ -334,7 +453,7 @@ describe('CounterfactualSafesDatasource tests', () => {
         `${counterfactualSafe.chain_id}_counterfactual_safe_${counterfactualSafe.predicted_address}`,
         '',
       );
-      const beforeDeletion = await fakeCacheService.get(cacheDir);
+      const beforeDeletion = await fakeCacheService.hGet(cacheDir);
       expect(JSON.parse(beforeDeletion as string)).toHaveLength(1);
 
       // the counterfactualSafe is deleted from the database and the cache
@@ -347,18 +466,19 @@ describe('CounterfactualSafesDatasource tests', () => {
       ).resolves.not.toThrow();
       await expect(
         target.getCounterfactualSafe({
+          address,
           chainId: counterfactualSafe.chain_id,
           predictedAddress: counterfactualSafe.predicted_address,
         }),
       ).rejects.toThrow();
 
-      const afterDeletion = await fakeCacheService.get(cacheDir);
+      const afterDeletion = await fakeCacheService.hGet(cacheDir);
       expect(afterDeletion).toBeUndefined();
       const cacheDirByAddress = new CacheDir(
         `counterfactual_safes_${address}`,
         '',
       );
-      const cachedByAddress = await fakeCacheService.get(cacheDirByAddress);
+      const cachedByAddress = await fakeCacheService.hGet(cacheDirByAddress);
       expect(cachedByAddress).toBeUndefined();
     });
   });
@@ -405,17 +525,17 @@ describe('CounterfactualSafesDatasource tests', () => {
       ).resolves.not.toThrow();
 
       // database is cleared
-      const actual = await target.getCounterfactualSafesForAccount(account);
+      const actual = await target.getCounterfactualSafesForAddress(address);
       expect(actual).toHaveLength(0);
       // cache is cleared
       expect(
-        await fakeCacheService.get(counterfactualSafesCacheDir),
+        await fakeCacheService.hGet(counterfactualSafesCacheDir),
       ).toBeUndefined();
       expect(
-        await fakeCacheService.get(counterfactualSafeCacheDirs[0]),
+        await fakeCacheService.hGet(counterfactualSafeCacheDirs[0]),
       ).toBeUndefined();
       expect(
-        await fakeCacheService.get(counterfactualSafeCacheDirs[1]),
+        await fakeCacheService.hGet(counterfactualSafeCacheDirs[1]),
       ).toBeUndefined();
     });
   });
