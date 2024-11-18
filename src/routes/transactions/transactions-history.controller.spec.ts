@@ -1,6 +1,7 @@
 import { faker } from '@faker-js/faker';
-import { INestApplication } from '@nestjs/common';
-import { Test, TestingModule } from '@nestjs/testing';
+import type { INestApplication } from '@nestjs/common';
+import type { TestingModule } from '@nestjs/testing';
+import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { TestAppProvider } from '@/__tests__/test-app.provider';
 import { IConfigurationService } from '@/config/configuration.service.interface';
@@ -38,11 +39,9 @@ import { safeBuilder } from '@/domain/safe/entities/__tests__/safe.builder';
 import { tokenBuilder } from '@/domain/tokens/__tests__/token.builder';
 import { TokenType } from '@/domain/tokens/entities/token.entity';
 import { TestLoggingModule } from '@/logging/__tests__/test.logging.module';
-import { Transfer } from '@/domain/safe/entities/transfer.entity';
-import {
-  INetworkService,
-  NetworkService,
-} from '@/datasources/network/network.service.interface';
+import type { Transfer } from '@/domain/safe/entities/transfer.entity';
+import type { INetworkService } from '@/datasources/network/network.service.interface';
+import { NetworkService } from '@/datasources/network/network.service.interface';
 import { AppModule } from '@/app.module';
 import { CacheModule } from '@/datasources/cache/cache.module';
 import { RequestScopedLoggingModule } from '@/logging/logging.module';
@@ -55,12 +54,18 @@ import {
   erc721TransferBuilder,
   toJson as erc721TransferToJson,
 } from '@/domain/safe/entities/__tests__/erc721-transfer.builder';
-import { TransactionItem } from '@/routes/transactions/entities/transaction-item.entity';
+import type { TransactionItem } from '@/routes/transactions/entities/transaction-item.entity';
 import { NetworkResponseError } from '@/datasources/network/entities/network.error.entity';
 import { getAddress } from 'viem';
 import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
 import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
-import { Server } from 'net';
+import type { Server } from 'net';
+import { PostgresDatabaseModuleV2 } from '@/datasources/db/v2/postgres-database.module';
+import { TestPostgresDatabaseModuleV2 } from '@/datasources/db/v2/test.postgres-database.module';
+import { PostgresDatabaseModule } from '@/datasources/db/v1/postgres-database.module';
+import { TestPostgresDatabaseModule } from '@/datasources/db/__tests__/test.postgres-database.module';
+import { TestTargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/__tests__/test.targeted-messaging.datasource.module';
+import { TargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/targeted-messaging.datasource.module';
 
 describe('Transactions History Controller (Unit)', () => {
   let app: INestApplication<Server>;
@@ -84,6 +89,10 @@ describe('Transactions History Controller (Unit)', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(testConfiguration)],
     })
+      .overrideModule(PostgresDatabaseModule)
+      .useModule(TestPostgresDatabaseModule)
+      .overrideModule(TargetedMessagingDatasourceModule)
+      .useModule(TestTargetedMessagingDatasourceModule)
       .overrideModule(CacheModule)
       .useModule(TestCacheModule)
       .overrideModule(RequestScopedLoggingModule)
@@ -92,6 +101,8 @@ describe('Transactions History Controller (Unit)', () => {
       .useModule(TestNetworkModule)
       .overrideModule(QueuesApiModule)
       .useModule(TestQueuesApiModule)
+      .overrideModule(PostgresDatabaseModuleV2)
+      .useModule(TestPostgresDatabaseModuleV2)
       .compile();
 
     configurationService = moduleFixture.get(IConfigurationService);

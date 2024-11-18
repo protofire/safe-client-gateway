@@ -8,19 +8,21 @@ import { TestCounterfactualSafesDataSourceModule } from '@/datasources/accounts/
 import { CounterfactualSafesDatasourceModule } from '@/datasources/accounts/counterfactual-safes/counterfactual-safes.datasource.module';
 import { TestCacheModule } from '@/datasources/cache/__tests__/test.cache.module';
 import { CacheModule } from '@/datasources/cache/cache.module';
-import jwtConfiguration from '@/datasources/jwt/configuration/__tests__/jwt.configuration';
-import {
-  JWT_CONFIGURATION_MODULE,
-  JwtConfigurationModule,
-} from '@/datasources/jwt/configuration/jwt.configuration.module';
+import { TestPostgresDatabaseModule } from '@/datasources/db/__tests__/test.postgres-database.module';
+import { PostgresDatabaseModule } from '@/datasources/db/v1/postgres-database.module';
+import { PostgresDatabaseModuleV2 } from '@/datasources/db/v2/postgres-database.module';
+import { TestPostgresDatabaseModuleV2 } from '@/datasources/db/v2/test.postgres-database.module';
 import { IJwtService } from '@/datasources/jwt/jwt.service.interface';
 import { TestNetworkModule } from '@/datasources/network/__tests__/test.network.module';
 import { NetworkModule } from '@/datasources/network/network.module';
 import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
 import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
+import { TestTargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/__tests__/test.targeted-messaging.datasource.module';
+import { TargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/targeted-messaging.datasource.module';
 import { accountDataSettingBuilder } from '@/domain/accounts/entities/__tests__/account-data-setting.builder';
 import { accountDataTypeBuilder } from '@/domain/accounts/entities/__tests__/account-data-type.builder';
 import { accountBuilder } from '@/domain/accounts/entities/__tests__/account.builder';
+import { createAccountDtoBuilder } from '@/domain/accounts/entities/__tests__/create-account.dto.builder';
 import { upsertAccountDataSettingsDtoBuilder } from '@/domain/accounts/entities/__tests__/upsert-account-data-settings.dto.entity.builder';
 import { authPayloadDtoBuilder } from '@/domain/auth/entities/__tests__/auth-payload-dto.entity.builder';
 import { chainBuilder } from '@/domain/chains/entities/__tests__/chain.builder';
@@ -28,17 +30,18 @@ import { IAccountsDatasource } from '@/domain/interfaces/accounts.datasource.int
 import { TestLoggingModule } from '@/logging/__tests__/test.logging.module';
 import { RequestScopedLoggingModule } from '@/logging/logging.module';
 import { AccountsController } from '@/routes/accounts/accounts.controller';
-import { Account } from '@/routes/accounts/entities/account.entity';
+import type { Account } from '@/routes/accounts/entities/account.entity';
 import { AuthGuard } from '@/routes/auth/guards/auth.guard';
 import { faker } from '@faker-js/faker';
+import type { INestApplication } from '@nestjs/common';
 import {
   ConflictException,
-  INestApplication,
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import { Test, TestingModule } from '@nestjs/testing';
-import { Server } from 'net';
+import type { TestingModule } from '@nestjs/testing';
+import { Test } from '@nestjs/testing';
+import type { Server } from 'net';
 import request from 'supertest';
 import { getAddress } from 'viem';
 
@@ -47,7 +50,9 @@ describe('AccountsController', () => {
   let jwtService: IJwtService;
   let accountDataSource: jest.MockedObjectDeep<IAccountsDatasource>;
 
-  beforeAll(async () => {
+  beforeEach(async () => {
+    jest.resetAllMocks();
+    jest.useFakeTimers();
     const defaultConfiguration = configuration();
     const testConfiguration = (): typeof defaultConfiguration => ({
       ...defaultConfiguration,
@@ -61,12 +66,14 @@ describe('AccountsController', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(testConfiguration)],
     })
-      .overrideModule(JWT_CONFIGURATION_MODULE)
-      .useModule(JwtConfigurationModule.register(jwtConfiguration))
+      .overrideModule(PostgresDatabaseModule)
+      .useModule(TestPostgresDatabaseModule)
       .overrideModule(AccountsDatasourceModule)
       .useModule(TestAccountsDataSourceModule)
       .overrideModule(CounterfactualSafesDatasourceModule)
       .useModule(TestCounterfactualSafesDataSourceModule)
+      .overrideModule(TargetedMessagingDatasourceModule)
+      .useModule(TestTargetedMessagingDatasourceModule)
       .overrideModule(CacheModule)
       .useModule(TestCacheModule)
       .overrideModule(RequestScopedLoggingModule)
@@ -75,17 +82,14 @@ describe('AccountsController', () => {
       .useModule(TestNetworkModule)
       .overrideModule(QueuesApiModule)
       .useModule(TestQueuesApiModule)
+      .overrideModule(PostgresDatabaseModuleV2)
+      .useModule(TestPostgresDatabaseModuleV2)
       .compile();
     jwtService = moduleFixture.get<IJwtService>(IJwtService);
     accountDataSource = moduleFixture.get(IAccountsDatasource);
 
     app = await new TestAppProvider().provide(moduleFixture);
     await app.init();
-  });
-
-  beforeEach(() => {
-    jest.resetAllMocks();
-    jest.useFakeTimers();
   });
 
   afterEach(() => {
@@ -111,11 +115,11 @@ describe('AccountsController', () => {
 
   describe('Create accounts', () => {
     it('should create an account', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
+      const createAccountDto = createAccountDtoBuilder().build();
       const chain = chainBuilder().build();
       const authPayloadDto = authPayloadDtoBuilder()
         .with('chain_id', chain.chainId)
-        .with('signer_address', address)
+        .with('signer_address', createAccountDto.address)
         .build();
       const accessToken = jwtService.sign(authPayloadDto);
       const account = accountBuilder().build();
@@ -124,13 +128,12 @@ describe('AccountsController', () => {
       await request(app.getHttpServer())
         .post(`/v1/accounts`)
         .set('Cookie', [`access_token=${accessToken}`])
-        .send({ address: address.toLowerCase() })
+        .send(createAccountDto)
         .expect(201);
 
       expect(accountDataSource.createAccount).toHaveBeenCalledTimes(1);
-      // Check the address was checksummed
       expect(accountDataSource.createAccount).toHaveBeenCalledWith({
-        address,
+        createAccountDto,
         clientIp: expect.any(String),
       });
     });
@@ -143,6 +146,9 @@ describe('AccountsController', () => {
         .with('signer_address', address)
         .build();
       const accessToken = jwtService.sign(authPayloadDto);
+      const createAccountDto = createAccountDtoBuilder()
+        .with('address', address)
+        .build();
       accountDataSource.createAccount.mockRejectedValue(
         new UnprocessableEntityException('Datasource error'),
       );
@@ -150,7 +156,7 @@ describe('AccountsController', () => {
       await request(app.getHttpServer())
         .post(`/v1/accounts`)
         .set('Cookie', [`access_token=${accessToken}`])
-        .send({ address: address.toLowerCase() })
+        .send(createAccountDto)
         .expect(422);
 
       accountDataSource.createAccount.mockRejectedValue(
@@ -160,7 +166,7 @@ describe('AccountsController', () => {
       await request(app.getHttpServer())
         .post(`/v1/accounts`)
         .set('Cookie', [`access_token=${accessToken}`])
-        .send({ address: address.toLowerCase() })
+        .send(createAccountDto)
         .expect(409);
 
       expect(accountDataSource.createAccount).toHaveBeenCalledTimes(2);
@@ -182,6 +188,7 @@ describe('AccountsController', () => {
         id: account.id.toString(),
         groupId: null,
         address: account.address,
+        name: account.name,
       };
 
       await request(app.getHttpServer())
@@ -210,6 +217,7 @@ describe('AccountsController', () => {
         id: account.id.toString(),
         groupId: groupId.toString(),
         address: account.address,
+        name: account.name,
       };
 
       await request(app.getHttpServer())
@@ -254,13 +262,16 @@ describe('AccountsController', () => {
         .build();
       const accessToken = jwtService.sign(authPayloadDto);
       const account = accountBuilder().build();
+      const createAccountDto = createAccountDtoBuilder()
+        .with('address', address)
+        .build();
       accountDataSource.createAccount.mockResolvedValue(account);
       accountDataSource.deleteAccount.mockResolvedValue();
 
       await request(app.getHttpServer())
         .post(`/v1/accounts`)
         .set('Cookie', [`access_token=${accessToken}`])
-        .send({ address: address.toLowerCase() })
+        .send(createAccountDto)
         .expect(201);
 
       await request(app.getHttpServer())

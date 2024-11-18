@@ -1,16 +1,17 @@
 import { TestDbFactory } from '@/__tests__/db.factory';
-import { IConfigurationService } from '@/config/configuration.service.interface';
+import type { IConfigurationService } from '@/config/configuration.service.interface';
 import { CounterfactualSafesDatasource } from '@/datasources/accounts/counterfactual-safes/counterfactual-safes.datasource';
 import { FakeCacheService } from '@/datasources/cache/__tests__/fake.cache.service';
 import { CacheDir } from '@/datasources/cache/entities/cache-dir.entity';
-import { CachedQueryResolver } from '@/datasources/db/cached-query-resolver';
-import { PostgresDatabaseMigrator } from '@/datasources/db/postgres-database.migrator';
+import { CachedQueryResolver } from '@/datasources/db/v1/cached-query-resolver';
+import { PostgresDatabaseMigrator } from '@/datasources/db/v1/postgres-database.migrator';
 import { createCounterfactualSafeDtoBuilder } from '@/domain/accounts/counterfactual-safes/entities/__tests__/create-counterfactual-safe.dto.entity.builder';
 import { accountBuilder } from '@/domain/accounts/entities/__tests__/account.builder';
-import { Account } from '@/domain/accounts/entities/account.entity';
-import { ILoggingService } from '@/logging/logging.interface';
+import { createAccountDtoBuilder } from '@/domain/accounts/entities/__tests__/create-account.dto.builder';
+import type { Account } from '@/domain/accounts/entities/account.entity';
+import type { ILoggingService } from '@/logging/logging.interface';
 import { faker } from '@faker-js/faker';
-import postgres from 'postgres';
+import type postgres from 'postgres';
 import { getAddress } from 'viem';
 
 const mockLoggingService = {
@@ -61,10 +62,10 @@ describe('CounterfactualSafesDatasource tests', () => {
 
   describe('createCounterfactualSafe', () => {
     it('should create a Counterfactual Safe', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
+      const createAccountDto = createAccountDtoBuilder().build();
       const [account] = await sql<
         Account[]
-      >`INSERT INTO accounts (address) VALUES (${address}) RETURNING *`;
+      >`INSERT INTO accounts (address, name, name_hash) VALUES (${createAccountDto.address}, ${createAccountDto.name}, ${faker.string.alphanumeric(32)}) RETURNING *`;
       const createCounterfactualSafeDto =
         createCounterfactualSafeDtoBuilder().build();
 
@@ -89,17 +90,17 @@ describe('CounterfactualSafesDatasource tests', () => {
     });
 
     it('should create a Counterfactual Safe if the rate limit is not hit', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
+      const createAccountDto = createAccountDtoBuilder().build();
       const [account] = await sql<
         Account[]
-      >`INSERT INTO accounts (address) VALUES (${address}) RETURNING *`;
+      >`INSERT INTO accounts (address, name, name_hash) VALUES (${createAccountDto.address}, ${createAccountDto.name}, ${faker.string.alphanumeric(32)}) RETURNING *`;
       const creationRateLimitCalls = faker.number.int({ min: 5, max: 10 });
-      const createCounterfactualSafes = Array.from(
-        { length: creationRateLimitCalls },
+      const createCounterfactualSafes = faker.helpers.multiple(
         (_, i) =>
           createCounterfactualSafeDtoBuilder()
             .with('chainId', i.toString())
             .build(),
+        { count: creationRateLimitCalls },
       );
 
       mockConfigurationService.getOrThrow.mockImplementation((key) => {
@@ -151,17 +152,17 @@ describe('CounterfactualSafesDatasource tests', () => {
     });
 
     it('should fail if the rate limit is hit', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
+      const createAccountDto = createAccountDtoBuilder().build();
       const [account] = await sql<
         Account[]
-      >`INSERT INTO accounts (address) VALUES (${address}) RETURNING *`;
+      >`INSERT INTO accounts (address, name, name_hash) VALUES (${createAccountDto.address}, ${createAccountDto.name}, ${faker.string.alphanumeric(32)}) RETURNING *`;
       const creationRateLimitCalls = faker.number.int({ min: 5, max: 10 });
-      const createCounterfactualSafes = Array.from(
-        { length: creationRateLimitCalls },
+      const createCounterfactualSafes = faker.helpers.multiple(
         (_, i) =>
           createCounterfactualSafeDtoBuilder()
             .with('chainId', i.toString())
             .build(),
+        { count: creationRateLimitCalls },
       );
 
       mockConfigurationService.getOrThrow.mockImplementation((key) => {
@@ -201,18 +202,21 @@ describe('CounterfactualSafesDatasource tests', () => {
     });
 
     it('should delete the cache for the account Counterfactual Safes', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
+      const createAccountDto = createAccountDtoBuilder().build();
       const [account] = await sql<
         Account[]
-      >`INSERT INTO accounts (address) VALUES (${address}) RETURNING *`;
+      >`INSERT INTO accounts (address, name, name_hash) VALUES (${createAccountDto.address}, ${createAccountDto.name}, ${faker.string.alphanumeric(32)}) RETURNING *`;
       await target.createCounterfactualSafe({
         account,
         createCounterfactualSafeDto:
           createCounterfactualSafeDtoBuilder().build(),
       });
-      await target.getCounterfactualSafesForAddress(address);
-      const cacheDir = new CacheDir(`counterfactual_safes_${address}`, '');
-      await fakeCacheService.set(
+      await target.getCounterfactualSafesForAddress(createAccountDto.address);
+      const cacheDir = new CacheDir(
+        `counterfactual_safes_${createAccountDto.address}`,
+        '',
+      );
+      await fakeCacheService.hSet(
         cacheDir,
         JSON.stringify([]),
         faker.number.int(),
@@ -224,16 +228,16 @@ describe('CounterfactualSafesDatasource tests', () => {
         createCounterfactualSafeDto:
           createCounterfactualSafeDtoBuilder().build(),
       });
-      expect(await fakeCacheService.get(cacheDir)).toBeUndefined();
+      expect(await fakeCacheService.hGet(cacheDir)).toBeUndefined();
     });
   });
 
   describe('getCounterfactualSafe', () => {
     it('should get a Counterfactual Safe', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
+      const createAccountDto = createAccountDtoBuilder().build();
       const [account] = await sql<
         Account[]
-      >`INSERT INTO accounts (address) VALUES (${address}) RETURNING *`;
+      >`INSERT INTO accounts (address, name, name_hash) VALUES (${createAccountDto.address}, ${createAccountDto.name}, ${faker.string.alphanumeric(32)}) RETURNING *`;
       const counterfactualSafe = await target.createCounterfactualSafe({
         account,
         createCounterfactualSafeDto:
@@ -241,7 +245,7 @@ describe('CounterfactualSafesDatasource tests', () => {
       });
 
       const actual = await target.getCounterfactualSafe({
-        address,
+        address: createAccountDto.address,
         chainId: counterfactualSafe.chain_id,
         predictedAddress: counterfactualSafe.predicted_address,
       });
@@ -249,10 +253,10 @@ describe('CounterfactualSafesDatasource tests', () => {
     });
 
     it('returns a Counterfactual Safe from cache', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
+      const createAccountDto = createAccountDtoBuilder().build();
       const [account] = await sql<
         Account[]
-      >`INSERT INTO accounts (address) VALUES (${address}) RETURNING *`;
+      >`INSERT INTO accounts (address, name, name_hash) VALUES (${createAccountDto.address}, ${createAccountDto.name}, ${faker.string.alphanumeric(32)}) RETURNING *`;
       const counterfactualSafe = await target.createCounterfactualSafe({
         account,
         createCounterfactualSafeDto:
@@ -261,12 +265,12 @@ describe('CounterfactualSafesDatasource tests', () => {
 
       // first call is not cached
       const actual = await target.getCounterfactualSafe({
-        address,
+        address: createAccountDto.address,
         chainId: counterfactualSafe.chain_id,
         predictedAddress: counterfactualSafe.predicted_address,
       });
       await target.getCounterfactualSafe({
-        address,
+        address: createAccountDto.address,
         chainId: counterfactualSafe.chain_id,
         predictedAddress: counterfactualSafe.predicted_address,
       });
@@ -276,7 +280,7 @@ describe('CounterfactualSafesDatasource tests', () => {
         `${counterfactualSafe.chain_id}_counterfactual_safe_${counterfactualSafe.predicted_address}`,
         '',
       );
-      const cacheContent = await fakeCacheService.get(cacheDir);
+      const cacheContent = await fakeCacheService.hGet(cacheDir);
       expect(JSON.parse(cacheContent as string)).toHaveLength(1);
       expect(mockLoggingService.debug).toHaveBeenCalledTimes(2);
       expect(mockLoggingService.debug).toHaveBeenNthCalledWith(1, {
@@ -315,7 +319,7 @@ describe('CounterfactualSafesDatasource tests', () => {
         `${counterfactualSafe.chainId}_counterfactual_safe_${counterfactualSafe.predictedAddress}`,
         '',
       );
-      expect(await fakeCacheService.get(cacheDir)).toBeUndefined();
+      expect(await fakeCacheService.hGet(cacheDir)).toBeUndefined();
       expect(mockLoggingService.debug).toHaveBeenCalledTimes(2);
       expect(mockLoggingService.debug).toHaveBeenNthCalledWith(1, {
         type: 'cache_miss',
@@ -332,10 +336,10 @@ describe('CounterfactualSafesDatasource tests', () => {
 
   describe('getCounterfactualSafesForAddress', () => {
     it('should get the Counterfactual Safes for an address', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
+      const createAccountDto = createAccountDtoBuilder().build();
       const [account] = await sql<
         Account[]
-      >`INSERT INTO accounts (address) VALUES (${address}) RETURNING *`;
+      >`INSERT INTO accounts (address, name, name_hash) VALUES (${createAccountDto.address}, ${createAccountDto.name}, ${faker.string.alphanumeric(32)}) RETURNING *`;
       const counterfactualSafes = await Promise.all([
         target.createCounterfactualSafe({
           account,
@@ -351,15 +355,17 @@ describe('CounterfactualSafesDatasource tests', () => {
         }),
       ]);
 
-      const actual = await target.getCounterfactualSafesForAddress(address);
+      const actual = await target.getCounterfactualSafesForAddress(
+        createAccountDto.address,
+      );
       expect(actual).toStrictEqual(expect.arrayContaining(counterfactualSafes));
     });
 
     it('should get the Counterfactual Safes for an account from cache', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
+      const createAccountDto = createAccountDtoBuilder().build();
       const [account] = await sql<
         Account[]
-      >`INSERT INTO accounts (address) VALUES (${address}) RETURNING *`;
+      >`INSERT INTO accounts (address, name, name_hash) VALUES (${createAccountDto.address}, ${createAccountDto.name}, ${faker.string.alphanumeric(32)}) RETURNING *`;
       const counterfactualSafes = await Promise.all([
         target.createCounterfactualSafe({
           account,
@@ -376,12 +382,17 @@ describe('CounterfactualSafesDatasource tests', () => {
       ]);
 
       // first call is not cached
-      const actual = await target.getCounterfactualSafesForAddress(address);
-      await target.getCounterfactualSafesForAddress(address);
+      const actual = await target.getCounterfactualSafesForAddress(
+        createAccountDto.address,
+      );
+      await target.getCounterfactualSafesForAddress(createAccountDto.address);
 
       expect(actual).toStrictEqual(expect.arrayContaining(counterfactualSafes));
-      const cacheDir = new CacheDir(`counterfactual_safes_${address}`, '');
-      const cacheContent = await fakeCacheService.get(cacheDir);
+      const cacheDir = new CacheDir(
+        `counterfactual_safes_${createAccountDto.address}`,
+        '',
+      );
+      const cacheContent = await fakeCacheService.hGet(cacheDir);
       expect(JSON.parse(cacheContent as string)).toHaveLength(2);
       expect(mockLoggingService.debug).toHaveBeenCalledTimes(2);
       expect(mockLoggingService.debug).toHaveBeenNthCalledWith(1, {
@@ -399,10 +410,10 @@ describe('CounterfactualSafesDatasource tests', () => {
 
   describe('deleteCounterfactualSafe', () => {
     it('should delete a Counterfactual Safe', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
+      const createAccountDto = createAccountDtoBuilder().build();
       const [account] = await sql<
         Account[]
-      >`INSERT INTO accounts (address) VALUES (${address}) RETURNING *`;
+      >`INSERT INTO accounts (address, name, name_hash) VALUES (${createAccountDto.address}, ${createAccountDto.name}, ${faker.string.alphanumeric(32)}) RETURNING *`;
       const counterfactualSafe = await target.createCounterfactualSafe({
         account,
         createCounterfactualSafeDto:
@@ -433,10 +444,10 @@ describe('CounterfactualSafesDatasource tests', () => {
     });
 
     it('should clear the cache on Counterfactual Safe deletion', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
+      const createAccountDto = createAccountDtoBuilder().build();
       const [account] = await sql<
         Account[]
-      >`INSERT INTO accounts (address) VALUES (${address}) RETURNING *`;
+      >`INSERT INTO accounts (address, name, name_hash) VALUES (${createAccountDto.address}, ${createAccountDto.name}, ${faker.string.alphanumeric(32)}) RETURNING *`;
       const counterfactualSafe = await target.createCounterfactualSafe({
         account,
         createCounterfactualSafeDto:
@@ -445,7 +456,7 @@ describe('CounterfactualSafesDatasource tests', () => {
 
       // the Counterfactual Safe is cached
       await target.getCounterfactualSafe({
-        address,
+        address: createAccountDto.address,
         chainId: counterfactualSafe.chain_id,
         predictedAddress: counterfactualSafe.predicted_address,
       });
@@ -453,7 +464,7 @@ describe('CounterfactualSafesDatasource tests', () => {
         `${counterfactualSafe.chain_id}_counterfactual_safe_${counterfactualSafe.predicted_address}`,
         '',
       );
-      const beforeDeletion = await fakeCacheService.get(cacheDir);
+      const beforeDeletion = await fakeCacheService.hGet(cacheDir);
       expect(JSON.parse(beforeDeletion as string)).toHaveLength(1);
 
       // the counterfactualSafe is deleted from the database and the cache
@@ -466,29 +477,29 @@ describe('CounterfactualSafesDatasource tests', () => {
       ).resolves.not.toThrow();
       await expect(
         target.getCounterfactualSafe({
-          address,
+          address: createAccountDto.address,
           chainId: counterfactualSafe.chain_id,
           predictedAddress: counterfactualSafe.predicted_address,
         }),
       ).rejects.toThrow();
 
-      const afterDeletion = await fakeCacheService.get(cacheDir);
+      const afterDeletion = await fakeCacheService.hGet(cacheDir);
       expect(afterDeletion).toBeUndefined();
       const cacheDirByAddress = new CacheDir(
-        `counterfactual_safes_${address}`,
+        `counterfactual_safes_${createAccountDto.address}`,
         '',
       );
-      const cachedByAddress = await fakeCacheService.get(cacheDirByAddress);
+      const cachedByAddress = await fakeCacheService.hGet(cacheDirByAddress);
       expect(cachedByAddress).toBeUndefined();
     });
   });
 
   describe('deleteCounterfactualSafesForAccount', () => {
     it('should delete all the Counterfactual Safes for an account', async () => {
-      const address = getAddress(faker.finance.ethereumAddress());
+      const createAccountDto = createAccountDtoBuilder().build();
       const [account] = await sql<
         Account[]
-      >`INSERT INTO accounts (address) VALUES (${address}) RETURNING *`;
+      >`INSERT INTO accounts (address, name, name_hash) VALUES (${createAccountDto.address}, ${createAccountDto.name}, ${faker.string.alphanumeric(32)}) RETURNING *`;
       const counterfactualSafes = await Promise.all([
         target.createCounterfactualSafe({
           account,
@@ -506,7 +517,7 @@ describe('CounterfactualSafesDatasource tests', () => {
 
       // store data in the cache dirs
       const counterfactualSafesCacheDir = new CacheDir(
-        `counterfactual_safes_${address}`,
+        `counterfactual_safes_${createAccountDto.address}`,
         faker.string.alpha(),
       );
       const counterfactualSafeCacheDirs = [
@@ -525,17 +536,19 @@ describe('CounterfactualSafesDatasource tests', () => {
       ).resolves.not.toThrow();
 
       // database is cleared
-      const actual = await target.getCounterfactualSafesForAddress(address);
+      const actual = await target.getCounterfactualSafesForAddress(
+        createAccountDto.address,
+      );
       expect(actual).toHaveLength(0);
       // cache is cleared
       expect(
-        await fakeCacheService.get(counterfactualSafesCacheDir),
+        await fakeCacheService.hGet(counterfactualSafesCacheDir),
       ).toBeUndefined();
       expect(
-        await fakeCacheService.get(counterfactualSafeCacheDirs[0]),
+        await fakeCacheService.hGet(counterfactualSafeCacheDirs[0]),
       ).toBeUndefined();
       expect(
-        await fakeCacheService.get(counterfactualSafeCacheDirs[1]),
+        await fakeCacheService.hGet(counterfactualSafeCacheDirs[1]),
       ).toBeUndefined();
     });
   });

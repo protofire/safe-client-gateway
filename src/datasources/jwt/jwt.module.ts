@@ -4,7 +4,6 @@ import { JwtService } from '@/datasources/jwt/jwt.service';
 import { IJwtService } from '@/datasources/jwt/jwt.service.interface';
 import { toSecondsTimestamp } from '@/domain/common/utils/time';
 import { JwtPayloadWithClaims } from '@/datasources/jwt/jwt-claims.entity';
-import { JWT_CONFIGURATION_MODULE } from '@/datasources/jwt/configuration/jwt.configuration.module';
 
 // Use inferred type
 // eslint-disable-next-line @typescript-eslint/explicit-function-return-type
@@ -18,7 +17,7 @@ function jwtClientFactory() {
       },
     >(
       payload: T,
-      options: { secretOrPrivateKey: string },
+      options: { secretOrPrivateKey: string; algorithm?: jwt.Algorithm },
     ): string => {
       // All date-based claims should be second-based NumericDates
       const { exp, iat, nbf, ...rest } = payload;
@@ -31,13 +30,19 @@ function jwtClientFactory() {
           ...rest,
         },
         options.secretOrPrivateKey,
+        { algorithm: options.algorithm },
       );
     },
     verify: <T extends object>(
       token: string,
-      options: { issuer: string; secretOrPrivateKey: string },
+      options: {
+        issuer: string;
+        secretOrPrivateKey: string;
+        algorithms?: Array<jwt.Algorithm>;
+      },
     ): T => {
       return jwt.verify(token, options.secretOrPrivateKey, {
+        algorithms: options.algorithms,
         issuer: options.issuer,
         // Return only payload without claims, e.g. no exp, nbf, etc.
         complete: false,
@@ -45,10 +50,15 @@ function jwtClientFactory() {
     },
     decode: <T extends object>(
       token: string,
-      options: { issuer: string; secretOrPrivateKey: string },
+      options: {
+        issuer: string;
+        secretOrPrivateKey: string;
+        algorithms?: Array<jwt.Algorithm>;
+      },
     ): JwtPayloadWithClaims<T> => {
       // Client has `decode` method but we also want to verify the signature
       const { payload } = jwt.verify(token, options.secretOrPrivateKey, {
+        algorithms: options.algorithms,
         issuer: options.issuer,
         // Return headers, payload (with claims) and signature
         complete: true,
@@ -62,7 +72,6 @@ function jwtClientFactory() {
 export type JwtClient = ReturnType<typeof jwtClientFactory>;
 
 @Module({
-  imports: [JWT_CONFIGURATION_MODULE],
   providers: [
     {
       provide: 'JwtClient',

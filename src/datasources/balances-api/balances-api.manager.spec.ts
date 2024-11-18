@@ -1,17 +1,18 @@
-import { IConfigurationService } from '@/config/configuration.service.interface';
+import type { IConfigurationService } from '@/config/configuration.service.interface';
 import { BalancesApiManager } from '@/datasources/balances-api/balances-api.manager';
-import { CacheFirstDataSource } from '@/datasources/cache/cache.first.data.source';
-import { ICacheService } from '@/datasources/cache/cache.service.interface';
-import { HttpErrorFactory } from '@/datasources/errors/http-error-factory';
+import type { CacheFirstDataSource } from '@/datasources/cache/cache.first.data.source';
+import type { ICacheService } from '@/datasources/cache/cache.service.interface';
+import type { HttpErrorFactory } from '@/datasources/errors/http-error-factory';
 import { chainBuilder } from '@/domain/chains/entities/__tests__/chain.builder';
-import { IBalancesApi } from '@/domain/interfaces/balances-api.interface';
-import { IConfigApi } from '@/domain/interfaces/config-api.interface';
-import { IPricesApi } from '@/datasources/balances-api/prices-api.interface';
+import type { IBalancesApi } from '@/domain/interfaces/balances-api.interface';
+import type { IConfigApi } from '@/domain/interfaces/config-api.interface';
+import type { IPricesApi } from '@/datasources/balances-api/prices-api.interface';
 import { faker } from '@faker-js/faker';
 import { getAddress } from 'viem';
 import { sample } from 'lodash';
-import { ITransactionApiManager } from '@/domain/interfaces/transaction-api.manager.interface';
-import { ITransactionApi } from '@/domain/interfaces/transaction-api.interface';
+import type { ITransactionApiManager } from '@/domain/interfaces/transaction-api.manager.interface';
+import type { ITransactionApi } from '@/domain/interfaces/transaction-api.interface';
+import { rawify } from '@/validation/entities/raw.entity';
 
 const configurationService = {
   getOrThrow: jest.fn(),
@@ -62,9 +63,9 @@ const coingeckoApi = {
 } as IPricesApi;
 
 const coingeckoApiMock = jest.mocked(coingeckoApi);
-const ZERION_BALANCES_CHAIN_IDS: string[] = Array.from(
-  { length: faker.number.int({ min: 1, max: 10 }) },
+const ZERION_BALANCES_CHAIN_IDS: string[] = faker.helpers.multiple(
   () => faker.string.numeric(),
+  { count: { min: 1, max: 10 } },
 );
 
 beforeEach(() => {
@@ -155,7 +156,7 @@ describe('Balances API Manager Tests', () => {
         else if (key === 'features.counterfactualBalances') return true;
         throw new Error(`Unexpected key: ${key}`);
       });
-      configApiMock.getChain.mockResolvedValue(chain);
+      configApiMock.getChain.mockResolvedValue(rawify(chain));
       dataSourceMock.get.mockResolvedValue([]);
       const balancesApiManager = new BalancesApiManager(
         configurationService,

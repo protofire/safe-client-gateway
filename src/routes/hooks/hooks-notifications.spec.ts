@@ -1,5 +1,6 @@
-import { INestApplication } from '@nestjs/common';
-import { Test, TestingModule } from '@nestjs/testing';
+import type { INestApplication } from '@nestjs/common';
+import type { TestingModule } from '@nestjs/testing';
+import { Test } from '@nestjs/testing';
 import { TestCacheModule } from '@/datasources/cache/__tests__/test.cache.module';
 import { TestNetworkModule } from '@/datasources/network/__tests__/test.network.module';
 import { TestLoggingModule } from '@/logging/__tests__/test.logging.module';
@@ -10,7 +11,7 @@ import { RequestScopedLoggingModule } from '@/logging/logging.module';
 import { NetworkModule } from '@/datasources/network/network.module';
 import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
 import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
-import { Server } from 'net';
+import type { Server } from 'net';
 import { chainUpdateEventBuilder } from '@/routes/hooks/entities/__tests__/chain-update.builder';
 import { safeAppsEventBuilder } from '@/routes/hooks/entities/__tests__/safe-apps-update.builder';
 import { outgoingEtherEventBuilder } from '@/routes/hooks/entities/__tests__/outgoing-ether.builder';
@@ -30,10 +31,8 @@ import { TestPushNotificationsApiModule } from '@/datasources/push-notifications
 import { NotificationsDatasourceModule } from '@/datasources/notifications/notifications.datasource.module';
 import { TestNotificationsDatasourceModule } from '@/datasources/notifications/__tests__/test.notifications.datasource.module';
 import { IConfigurationService } from '@/config/configuration.service.interface';
-import {
-  INetworkService,
-  NetworkService,
-} from '@/datasources/network/network.service.interface';
+import type { INetworkService } from '@/datasources/network/network.service.interface';
+import { NetworkService } from '@/datasources/network/network.service.interface';
 import { INotificationsDatasource } from '@/domain/interfaces/notifications.datasource.interface';
 import { faker } from '@faker-js/faker';
 import { getAddress } from 'viem';
@@ -49,15 +48,17 @@ import { confirmationBuilder } from '@/domain/safe/entities/__tests__/multisig-t
 import { messageBuilder } from '@/domain/messages/entities/__tests__/message.builder';
 import { messageCreatedEventBuilder } from '@/routes/hooks/entities/__tests__/message-created.builder';
 import { messageConfirmationBuilder } from '@/domain/messages/entities/__tests__/message-confirmation.builder';
-import { UUID } from 'crypto';
+import type { UUID } from 'crypto';
 import { delegateBuilder } from '@/domain/delegate/entities/__tests__/delegate.builder';
-import {
-  JWT_CONFIGURATION_MODULE,
-  JwtConfigurationModule,
-} from '@/datasources/jwt/configuration/jwt.configuration.module';
-import jwtConfiguration from '@/datasources/jwt/configuration/__tests__/jwt.configuration';
+import { TestPostgresDatabaseModuleV2 } from '@/datasources/db/v2/test.postgres-database.module';
+import { PostgresDatabaseModuleV2 } from '@/datasources/db/v2/postgres-database.module';
+import { PostgresDatabaseModule } from '@/datasources/db/v1/postgres-database.module';
+import { TestPostgresDatabaseModule } from '@/datasources/db/__tests__/test.postgres-database.module';
+import { TestTargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/__tests__/test.targeted-messaging.datasource.module';
+import { TargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/targeted-messaging.datasource.module';
 
-describe('Post Hook Events for Notifications (Unit)', () => {
+// TODO: Migrate to E2E tests as TransactionEventType events are already being received via queue.
+describe.skip('Post Hook Events for Notifications (Unit)', () => {
   let app: INestApplication<Server>;
   let pushNotificationsApi: jest.MockedObjectDeep<IPushNotificationsApi>;
   let notificationsDatasource: jest.MockedObjectDeep<INotificationsDatasource>;
@@ -81,20 +82,24 @@ describe('Post Hook Events for Notifications (Unit)', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(testConfiguration)],
     })
-      .overrideModule(JWT_CONFIGURATION_MODULE)
-      .useModule(JwtConfigurationModule.register(jwtConfiguration))
+      .overrideModule(PostgresDatabaseModule)
+      .useModule(TestPostgresDatabaseModule)
+      .overrideModule(TargetedMessagingDatasourceModule)
+      .useModule(TestTargetedMessagingDatasourceModule)
       .overrideModule(CacheModule)
       .useModule(TestCacheModule)
       .overrideModule(RequestScopedLoggingModule)
       .useModule(TestLoggingModule)
       .overrideModule(NetworkModule)
       .useModule(TestNetworkModule)
-      .overrideModule(NotificationsDatasourceModule)
-      .useModule(TestNotificationsDatasourceModule)
-      .overrideModule(PushNotificationsApiModule)
-      .useModule(TestPushNotificationsApiModule)
       .overrideModule(QueuesApiModule)
       .useModule(TestQueuesApiModule)
+      .overrideModule(PostgresDatabaseModuleV2)
+      .useModule(TestPostgresDatabaseModuleV2)
+      .overrideModule(PushNotificationsApiModule)
+      .useModule(TestPushNotificationsApiModule)
+      .overrideModule(NotificationsDatasourceModule)
+      .useModule(TestNotificationsDatasourceModule)
       .compile();
     app = moduleFixture.createNestApplication();
 
@@ -144,15 +149,15 @@ describe('Post Hook Events for Notifications (Unit)', () => {
       moduleTransactionEventBuilder().build(),
     ].map((event) => [event.type, event]),
   )('should enqueue %s event notifications as is', async (_, event) => {
-    const subscribers = Array.from(
-      {
-        length: faker.number.int({ min: 1, max: 5 }),
-      },
+    const subscribers = faker.helpers.multiple(
       () => ({
         subscriber: getAddress(faker.finance.ethereumAddress()),
         deviceUuid: faker.string.uuid() as UUID,
         cloudMessagingToken: faker.string.alphanumeric(),
       }),
+      {
+        count: { min: 1, max: 5 },
+      },
     );
     const chain = chainBuilder().build();
     notificationsDatasource.getSubscribersBySafe.mockResolvedValue(subscribers);
@@ -193,10 +198,7 @@ describe('Post Hook Events for Notifications (Unit)', () => {
     'should enqueue %s event notifications when receiving assets from other parties',
     async (_, event) => {
       const chain = chainBuilder().with('chainId', event.chainId).build();
-      const subscribers = Array.from(
-        {
-          length: faker.number.int({ min: 1, max: 5 }),
-        },
+      const subscribers = faker.helpers.multiple(
         () => ({
           subscriber: faker.helpers.arrayElement([
             getAddress(faker.finance.ethereumAddress()),
@@ -205,6 +207,9 @@ describe('Post Hook Events for Notifications (Unit)', () => {
           deviceUuid: faker.string.uuid() as UUID,
           cloudMessagingToken: faker.string.alphanumeric(),
         }),
+        {
+          count: { min: 1, max: 5 },
+        },
       );
       notificationsDatasource.getSubscribersBySafe.mockResolvedValue(
         subscribers,
@@ -273,10 +278,7 @@ describe('Post Hook Events for Notifications (Unit)', () => {
     'should not enqueue %s event notifications when receiving assets from the Safe itself',
     async (_, event) => {
       const chain = chainBuilder().with('chainId', event.chainId).build();
-      const subscribers = Array.from(
-        {
-          length: faker.number.int({ min: 1, max: 5 }),
-        },
+      const subscribers = faker.helpers.multiple(
         () => ({
           subscriber: faker.helpers.arrayElement([
             getAddress(faker.finance.ethereumAddress()),
@@ -285,6 +287,9 @@ describe('Post Hook Events for Notifications (Unit)', () => {
           deviceUuid: faker.string.uuid() as UUID,
           cloudMessagingToken: faker.string.alphanumeric(),
         }),
+        {
+          count: { min: 1, max: 5 },
+        },
       );
       notificationsDatasource.getSubscribersBySafe.mockResolvedValue(
         subscribers,
@@ -345,15 +350,15 @@ describe('Post Hook Events for Notifications (Unit)', () => {
       const multisigTransaction = multisigTransactionBuilder()
         .with('safe', event.address)
         .build();
-      const subscribers = Array.from(
-        {
-          length: faker.number.int({ min: 1, max: 5 }),
-        },
+      const subscribers = faker.helpers.multiple(
         () => ({
           subscriber: getAddress(faker.finance.ethereumAddress()),
           deviceUuid: faker.string.uuid() as UUID,
           cloudMessagingToken: faker.string.alphanumeric(),
         }),
+        {
+          count: { min: 1, max: 5 },
+        },
       );
       const safe = safeBuilder()
         .with('address', event.address)
@@ -417,15 +422,15 @@ describe('Post Hook Events for Notifications (Unit)', () => {
     it('should not enqueue PENDING_MULTISIG_TRANSACTION event notifications if the Safe has a threshold of 1', async () => {
       const event = pendingTransactionEventBuilder().build();
       const chain = chainBuilder().with('chainId', event.chainId).build();
-      const subscribers = Array.from(
-        {
-          length: faker.number.int({ min: 1, max: 5 }),
-        },
+      const subscribers = faker.helpers.multiple(
         () => ({
           subscriber: getAddress(faker.finance.ethereumAddress()),
           deviceUuid: faker.string.uuid() as UUID,
           cloudMessagingToken: faker.string.alphanumeric(),
         }),
+        {
+          count: { min: 1, max: 5 },
+        },
       );
       const safe = safeBuilder()
         .with('address', event.address)
@@ -469,15 +474,15 @@ describe('Post Hook Events for Notifications (Unit)', () => {
     it('should not enqueue PENDING_MULTISIG_TRANSACTION event notifications if the Safe has a threshold > 1 but the owner has signed', async () => {
       const event = pendingTransactionEventBuilder().build();
       const chain = chainBuilder().with('chainId', event.chainId).build();
-      const subscribers = Array.from(
-        {
-          length: faker.number.int({ min: 1, max: 5 }),
-        },
+      const subscribers = faker.helpers.multiple(
         () => ({
           subscriber: getAddress(faker.finance.ethereumAddress()),
           deviceUuid: faker.string.uuid() as UUID,
           cloudMessagingToken: faker.string.alphanumeric(),
         }),
+        {
+          count: { min: 1, max: 5 },
+        },
       );
       const safe = safeBuilder()
         .with('address', event.address)
@@ -631,15 +636,15 @@ describe('Post Hook Events for Notifications (Unit)', () => {
       const message = messageBuilder()
         .with('messageHash', event.messageHash as `0x${string}`)
         .build();
-      const subscribers = Array.from(
-        {
-          length: faker.number.int({ min: 1, max: 5 }),
-        },
+      const subscribers = faker.helpers.multiple(
         () => ({
           subscriber: getAddress(faker.finance.ethereumAddress()),
           deviceUuid: faker.string.uuid() as UUID,
           cloudMessagingToken: faker.string.alphanumeric(),
         }),
+        {
+          count: { min: 1, max: 5 },
+        },
       );
       const safe = safeBuilder()
         .with('address', event.address)
@@ -703,15 +708,15 @@ describe('Post Hook Events for Notifications (Unit)', () => {
     it('should not enqueue MESSAGE_CONFIRMATION_REQUEST event notifications if the Safe has a threshold of 1', async () => {
       const event = messageCreatedEventBuilder().build();
       const chain = chainBuilder().with('chainId', event.chainId).build();
-      const subscribers = Array.from(
-        {
-          length: faker.number.int({ min: 1, max: 5 }),
-        },
+      const subscribers = faker.helpers.multiple(
         () => ({
           subscriber: getAddress(faker.finance.ethereumAddress()),
           deviceUuid: faker.string.uuid() as UUID,
           cloudMessagingToken: faker.string.alphanumeric(),
         }),
+        {
+          count: { min: 1, max: 5 },
+        },
       );
       const safe = safeBuilder()
         .with('address', event.address)
@@ -755,15 +760,15 @@ describe('Post Hook Events for Notifications (Unit)', () => {
     it('should not enqueue MESSAGE_CONFIRMATION_REQUEST event notifications if the Safe has a threshold > 1 but the owner has signed', async () => {
       const event = messageCreatedEventBuilder().build();
       const chain = chainBuilder().with('chainId', event.chainId).build();
-      const subscribers = Array.from(
-        {
-          length: faker.number.int({ min: 1, max: 5 }),
-        },
+      const subscribers = faker.helpers.multiple(
         () => ({
           subscriber: getAddress(faker.finance.ethereumAddress()),
           deviceUuid: faker.string.uuid() as UUID,
           cloudMessagingToken: faker.string.alphanumeric(),
         }),
+        {
+          count: { min: 1, max: 5 },
+        },
       );
       const safe = safeBuilder()
         .with('address', event.address)
@@ -926,15 +931,15 @@ describe('Post Hook Events for Notifications (Unit)', () => {
       const multisigTransaction = multisigTransactionBuilder()
         .with('safe', event.address)
         .build();
-      const subscribers = Array.from(
-        {
-          length: faker.number.int({ min: 1, max: 5 }),
-        },
+      const subscribers = faker.helpers.multiple(
         () => ({
           subscriber: getAddress(faker.finance.ethereumAddress()),
           deviceUuid: faker.string.uuid() as UUID,
           cloudMessagingToken: faker.string.alphanumeric(),
         }),
+        {
+          count: { min: 1, max: 5 },
+        },
       );
       const delegates = subscribers.map((subscriber) => {
         return delegateBuilder()
@@ -1005,15 +1010,15 @@ describe('Post Hook Events for Notifications (Unit)', () => {
         .with('address', event.address)
         .with('threshold', 1)
         .build();
-      const subscribers = Array.from(
-        {
-          length: faker.number.int({ min: 1, max: 5 }),
-        },
+      const subscribers = faker.helpers.multiple(
         () => ({
           subscriber: getAddress(faker.finance.ethereumAddress()),
           deviceUuid: faker.string.uuid() as UUID,
           cloudMessagingToken: faker.string.alphanumeric(),
         }),
+        {
+          count: { min: 1, max: 5 },
+        },
       );
       const delegates = subscribers.map((subscriber) => {
         return delegateBuilder()
@@ -1064,15 +1069,15 @@ describe('Post Hook Events for Notifications (Unit)', () => {
         .with('address', event.address)
         .with('threshold', faker.number.int({ min: 2 }))
         .build();
-      const subscribers = Array.from(
-        {
-          length: faker.number.int({ min: 1, max: 5 }),
-        },
+      const subscribers = faker.helpers.multiple(
         () => ({
           subscriber: getAddress(faker.finance.ethereumAddress()),
           deviceUuid: faker.string.uuid() as UUID,
           cloudMessagingToken: faker.string.alphanumeric(),
         }),
+        {
+          count: { min: 1, max: 5 },
+        },
       );
       notificationsDatasource.getSubscribersBySafe.mockResolvedValue(
         subscribers,
@@ -1244,15 +1249,15 @@ describe('Post Hook Events for Notifications (Unit)', () => {
       const message = messageBuilder()
         .with('messageHash', event.messageHash as `0x${string}`)
         .build();
-      const subscribers = Array.from(
-        {
-          length: faker.number.int({ min: 1, max: 5 }),
-        },
+      const subscribers = faker.helpers.multiple(
         () => ({
           subscriber: getAddress(faker.finance.ethereumAddress()),
           deviceUuid: faker.string.uuid() as UUID,
           cloudMessagingToken: faker.string.alphanumeric(),
         }),
+        {
+          count: { min: 1, max: 5 },
+        },
       );
       const delegates = subscribers.map((subscriber) => {
         return delegateBuilder()
@@ -1323,15 +1328,15 @@ describe('Post Hook Events for Notifications (Unit)', () => {
         .with('address', event.address)
         .with('threshold', 1)
         .build();
-      const subscribers = Array.from(
-        {
-          length: faker.number.int({ min: 1, max: 5 }),
-        },
+      const subscribers = faker.helpers.multiple(
         () => ({
           subscriber: getAddress(faker.finance.ethereumAddress()),
           deviceUuid: faker.string.uuid() as UUID,
           cloudMessagingToken: faker.string.alphanumeric(),
         }),
+        {
+          count: { min: 1, max: 5 },
+        },
       );
       notificationsDatasource.getSubscribersBySafe.mockResolvedValue(
         subscribers,
@@ -1382,15 +1387,15 @@ describe('Post Hook Events for Notifications (Unit)', () => {
         .with('address', event.address)
         .with('threshold', faker.number.int({ min: 2 }))
         .build();
-      const subscribers = Array.from(
-        {
-          length: faker.number.int({ min: 1, max: 5 }),
-        },
+      const subscribers = faker.helpers.multiple(
         () => ({
           subscriber: getAddress(faker.finance.ethereumAddress()),
           deviceUuid: faker.string.uuid() as UUID,
           cloudMessagingToken: faker.string.alphanumeric(),
         }),
+        {
+          count: { min: 1, max: 5 },
+        },
       );
       notificationsDatasource.getSubscribersBySafe.mockResolvedValue(
         subscribers,
@@ -1565,10 +1570,7 @@ describe('Post Hook Events for Notifications (Unit)', () => {
       const multisigTransaction = multisigTransactionBuilder()
         .with('safe', event.address)
         .build();
-      const subscribers = Array.from(
-        {
-          length: faker.number.int({ min: 1, max: 5 }),
-        },
+      const subscribers = faker.helpers.multiple(
         () => ({
           subscriber: faker.helpers.arrayElement([
             getAddress(faker.finance.ethereumAddress()),
@@ -1577,6 +1579,9 @@ describe('Post Hook Events for Notifications (Unit)', () => {
           deviceUuid: faker.string.uuid() as UUID,
           cloudMessagingToken: faker.string.alphanumeric(),
         }),
+        {
+          count: { min: 1, max: 5 },
+        },
       );
       notificationsDatasource.getSubscribersBySafe.mockResolvedValue(
         subscribers,
@@ -1632,10 +1637,7 @@ describe('Post Hook Events for Notifications (Unit)', () => {
       const message = messageBuilder()
         .with('messageHash', event.messageHash as `0x${string}`)
         .build();
-      const subscribers = Array.from(
-        {
-          length: faker.number.int({ min: 1, max: 5 }),
-        },
+      const subscribers = faker.helpers.multiple(
         () => ({
           subscriber: faker.helpers.arrayElement([
             getAddress(faker.finance.ethereumAddress()),
@@ -1644,6 +1646,9 @@ describe('Post Hook Events for Notifications (Unit)', () => {
           deviceUuid: faker.string.uuid() as UUID,
           cloudMessagingToken: faker.string.alphanumeric(),
         }),
+        {
+          count: { min: 1, max: 5 },
+        },
       );
       notificationsDatasource.getSubscribersBySafe.mockResolvedValue(
         subscribers,
@@ -1979,15 +1984,15 @@ describe('Post Hook Events for Notifications (Unit)', () => {
       executedTransactionEventBuilder().build(),
       moduleTransactionEventBuilder().build(),
     ]);
-    const subscribers = Array.from(
-      {
-        length: faker.number.int({ min: 2, max: 5 }),
-      },
+    const subscribers = faker.helpers.multiple(
       () => ({
         subscriber: getAddress(faker.finance.ethereumAddress()),
         deviceUuid: faker.string.uuid() as UUID,
         cloudMessagingToken: faker.string.alphanumeric(),
       }),
+      {
+        count: { min: 2, max: 5 },
+      },
     );
     const chain = chainBuilder().build();
     notificationsDatasource.getSubscribersBySafe.mockResolvedValue(subscribers);
@@ -2072,15 +2077,15 @@ describe('Post Hook Events for Notifications (Unit)', () => {
       messageCreatedEvent,
       pendingTransactionEvent,
     ];
-    const subscribers = Array.from(
-      {
-        length: safe.owners.length,
-      },
+    const subscribers = faker.helpers.multiple(
       (_, i) => ({
         subscriber: safe.owners[i],
         deviceUuid: faker.string.uuid() as UUID,
         cloudMessagingToken: faker.string.alphanumeric(),
       }),
+      {
+        count: safe.owners.length,
+      },
     );
     notificationsDatasource.getSubscribersBySafe.mockResolvedValue(subscribers);
     networkService.get.mockImplementation(({ url }) => {

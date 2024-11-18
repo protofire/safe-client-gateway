@@ -1,6 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { AddressInfo } from '@/routes/common/entities/address-info.entity';
-import { RichDecodedInfo } from '@/routes/transactions/entities/human-description.entity';
 import {
   TransactionInfo,
   TransactionInfoType,
@@ -22,6 +21,9 @@ export class SwapTransferTransactionInfo
   extends TransactionInfo
   implements TransferTransactionInfo, SwapOrderTransactionInfo
 {
+  @ApiProperty({ enum: [TransactionInfoType.SwapTransfer] })
+  override type = TransactionInfoType.SwapTransfer;
+
   // TransferTransactionInfo properties
   @ApiProperty()
   sender: AddressInfo;
@@ -120,7 +122,6 @@ export class SwapTransferTransactionInfo
     direction: TransferDirection;
     transferInfo: Transfer;
     humanDescription: string | null;
-    richDecodedInfo: RichDecodedInfo | null | undefined;
     // SwapOrderTransactionInfo properties
     uid: string;
     orderStatus: OrderStatus;
@@ -140,11 +141,7 @@ export class SwapTransferTransactionInfo
     fullAppData: Record<string, unknown> | null;
   }) {
     // TransferTransactionInfo constructor
-    super(
-      TransactionInfoType.SwapTransfer,
-      args.humanDescription,
-      args.richDecodedInfo,
-    );
+    super(TransactionInfoType.SwapTransfer, args.humanDescription);
     this.sender = args.sender;
     this.recipient = args.recipient;
     this.direction = args.direction;
@@ -171,6 +168,6 @@ export class SwapTransferTransactionInfo
 
 export function isSwapTransferTransactionInfo(
   txInfo: TransactionInfo,
-): txInfo is TransferTransactionInfo {
+): txInfo is SwapTransferTransactionInfo {
   return txInfo.type === TransactionInfoType.SwapTransfer;
 }

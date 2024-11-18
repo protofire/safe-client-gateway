@@ -21,7 +21,11 @@ export class NativeStakingValidatorsExitConfirmationView implements Baseline {
   @ApiProperty()
   method: string;
 
-  @ApiPropertyOptional({ type: [DataDecodedParameter], nullable: true })
+  @ApiPropertyOptional({
+    type: DataDecodedParameter,
+    isArray: true,
+    nullable: true,
+  })
   parameters: DataDecodedParameter[] | null;
 
   @ApiProperty()
@@ -39,6 +43,9 @@ export class NativeStakingValidatorsExitConfirmationView implements Baseline {
   @ApiProperty()
   tokenInfo: TokenInfo;
 
+  @ApiProperty()
+  validators: Array<`0x${string}`>;
+
   constructor(args: {
     method: string;
     parameters: DataDecodedParameter[] | null;
@@ -48,6 +55,7 @@ export class NativeStakingValidatorsExitConfirmationView implements Baseline {
     value: string;
     numValidators: number;
     tokenInfo: TokenInfo;
+    validators: Array<`0x${string}`>;
   }) {
     this.method = args.method;
     this.parameters = args.parameters;
@@ -57,5 +65,6 @@ export class NativeStakingValidatorsExitConfirmationView implements Baseline {
     this.value = args.value;
     this.numValidators = args.numValidators;
     this.tokenInfo = args.tokenInfo;
+    this.validators = args.validators;
   }
 }

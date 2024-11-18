@@ -9,6 +9,7 @@ import { Account } from '@/routes/accounts/entities/account.entity';
 import { CreateAccountDto } from '@/routes/accounts/entities/create-account.dto.entity';
 import { UpsertAccountDataSettingsDto } from '@/routes/accounts/entities/upsert-account-data-settings.dto.entity';
 import { Inject, Injectable } from '@nestjs/common';
+import { Request } from 'express';
 
 @Injectable()
 export class AccountsService {
@@ -20,11 +21,11 @@ export class AccountsService {
   async createAccount(args: {
     authPayload: AuthPayload;
     createAccountDto: CreateAccountDto;
-    clientIp: string;
+    clientIp: Request['ip'];
   }): Promise<Account> {
     const domainAccount = await this.accountsRepository.createAccount({
       authPayload: args.authPayload,
-      address: args.createAccountDto.address,
+      createAccountDto: args.createAccountDto,
       clientIp: args.clientIp,
     });
     return this.mapAccount(domainAccount);
@@ -102,6 +103,7 @@ export class AccountsService {
       domainAccount.id.toString(),
       domainAccount.group_id?.toString() ?? null,
       domainAccount.address,
+      domainAccount.name,
     );
   }
 

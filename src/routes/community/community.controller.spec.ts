@@ -1,7 +1,8 @@
 import request from 'supertest';
 import { faker } from '@faker-js/faker';
-import { INestApplication } from '@nestjs/common';
-import { Test, TestingModule } from '@nestjs/testing';
+import type { INestApplication } from '@nestjs/common';
+import type { TestingModule } from '@nestjs/testing';
+import { Test } from '@nestjs/testing';
 import { TestAppProvider } from '@/__tests__/test-app.provider';
 import { AppModule } from '@/app.module';
 import { IConfigurationService } from '@/config/configuration.service.interface';
@@ -9,10 +10,8 @@ import { TestCacheModule } from '@/datasources/cache/__tests__/test.cache.module
 import { CacheModule } from '@/datasources/cache/cache.module';
 import { TestNetworkModule } from '@/datasources/network/__tests__/test.network.module';
 import { NetworkModule } from '@/datasources/network/network.module';
-import {
-  INetworkService,
-  NetworkService,
-} from '@/datasources/network/network.service.interface';
+import type { INetworkService } from '@/datasources/network/network.service.interface';
+import { NetworkService } from '@/datasources/network/network.service.interface';
 import { TestLoggingModule } from '@/logging/__tests__/test.logging.module';
 import { RequestScopedLoggingModule } from '@/logging/logging.module';
 import configuration from '@/config/entities/__tests__/configuration';
@@ -24,7 +23,7 @@ import {
   withdrawEventItemBuilder,
   toJson as lockingEventToJson,
 } from '@/domain/community/entities/__tests__/locking-event.builder';
-import { LockingEvent } from '@/domain/community/entities/locking-event.entity';
+import type { LockingEvent } from '@/domain/community/entities/locking-event.entity';
 import { getAddress } from 'viem';
 import { lockingRankBuilder } from '@/domain/community/entities/__tests__/locking-rank.builder';
 import { PaginationData } from '@/routes/common/pagination/pagination.data';
@@ -34,19 +33,31 @@ import {
   campaignBuilder,
   toJson as campaignToJson,
 } from '@/domain/community/entities/__tests__/campaign.builder';
-import { Campaign } from '@/domain/community/entities/campaign.entity';
-import { CampaignRank } from '@/domain/community/entities/campaign-rank.entity';
+import type { Campaign } from '@/domain/community/entities/campaign.entity';
+import type { CampaignRank } from '@/domain/community/entities/campaign-rank.entity';
 import { campaignRankBuilder } from '@/domain/community/entities/__tests__/campaign-rank.builder';
-import { Server } from 'net';
+import type { Server } from 'net';
 import {
   campaignActivityBuilder,
   toJson as campaignActivityToJson,
 } from '@/domain/community/entities/__tests__/campaign-activity.builder';
+import { TestPostgresDatabaseModule } from '@/datasources/db/__tests__/test.postgres-database.module';
+import { PostgresDatabaseModule } from '@/datasources/db/v1/postgres-database.module';
+import { PostgresDatabaseModuleV2 } from '@/datasources/db/v2/postgres-database.module';
+import { TestPostgresDatabaseModuleV2 } from '@/datasources/db/v2/test.postgres-database.module';
+import { eligibilityRequestBuilder } from '@/domain/community/entities/__tests__/eligibility-request.builder';
+import { IdentityApiModule } from '@/datasources/locking-api/identity-api.module';
+import { TestIdentityApiModule } from '@/datasources/locking-api/__tests__/test.identity-api.module';
+import { IIdentityApi } from '@/domain/interfaces/identity-api.interface';
+import { eligibilityBuilder } from '@/domain/community/entities/__tests__/eligibility.builder';
+import { TestTargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/__tests__/test.targeted-messaging.datasource.module';
+import { TargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/targeted-messaging.datasource.module';
 
 describe('Community (Unit)', () => {
   let app: INestApplication<Server>;
   let lockingBaseUri: string;
   let networkService: jest.MockedObjectDeep<INetworkService>;
+  let identityApi: jest.MockedObjectDeep<IIdentityApi>;
 
   beforeEach(async () => {
     jest.resetAllMocks();
@@ -54,6 +65,10 @@ describe('Community (Unit)', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(configuration)],
     })
+      .overrideModule(PostgresDatabaseModule)
+      .useModule(TestPostgresDatabaseModule)
+      .overrideModule(TargetedMessagingDatasourceModule)
+      .useModule(TestTargetedMessagingDatasourceModule)
       .overrideModule(CacheModule)
       .useModule(TestCacheModule)
       .overrideModule(RequestScopedLoggingModule)
@@ -62,6 +77,10 @@ describe('Community (Unit)', () => {
       .useModule(TestNetworkModule)
       .overrideModule(QueuesApiModule)
       .useModule(TestQueuesApiModule)
+      .overrideModule(IdentityApiModule)
+      .useModule(TestIdentityApiModule)
+      .overrideModule(PostgresDatabaseModuleV2)
+      .useModule(TestPostgresDatabaseModuleV2)
       .compile();
 
     const configurationService = moduleFixture.get<IConfigurationService>(
@@ -69,6 +88,7 @@ describe('Community (Unit)', () => {
     );
     lockingBaseUri = configurationService.getOrThrow('locking.baseUri');
     networkService = moduleFixture.get(NetworkService);
+    identityApi = moduleFixture.get(IIdentityApi);
 
     app = await new TestAppProvider().provide(moduleFixture);
     await app.init();
@@ -713,6 +733,48 @@ describe('Community (Unit)', () => {
           message: errorMessage,
           code: statusCode,
         });
+    });
+  });
+
+  describe('GET /community/eligibility', () => {
+    it('should return the eligibility check result', async () => {
+      const eligibilityRequest = eligibilityRequestBuilder().build();
+      const eligibility = eligibilityBuilder().build();
+      identityApi.checkEligibility.mockResolvedValue(eligibility);
+
+      await request(app.getHttpServer())
+        .post(`/v1/community/eligibility`)
+        .send(eligibilityRequest)
+        .expect(200)
+        .expect(eligibility);
+
+      expect(identityApi.checkEligibility).toHaveBeenCalledTimes(1);
+      expect(identityApi.checkEligibility).toHaveBeenCalledWith(
+        eligibilityRequest,
+      );
+    });
+
+    it('should return isAllowed:false and isVpn:false if an error occurs during eligibility check', async () => {
+      const eligibilityRequest = eligibilityRequestBuilder().build();
+      identityApi.checkEligibility.mockImplementation(() => {
+        throw new Error('identityApi.checkEligibility() runtime error');
+      });
+      const expected = eligibilityBuilder()
+        .with('requestId', eligibilityRequest.requestId)
+        .with('isAllowed', false)
+        .with('isVpn', false)
+        .build();
+
+      await request(app.getHttpServer())
+        .post(`/v1/community/eligibility`)
+        .send(eligibilityRequest)
+        .expect(200)
+        .expect(expected);
+
+      expect(identityApi.checkEligibility).toHaveBeenCalledTimes(1);
+      expect(identityApi.checkEligibility).toHaveBeenCalledWith(
+        eligibilityRequest,
+      );
     });
   });
 

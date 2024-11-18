@@ -7,14 +7,20 @@ import configuration from '@/config/entities/configuration';
 import { CacheKeyPrefix } from '@/datasources/cache/constants';
 import { CacheDir } from '@/datasources/cache/entities/cache-dir.entity';
 import { faker } from '@faker-js/faker';
-import { INestApplication } from '@nestjs/common';
+import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { ChannelWrapper } from 'amqp-connection-manager';
-import { RedisClientType } from 'redis';
+import type { ChannelWrapper } from 'amqp-connection-manager';
+import type { RedisClientType } from 'redis';
 import { getAddress } from 'viem';
-import { Server } from 'net';
+import type { Server } from 'net';
 import { TEST_SAFE } from '@/routes/common/__tests__/constants';
 import { chainBuilder } from '@/domain/chains/entities/__tests__/chain.builder';
+import { PostgresDatabaseModuleV2 } from '@/datasources/db/v2/postgres-database.module';
+import { TestPostgresDatabaseModuleV2 } from '@/datasources/db/v2/test.postgres-database.module';
+import { TestPostgresDatabaseModule } from '@/datasources/db/__tests__/test.postgres-database.module';
+import { PostgresDatabaseModule } from '@/datasources/db/v1/postgres-database.module';
+import { TestTargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/__tests__/test.targeted-messaging.datasource.module';
+import { TargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/targeted-messaging.datasource.module';
 
 describe('Events queue processing e2e tests', () => {
   let app: INestApplication<Server>;
@@ -32,10 +38,6 @@ describe('Events queue processing e2e tests', () => {
         ...defaultConfiguration.amqp,
         queue,
       },
-      features: {
-        ...defaultConfiguration.features,
-        eventsQueue: true,
-      },
     });
 
     const moduleRef = await Test.createTestingModule({
@@ -43,6 +45,12 @@ describe('Events queue processing e2e tests', () => {
     })
       .overrideProvider(CacheKeyPrefix)
       .useValue(cacheKeyPrefix)
+      .overrideModule(PostgresDatabaseModule)
+      .useModule(TestPostgresDatabaseModule)
+      .overrideModule(PostgresDatabaseModuleV2)
+      .useModule(TestPostgresDatabaseModuleV2)
+      .overrideModule(TargetedMessagingDatasourceModule)
+      .useModule(TestTargetedMessagingDatasourceModule)
       .compile();
 
     app = await new TestAppProvider().provide(moduleRef);

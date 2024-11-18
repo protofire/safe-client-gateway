@@ -45,11 +45,22 @@ export class CacheRouter {
   private static readonly STAKING_POOLED_STAKING_STATS_KEY =
     'staking_pooled_staking_stats';
   private static readonly STAKING_STAKES_KEY = 'staking_stakes';
+  private static readonly STAKING_TRANSACTION_STATUS_KEY =
+    'staking_transaction_status';
+  private static readonly TARGETED_MESSAGING_OUTREACHES =
+    'targeted_messaging_outreaches';
+  private static readonly TARGETED_MESSAGING_OUTREACH_FILE_PROCESSOR_LOCK =
+    'targeted_messaging_outreach_file_processor_lock';
+  private static readonly TARGETED_MESSAGING_SUBMISSION_KEY =
+    'targeted_messaging_submission';
+  private static readonly TARGETED_MESSAGING_TARGETED_SAFE_KEY =
+    'targeted_messaging_targeted_safe';
   private static readonly TOKEN_KEY = 'token';
   private static readonly TOKEN_PRICE_KEY = 'token_price';
   private static readonly TOKENS_KEY = 'tokens';
   private static readonly TRANSFER_KEY = 'transfer';
   private static readonly TRANSFERS_KEY = 'transfers';
+  private static readonly UNSUPPORTED_CHAIN_EVENT = 'unsupported_chain_event';
   private static readonly ZERION_BALANCES_KEY = 'zerion_balances';
   private static readonly ZERION_COLLECTIBLES_KEY = 'zerion_collectibles';
 
@@ -628,5 +639,60 @@ export class CacheRouter {
       CacheRouter.getStakingStakesCacheKey(args),
       hash.digest('hex'),
     );
+  }
+
+  static getUnsupportedChainEventCacheKey(chainId: string): string {
+    return `${chainId}_${this.UNSUPPORTED_CHAIN_EVENT}`;
+  }
+
+  static getStakingTransactionStatusCacheDir(args: {
+    chainId: string;
+    txHash: `0x${string}`;
+  }): CacheDir {
+    return new CacheDir(
+      `${args.chainId}_${CacheRouter.STAKING_TRANSACTION_STATUS_KEY}_${args.txHash}`,
+      '',
+    );
+  }
+
+  static getTargetedSafeCacheKey(outreachId: number): string {
+    return `${CacheRouter.TARGETED_MESSAGING_TARGETED_SAFE_KEY}_${outreachId}`;
+  }
+
+  static getTargetedSafeCacheDir(args: {
+    outreachId: number;
+    safeAddress: `0x${string}`;
+  }): CacheDir {
+    return new CacheDir(
+      CacheRouter.getTargetedSafeCacheKey(args.outreachId),
+      args.safeAddress,
+    );
+  }
+
+  static getSubmissionCacheKey(outreachId: number): string {
+    return `${CacheRouter.TARGETED_MESSAGING_SUBMISSION_KEY}_${outreachId}`;
+  }
+
+  static getSubmissionCacheDir(args: {
+    outreachId: number;
+    safeAddress: `0x${string}`;
+    signerAddress: `0x${string}`;
+  }): CacheDir {
+    return new CacheDir(
+      CacheRouter.getSubmissionCacheKey(args.outreachId),
+      `${args.safeAddress}_${args.signerAddress}`,
+    );
+  }
+
+  static getOutreachesCacheDir(): CacheDir {
+    return new CacheDir(CacheRouter.TARGETED_MESSAGING_OUTREACHES, '');
+  }
+
+  static getOutreachFileProcessorCacheKey(): string {
+    return CacheRouter.TARGETED_MESSAGING_OUTREACH_FILE_PROCESSOR_LOCK;
+  }
+
+  static getOutreachFileProcessorCacheDir(): CacheDir {
+    return new CacheDir(CacheRouter.getOutreachFileProcessorCacheKey(), '');
   }
 }

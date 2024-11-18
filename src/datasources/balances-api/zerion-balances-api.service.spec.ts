@@ -1,18 +1,18 @@
 import { FakeConfigurationService } from '@/config/__tests__/fake.configuration.service';
 import { ZerionBalancesApi } from '@/datasources/balances-api/zerion-balances-api.service';
-import { ICacheService } from '@/datasources/cache/cache.service.interface';
-import { HttpErrorFactory } from '@/datasources/errors/http-error-factory';
-import { INetworkService } from '@/datasources/network/network.service.interface';
+import type { ICacheService } from '@/datasources/cache/cache.service.interface';
+import type { HttpErrorFactory } from '@/datasources/errors/http-error-factory';
+import type { INetworkService } from '@/datasources/network/network.service.interface';
 import { balancesProviderBuilder } from '@/domain/chains/entities/__tests__/balances-provider.builder';
 import { chainBuilder } from '@/domain/chains/entities/__tests__/chain.builder';
-import { ILoggingService } from '@/logging/logging.interface';
+import type { ILoggingService } from '@/logging/logging.interface';
 import { faker } from '@faker-js/faker';
 import { getAddress } from 'viem';
 
 const mockCacheService = jest.mocked({
   increment: jest.fn(),
-  get: jest.fn(),
-  set: jest.fn(),
+  hGet: jest.fn(),
+  hSet: jest.fn(),
 } as jest.MockedObjectDeep<ICacheService>);
 
 const mockLoggingService = {
@@ -36,8 +36,9 @@ describe('ZerionBalancesApiService', () => {
   const notFoundExpirationTimeInSeconds = faker.number.int();
   const supportedFiatCodes = Array.from(
     new Set([
-      ...Array.from({ length: faker.number.int({ min: 2, max: 5 }) }, () =>
-        faker.finance.currencyCode().toLowerCase(),
+      ...faker.helpers.multiple(
+        () => faker.finance.currencyCode().toLowerCase(),
+        { count: { min: 2, max: 5 } },
       ),
     ]),
   );

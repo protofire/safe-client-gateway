@@ -71,7 +71,7 @@ export class FirebaseCloudMessagingApiService implements IPushNotificationsApi {
         data: {
           message: {
             token: fcmToken,
-            notification,
+            ...notification,
           },
         },
         networkRequest: {
@@ -99,7 +99,7 @@ export class FirebaseCloudMessagingApiService implements IPushNotificationsApi {
   // TODO: Use CacheFirstDataSource
   private async getOauth2Token(): Promise<string> {
     const cacheDir = CacheRouter.getFirebaseOAuth2TokenCacheDir();
-    const cachedToken = await this.cacheService.get(cacheDir);
+    const cachedToken = await this.cacheService.hGet(cacheDir);
 
     if (cachedToken) {
       return cachedToken;
@@ -118,7 +118,7 @@ export class FirebaseCloudMessagingApiService implements IPushNotificationsApi {
     });
 
     // Token cached according to issuance
-    await this.cacheService.set(
+    await this.cacheService.hSet(
       cacheDir,
       data.access_token,
       // Buffer ensures token is not cached beyond expiration if caching took time
@@ -138,7 +138,6 @@ export class FirebaseCloudMessagingApiService implements IPushNotificationsApi {
     const now = new Date();
 
     const payload = {
-      alg: 'RS256',
       iss: this.clientEmail,
       scope: FirebaseCloudMessagingApiService.Scope,
       aud: FirebaseCloudMessagingApiService.OAuth2TokenUrl,
@@ -149,6 +148,7 @@ export class FirebaseCloudMessagingApiService implements IPushNotificationsApi {
 
     return this.jwtService.sign(payload, {
       secretOrPrivateKey: this.privateKey,
+      algorithm: 'RS256',
     });
   }
 }

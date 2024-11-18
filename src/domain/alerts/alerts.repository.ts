@@ -58,10 +58,7 @@ export class AlertsRepository implements IAlertsRepository {
         address: safeAddress,
       });
 
-      const decodedEvent = this.delayModifierDecoder.decodeEventLog({
-        data: log.data as Hex,
-        topics: log.topics as [Hex, Hex, Hex],
-      });
+      const decodedEvent = this.delayModifierDecoder.decodeEventLog(log);
       const decodedTransactions = this._decodeTransactionAdded(
         decodedEvent.args.data,
       );
@@ -78,6 +75,7 @@ export class AlertsRepository implements IAlertsRepository {
     }
   }
 
+  // TODO: Refactor to use getSafeBeingRecovered from relay address limiter
   private _decodeTransactionAdded(
     data: Hex,
   ): Array<ReturnType<typeof this._decodeRecoveryTransaction>> {

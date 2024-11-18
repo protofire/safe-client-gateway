@@ -4,22 +4,24 @@ import { IConfigurationService } from '@/config/configuration.service.interface'
 import configuration from '@/config/entities/__tests__/configuration';
 import { TestCacheModule } from '@/datasources/cache/__tests__/test.cache.module';
 import { CacheModule } from '@/datasources/cache/cache.module';
+import { TestPostgresDatabaseModule } from '@/datasources/db/__tests__/test.postgres-database.module';
+import { PostgresDatabaseModule } from '@/datasources/db/v1/postgres-database.module';
+import { PostgresDatabaseModuleV2 } from '@/datasources/db/v2/postgres-database.module';
+import { TestPostgresDatabaseModuleV2 } from '@/datasources/db/v2/test.postgres-database.module';
 import { TestNetworkModule } from '@/datasources/network/__tests__/test.network.module';
 import { NetworkModule } from '@/datasources/network/network.module';
-import {
-  INetworkService,
-  NetworkService,
-} from '@/datasources/network/network.service.interface';
+import type { INetworkService } from '@/datasources/network/network.service.interface';
+import { NetworkService } from '@/datasources/network/network.service.interface';
 import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
 import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 import { dedicatedStakingStatsBuilder } from '@/datasources/staking-api/entities/__tests__/dedicated-staking-stats.entity.builder';
 import { deploymentBuilder } from '@/datasources/staking-api/entities/__tests__/deployment.entity.builder';
 import { networkStatsBuilder } from '@/datasources/staking-api/entities/__tests__/network-stats.entity.builder';
 import { stakeBuilder } from '@/datasources/staking-api/entities/__tests__/stake.entity.builder';
-import {
-  Stake,
-  StakeState,
-} from '@/datasources/staking-api/entities/stake.entity';
+import type { Stake } from '@/datasources/staking-api/entities/stake.entity';
+import { StakeState } from '@/datasources/staking-api/entities/stake.entity';
+import { TestTargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/__tests__/test.targeted-messaging.datasource.module';
+import { TargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/targeted-messaging.datasource.module';
 import { chainBuilder } from '@/domain/chains/entities/__tests__/chain.builder';
 import { getNumberString } from '@/domain/common/utils/utils';
 import {
@@ -36,15 +38,13 @@ import { TestLoggingModule } from '@/logging/__tests__/test.logging.module';
 import { RequestScopedLoggingModule } from '@/logging/logging.module';
 import { NULL_ADDRESS } from '@/routes/common/constants';
 import { faker } from '@faker-js/faker';
-import {
-  INestApplication,
-  NotFoundException,
-  ServiceUnavailableException,
-} from '@nestjs/common';
-import { Test, TestingModule } from '@nestjs/testing';
-import { Server } from 'net';
+import type { INestApplication } from '@nestjs/common';
+import { NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import type { TestingModule } from '@nestjs/testing';
+import { Test } from '@nestjs/testing';
+import type { Server } from 'net';
 import request from 'supertest';
-import { encodeFunctionData, getAddress, parseAbi } from 'viem';
+import { concat, encodeFunctionData, getAddress, parseAbi } from 'viem';
 
 describe('TransactionsViewController tests', () => {
   let app: INestApplication<Server>;
@@ -62,11 +62,6 @@ describe('TransactionsViewController tests', () => {
     const baseConfig = configuration();
     const testConfiguration: typeof configuration = () => ({
       ...baseConfig,
-      features: {
-        ...baseConfig.features,
-        confirmationView: true,
-        nativeStaking: true,
-      },
       swaps: {
         ...baseConfig.swaps,
         restrictApps: true,
@@ -77,6 +72,10 @@ describe('TransactionsViewController tests', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(testConfiguration)],
     })
+      .overrideModule(PostgresDatabaseModule)
+      .useModule(TestPostgresDatabaseModule)
+      .overrideModule(TargetedMessagingDatasourceModule)
+      .useModule(TestTargetedMessagingDatasourceModule)
       .overrideModule(CacheModule)
       .useModule(TestCacheModule)
       .overrideModule(RequestScopedLoggingModule)
@@ -85,6 +84,8 @@ describe('TransactionsViewController tests', () => {
       .useModule(TestNetworkModule)
       .overrideModule(QueuesApiModule)
       .useModule(TestQueuesApiModule)
+      .overrideModule(PostgresDatabaseModuleV2)
+      .useModule(TestPostgresDatabaseModuleV2)
       .compile();
 
     const configurationService = moduleFixture.get<IConfigurationService>(
@@ -652,10 +653,12 @@ describe('TransactionsViewController tests', () => {
               method: dataDecoded.method,
               status: 'NOT_STAKED',
               parameters: dataDecoded.parameters,
-              estimatedEntryTime: networkStats.estimated_entry_time_seconds,
-              estimatedExitTime: networkStats.estimated_exit_time_seconds,
+              estimatedEntryTime:
+                networkStats.estimated_entry_time_seconds * 1_000,
+              estimatedExitTime:
+                networkStats.estimated_exit_time_seconds * 1_000,
               estimatedWithdrawalTime:
-                networkStats.estimated_withdrawal_time_seconds,
+                networkStats.estimated_withdrawal_time_seconds * 1_000,
               fee: +deployment.product_fee!,
               monthlyNrr,
               annualNrr,
@@ -754,10 +757,12 @@ describe('TransactionsViewController tests', () => {
               method: dataDecoded.method,
               status: 'NOT_STAKED',
               parameters: dataDecoded.parameters,
-              estimatedEntryTime: networkStats.estimated_entry_time_seconds,
-              estimatedExitTime: networkStats.estimated_exit_time_seconds,
+              estimatedEntryTime:
+                networkStats.estimated_entry_time_seconds * 1_000,
+              estimatedExitTime:
+                networkStats.estimated_exit_time_seconds * 1_000,
               estimatedWithdrawalTime:
-                networkStats.estimated_withdrawal_time_seconds,
+                networkStats.estimated_withdrawal_time_seconds * 1_000,
               fee: +deployment.product_fee!,
               monthlyNrr,
               annualNrr,
@@ -855,10 +860,12 @@ describe('TransactionsViewController tests', () => {
               method: 'deposit',
               status: 'NOT_STAKED',
               parameters: [],
-              estimatedEntryTime: networkStats.estimated_entry_time_seconds,
-              estimatedExitTime: networkStats.estimated_exit_time_seconds,
+              estimatedEntryTime:
+                networkStats.estimated_entry_time_seconds * 1_000,
+              estimatedExitTime:
+                networkStats.estimated_exit_time_seconds * 1_000,
               estimatedWithdrawalTime:
-                networkStats.estimated_withdrawal_time_seconds,
+                networkStats.estimated_withdrawal_time_seconds * 1_000,
               fee: +deployment.product_fee!,
               monthlyNrr,
               annualNrr,
@@ -960,10 +967,12 @@ describe('TransactionsViewController tests', () => {
               method: dataDecoded.method,
               parameters: dataDecoded.parameters,
               status: 'NOT_STAKED',
-              estimatedEntryTime: networkStats.estimated_entry_time_seconds,
-              estimatedExitTime: networkStats.estimated_exit_time_seconds,
+              estimatedEntryTime:
+                networkStats.estimated_entry_time_seconds * 1_000,
+              estimatedExitTime:
+                networkStats.estimated_exit_time_seconds * 1_000,
               estimatedWithdrawalTime:
-                networkStats.estimated_withdrawal_time_seconds,
+                networkStats.estimated_withdrawal_time_seconds * 1_000,
               fee: +deployment.product_fee!,
               monthlyNrr:
                 (dedicatedStakingStats.gross_apy.last_30d *
@@ -1348,13 +1357,21 @@ describe('TransactionsViewController tests', () => {
             .build();
           const safeAddress = faker.finance.ethereumAddress();
           const networkStats = networkStatsBuilder().build();
-          const validatorPublicKey = faker.string.hexadecimal({
-            length: KilnDecoder.KilnPublicKeyLength * 2,
-          }); // 2 validators
+          const validators = [
+            faker.string.hexadecimal({
+              length: KilnDecoder.KilnPublicKeyLength,
+              casing: 'lower',
+            }),
+            faker.string.hexadecimal({
+              length: KilnDecoder.KilnPublicKeyLength,
+              casing: 'lower',
+            }),
+          ] as Array<`0x${string}`>;
+          const validatorPublicKey = concat(validators);
           const data = encodeFunctionData({
             abi: parseAbi(['function requestValidatorsExit(bytes)']),
             functionName: 'requestValidatorsExit',
-            args: [validatorPublicKey as `0x${string}`],
+            args: [validatorPublicKey],
           });
           const dataDecoded = dataDecodedBuilder()
             .with('method', 'requestValidatorsExit')
@@ -1368,14 +1385,8 @@ describe('TransactionsViewController tests', () => {
             ])
             .build();
           const stakes = [
-            stakeBuilder()
-              .with('net_claimable_consensus_rewards', '1000000')
-              .with('state', StakeState.ActiveOngoing)
-              .build(),
-            stakeBuilder()
-              .with('net_claimable_consensus_rewards', '2000000')
-              .with('state', StakeState.ActiveOngoing)
-              .build(),
+            stakeBuilder().with('state', StakeState.ActiveOngoing).build(),
+            stakeBuilder().with('state', StakeState.ActiveOngoing).build(),
           ];
           networkService.get.mockImplementation(({ url }) => {
             switch (url) {
@@ -1421,13 +1432,11 @@ describe('TransactionsViewController tests', () => {
               method: dataDecoded.method,
               parameters: dataDecoded.parameters,
               status: 'ACTIVE',
-              estimatedExitTime: networkStats.estimated_exit_time_seconds,
+              estimatedExitTime:
+                networkStats.estimated_exit_time_seconds * 1_000,
               estimatedWithdrawalTime:
-                networkStats.estimated_withdrawal_time_seconds,
-              value: (
-                +stakes[0].net_claimable_consensus_rewards! +
-                +stakes[1].net_claimable_consensus_rewards!
-              ).toString(),
+                networkStats.estimated_withdrawal_time_seconds * 1_000,
+              value: '64000000000000000000', // 2 x 32 ETH,
               numValidators: 2,
               tokenInfo: {
                 address: NULL_ADDRESS,
@@ -1437,6 +1446,7 @@ describe('TransactionsViewController tests', () => {
                 symbol: chain.nativeCurrency.symbol,
                 trusted: true,
               },
+              validators,
             });
 
           // check the public keys are passed to the staking service in the expected format
@@ -1445,7 +1455,7 @@ describe('TransactionsViewController tests', () => {
             networkRequest: expect.objectContaining({
               params: {
                 onchain_v1_include_net_rewards: true,
-                validators: `${validatorPublicKey.slice(0, KilnDecoder.KilnPublicKeyLength + 2)},0x${validatorPublicKey.slice(KilnDecoder.KilnPublicKeyLength + 2)}`,
+                validators: validators.join(','),
               },
             }),
           });
@@ -1460,23 +1470,20 @@ describe('TransactionsViewController tests', () => {
             .build();
           const safeAddress = faker.finance.ethereumAddress();
           const networkStats = networkStatsBuilder().build();
-          const validatorPublicKey = faker.string.hexadecimal({
-            length: KilnDecoder.KilnPublicKeyLength,
-          });
+          const validatorPublicKey = faker.string
+            .hexadecimal({
+              length: KilnDecoder.KilnPublicKeyLength,
+              casing: 'lower',
+            })
+            .toLowerCase();
           const data = encodeFunctionData({
             abi: parseAbi(['function requestValidatorsExit(bytes)']),
             functionName: 'requestValidatorsExit',
             args: [validatorPublicKey as `0x${string}`],
           });
           const stakes = [
-            stakeBuilder()
-              .with('net_claimable_consensus_rewards', '4000000')
-              .with('state', StakeState.ActiveOngoing)
-              .build(),
-            stakeBuilder()
-              .with('net_claimable_consensus_rewards', '2000000')
-              .with('state', StakeState.ActiveOngoing)
-              .build(),
+            stakeBuilder().with('state', StakeState.ActiveOngoing).build(),
+            stakeBuilder().with('state', StakeState.ActiveOngoing).build(),
           ];
           networkService.get.mockImplementation(({ url }) => {
             switch (url) {
@@ -1524,18 +1531,16 @@ describe('TransactionsViewController tests', () => {
                 {
                   name: '_publicKeys',
                   type: 'bytes',
-                  value: validatorPublicKey.toLowerCase(),
+                  value: validatorPublicKey,
                   valueDecoded: null,
                 },
               ],
               status: 'ACTIVE',
-              estimatedExitTime: networkStats.estimated_exit_time_seconds,
+              estimatedExitTime:
+                networkStats.estimated_exit_time_seconds * 1_000,
               estimatedWithdrawalTime:
-                networkStats.estimated_withdrawal_time_seconds,
-              value: (
-                +stakes[0].net_claimable_consensus_rewards! +
-                +stakes[1].net_claimable_consensus_rewards!
-              ).toString(),
+                networkStats.estimated_withdrawal_time_seconds * 1_000,
+              value: '32000000000000000000', // 32 ETH,
               numValidators: 1,
               tokenInfo: {
                 address: NULL_ADDRESS,
@@ -1545,6 +1550,7 @@ describe('TransactionsViewController tests', () => {
                 symbol: chain.nativeCurrency.symbol,
                 trusted: true,
               },
+              validators: [validatorPublicKey],
             });
 
           // check the public keys are passed to the staking service in the expected format
@@ -1553,7 +1559,7 @@ describe('TransactionsViewController tests', () => {
             networkRequest: expect.objectContaining({
               params: {
                 onchain_v1_include_net_rewards: true,
-                validators: `${validatorPublicKey.toLowerCase()}`,
+                validators: validatorPublicKey,
               },
             }),
           });
@@ -1846,13 +1852,21 @@ describe('TransactionsViewController tests', () => {
             .build();
           const safeAddress = faker.finance.ethereumAddress();
           const networkStats = networkStatsBuilder().build();
-          const validatorPublicKey = faker.string.hexadecimal({
-            length: KilnDecoder.KilnPublicKeyLength * 2,
-          }); // 2 validators
+          const validators = [
+            faker.string.hexadecimal({
+              length: KilnDecoder.KilnPublicKeyLength,
+              casing: 'lower',
+            }),
+            faker.string.hexadecimal({
+              length: KilnDecoder.KilnPublicKeyLength,
+              casing: 'lower',
+            }),
+          ] as Array<`0x${string}`>;
+          const validatorPublicKey = concat(validators);
           const data = encodeFunctionData({
             abi: parseAbi(['function requestValidatorsExit(bytes)']),
             functionName: 'requestValidatorsExit',
-            args: [validatorPublicKey as `0x${string}`],
+            args: [validatorPublicKey],
           });
           const dataDecoded = dataDecodedBuilder()
             .with('method', 'requestValidatorsExit')
@@ -1913,7 +1927,7 @@ describe('TransactionsViewController tests', () => {
             networkRequest: expect.objectContaining({
               params: {
                 onchain_v1_include_net_rewards: true,
-                validators: `${validatorPublicKey.slice(0, KilnDecoder.KilnPublicKeyLength + 2)},0x${validatorPublicKey.slice(KilnDecoder.KilnPublicKeyLength + 2)}`,
+                validators: validators.join(','),
               },
             }),
           });
@@ -1929,13 +1943,25 @@ describe('TransactionsViewController tests', () => {
             .with('product_fee', faker.number.float().toString())
             .build();
           const safeAddress = faker.finance.ethereumAddress();
-          const validatorPublicKey = faker.string.hexadecimal({
-            length: KilnDecoder.KilnPublicKeyLength * 3,
-          }); // 3 validators
+          const validators = [
+            faker.string.hexadecimal({
+              length: KilnDecoder.KilnPublicKeyLength,
+              casing: 'lower',
+            }),
+            faker.string.hexadecimal({
+              length: KilnDecoder.KilnPublicKeyLength,
+              casing: 'lower',
+            }),
+            faker.string.hexadecimal({
+              length: KilnDecoder.KilnPublicKeyLength,
+              casing: 'lower',
+            }),
+          ] as Array<`0x${string}`>;
+          const validatorPublicKey = concat(validators);
           const data = encodeFunctionData({
             abi: parseAbi(['function batchWithdrawCLFee(bytes)']),
             functionName: 'batchWithdrawCLFee',
-            args: [validatorPublicKey as `0x${string}`],
+            args: [validatorPublicKey],
           });
           const dataDecoded = dataDecodedBuilder()
             .with('method', 'batchWithdrawCLFee')
@@ -2006,14 +2032,23 @@ describe('TransactionsViewController tests', () => {
                 symbol: chain.nativeCurrency.symbol,
                 trusted: true,
               },
+              validators,
             });
         });
 
         it('returns the native staking `withdraw` confirmation view using local decoding', async () => {
           const chain = chainBuilder().with('isTestnet', false).build();
-          const validatorPublicKey = faker.string.hexadecimal({
-            length: KilnDecoder.KilnPublicKeyLength * 2,
-          }); // 2 validators
+          const validators = [
+            faker.string.hexadecimal({
+              length: KilnDecoder.KilnPublicKeyLength,
+              casing: 'lower',
+            }),
+            faker.string.hexadecimal({
+              length: KilnDecoder.KilnPublicKeyLength,
+              casing: 'lower',
+            }),
+          ] as Array<`0x${string}`>;
+          const validatorPublicKey = concat(validators);
           const deployment = deploymentBuilder()
             .with('chain_id', +chain.chainId)
             .with('product_type', 'dedicated')
@@ -2023,7 +2058,7 @@ describe('TransactionsViewController tests', () => {
           const data = encodeFunctionData({
             abi: parseAbi(['function batchWithdrawCLFee(bytes)']),
             functionName: 'batchWithdrawCLFee',
-            args: [`${validatorPublicKey}` as `0x${string}`],
+            args: [validatorPublicKey],
           });
           const stakes = [
             stakeBuilder()
@@ -2074,7 +2109,7 @@ describe('TransactionsViewController tests', () => {
                 {
                   name: '_publicKeys',
                   type: 'bytes',
-                  value: validatorPublicKey.toLowerCase(),
+                  value: validatorPublicKey,
                   valueDecoded: null,
                 },
               ],
@@ -2090,6 +2125,7 @@ describe('TransactionsViewController tests', () => {
                 symbol: chain.nativeCurrency.symbol,
                 trusted: true,
               },
+              validators,
             });
         });
 
@@ -2301,9 +2337,21 @@ describe('TransactionsViewController tests', () => {
 
         it('returns the generic confirmation view if the stakes are not available', async () => {
           const chain = chainBuilder().with('isTestnet', false).build();
-          const validatorPublicKey = faker.string.hexadecimal({
-            length: KilnDecoder.KilnPublicKeyLength * 3,
-          }); // 3 validators
+          const validators = [
+            faker.string.hexadecimal({
+              length: KilnDecoder.KilnPublicKeyLength,
+              casing: 'lower',
+            }),
+            faker.string.hexadecimal({
+              length: KilnDecoder.KilnPublicKeyLength,
+              casing: 'lower',
+            }),
+            faker.string.hexadecimal({
+              length: KilnDecoder.KilnPublicKeyLength,
+              casing: 'lower',
+            }),
+          ] as Array<`0x${string}`>;
+          const validatorPublicKey = concat(validators);
           const dataDecoded = dataDecodedBuilder()
             .with('method', 'batchWithdrawCLFee')
             .with('parameters', [
@@ -2324,7 +2372,7 @@ describe('TransactionsViewController tests', () => {
           const data = encodeFunctionData({
             abi: parseAbi(['function batchWithdrawCLFee(bytes)']),
             functionName: 'batchWithdrawCLFee',
-            args: [validatorPublicKey as `0x${string}`],
+            args: [validatorPublicKey],
           });
           networkService.get.mockImplementation(({ url }) => {
             switch (url) {

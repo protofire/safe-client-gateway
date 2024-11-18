@@ -8,18 +8,11 @@ import { TestNotificationsDatasourceModule } from '@/datasources/notifications/_
 import { NotificationsDatasourceModule } from '@/datasources/notifications/notifications.datasource.module';
 import { TestCacheModule } from '@/datasources/cache/__tests__/test.cache.module';
 import { CacheModule } from '@/datasources/cache/cache.module';
-import jwtConfiguration from '@/datasources/jwt/configuration/__tests__/jwt.configuration';
-import {
-  JWT_CONFIGURATION_MODULE,
-  JwtConfigurationModule,
-} from '@/datasources/jwt/configuration/jwt.configuration.module';
 import { IJwtService } from '@/datasources/jwt/jwt.service.interface';
 import { TestNetworkModule } from '@/datasources/network/__tests__/test.network.module';
 import { NetworkModule } from '@/datasources/network/network.module';
-import {
-  INetworkService,
-  NetworkService,
-} from '@/datasources/network/network.service.interface';
+import type { INetworkService } from '@/datasources/network/network.service.interface';
+import { NetworkService } from '@/datasources/network/network.service.interface';
 import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
 import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 import { authPayloadDtoBuilder } from '@/domain/auth/entities/__tests__/auth-payload-dto.entity.builder';
@@ -32,19 +25,26 @@ import { safeBuilder } from '@/domain/safe/entities/__tests__/safe.builder';
 import { TestLoggingModule } from '@/logging/__tests__/test.logging.module';
 import { RequestScopedLoggingModule } from '@/logging/logging.module';
 import { upsertSubscriptionsDtoBuilder } from '@/routes/notifications/v1/entities/__tests__/upsert-subscriptions.dto.entity.builder';
-import { Chain } from '@/routes/chains/entities/chain.entity';
+import type { Chain } from '@/routes/chains/entities/chain.entity';
 import { faker } from '@faker-js/faker';
+import type { INestApplication } from '@nestjs/common';
 import {
-  INestApplication,
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import { Test, TestingModule } from '@nestjs/testing';
-import { Server } from 'net';
+import type { TestingModule } from '@nestjs/testing';
+import { Test } from '@nestjs/testing';
+import type { Server } from 'net';
 import request from 'supertest';
 import { getAddress } from 'viem';
 import { CounterfactualSafesDatasourceModule } from '@/datasources/accounts/counterfactual-safes/counterfactual-safes.datasource.module';
 import { TestCounterfactualSafesDataSourceModule } from '@/datasources/accounts/counterfactual-safes/__tests__/test.counterfactual-safes.datasource.module';
+import { TestPostgresDatabaseModule } from '@/datasources/db/__tests__/test.postgres-database.module';
+import { PostgresDatabaseModule } from '@/datasources/db/v1/postgres-database.module';
+import { TestPostgresDatabaseModuleV2 } from '@/datasources/db/v2/test.postgres-database.module';
+import { PostgresDatabaseModuleV2 } from '@/datasources/db/v2/postgres-database.module';
+import { TestTargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/__tests__/test.targeted-messaging.datasource.module';
+import { TargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/targeted-messaging.datasource.module';
 
 describe('Notifications Controller V2 (Unit)', () => {
   let app: INestApplication<Server>;
@@ -70,12 +70,14 @@ describe('Notifications Controller V2 (Unit)', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(testConfiguration)],
     })
-      .overrideModule(JWT_CONFIGURATION_MODULE)
-      .useModule(JwtConfigurationModule.register(jwtConfiguration))
+      .overrideModule(PostgresDatabaseModule)
+      .useModule(TestPostgresDatabaseModule)
       .overrideModule(AccountsDatasourceModule)
       .useModule(TestAccountsDataSourceModule)
       .overrideModule(CounterfactualSafesDatasourceModule)
       .useModule(TestCounterfactualSafesDataSourceModule)
+      .overrideModule(TargetedMessagingDatasourceModule)
+      .useModule(TestTargetedMessagingDatasourceModule)
       .overrideModule(NotificationsDatasourceModule)
       .useModule(TestNotificationsDatasourceModule)
       .overrideModule(CacheModule)
@@ -86,6 +88,8 @@ describe('Notifications Controller V2 (Unit)', () => {
       .useModule(TestNetworkModule)
       .overrideModule(QueuesApiModule)
       .useModule(TestQueuesApiModule)
+      .overrideModule(PostgresDatabaseModuleV2)
+      .useModule(TestPostgresDatabaseModuleV2)
       .compile();
 
     const configurationService = moduleFixture.get<IConfigurationService>(
@@ -468,10 +472,7 @@ describe('Notifications Controller V2 (Unit)', () => {
         const upsertSubscriptionsDto = upsertSubscriptionsDtoBuilder()
           .with(
             'safes',
-            Array.from(
-              {
-                length: faker.number.int({ min: 1, max: 5 }),
-              },
+            faker.helpers.multiple(
               () => ({
                 chainId,
                 address: getAddress(faker.finance.ethereumAddress()),
@@ -479,6 +480,9 @@ describe('Notifications Controller V2 (Unit)', () => {
                   Object.values(NotificationType),
                 ),
               }),
+              {
+                count: { min: 1, max: 5 },
+              },
             ),
           )
           .build();
@@ -506,10 +510,7 @@ describe('Notifications Controller V2 (Unit)', () => {
         const upsertSubscriptionsDto = upsertSubscriptionsDtoBuilder()
           .with(
             'safes',
-            Array.from(
-              {
-                length: faker.number.int({ min: 1, max: 5 }),
-              },
+            faker.helpers.multiple(
               () => ({
                 chainId,
                 address: getAddress(faker.finance.ethereumAddress()),
@@ -517,6 +518,9 @@ describe('Notifications Controller V2 (Unit)', () => {
                   Object.values(NotificationType),
                 ),
               }),
+              {
+                count: { min: 1, max: 5 },
+              },
             ),
           )
           .build();
@@ -540,10 +544,7 @@ describe('Notifications Controller V2 (Unit)', () => {
         const upsertSubscriptionsDto = upsertSubscriptionsDtoBuilder()
           .with(
             'safes',
-            Array.from(
-              {
-                length: faker.number.int({ min: 1, max: 5 }),
-              },
+            faker.helpers.multiple(
               () => ({
                 chainId,
                 address: getAddress(faker.finance.ethereumAddress()),
@@ -551,6 +552,9 @@ describe('Notifications Controller V2 (Unit)', () => {
                   Object.values(NotificationType),
                 ),
               }),
+              {
+                count: { min: 1, max: 5 },
+              },
             ),
           )
           .build();

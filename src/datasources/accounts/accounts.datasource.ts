@@ -5,14 +5,16 @@ import {
   ICacheService,
 } from '@/datasources/cache/cache.service.interface';
 import { MAX_TTL } from '@/datasources/cache/constants';
-import { CachedQueryResolver } from '@/datasources/db/cached-query-resolver';
-import { ICachedQueryResolver } from '@/datasources/db/cached-query-resolver.interface';
+import { CachedQueryResolver } from '@/datasources/db/v1/cached-query-resolver';
+import { ICachedQueryResolver } from '@/datasources/db/v1/cached-query-resolver.interface';
 import { AccountDataSetting } from '@/domain/accounts/entities/account-data-setting.entity';
 import { AccountDataType } from '@/domain/accounts/entities/account-data-type.entity';
 import { Account } from '@/domain/accounts/entities/account.entity';
+import { CreateAccountDto } from '@/domain/accounts/entities/create-account.dto.entity';
 import { UpsertAccountDataSettingsDto } from '@/domain/accounts/entities/upsert-account-data-settings.dto.entity';
 import { AccountsCreationRateLimitError } from '@/domain/accounts/errors/accounts-creation-rate-limit.error';
 import { IAccountsDatasource } from '@/domain/interfaces/accounts.datasource.interface';
+import { IEncryptionApiManager } from '@/domain/interfaces/encryption-api.manager.interface';
 import { ILoggingService, LoggingService } from '@/logging/logging.interface';
 import { asError } from '@/logging/utils';
 import { IpSchema } from '@/validation/entities/schemas/ip.schema';
@@ -23,6 +25,8 @@ import {
   OnModuleInit,
   UnprocessableEntityException,
 } from '@nestjs/common';
+import crypto from 'crypto';
+import { omit } from 'lodash';
 import postgres from 'postgres';
 
 @Injectable()
@@ -42,6 +46,8 @@ export class AccountsDatasource implements IAccountsDatasource, OnModuleInit {
     @Inject(LoggingService) private readonly loggingService: ILoggingService,
     @Inject(IConfigurationService)
     private readonly configurationService: IConfigurationService,
+    @Inject(IEncryptionApiManager)
+    private readonly encryptionApiManager: IEncryptionApiManager,
   ) {
     this.defaultExpirationTimeInSeconds =
       this.configurationService.getOrThrow<number>(
@@ -66,27 +72,44 @@ export class AccountsDatasource implements IAccountsDatasource, OnModuleInit {
     );
   }
 
+  /**
+   * Account names need to be unique across the system, but they are encrypted, so
+   * the same string could generate different encrypted values depending on the
+   * encryption key used.
+   *
+   * This function hashes the name to ensure uniqueness. By hashing the name, we can
+   * enforce a unique constraint on the hashed value, ensuring that no two names
+   * will result in the same hash.
+   */
   async createAccount(args: {
-    address: `0x${string}`;
+    createAccountDto: CreateAccountDto;
     clientIp: string;
   }): Promise<Account> {
     await this.checkCreationRateLimit(args.clientIp);
-    const [account] = await this.sql<[Account]>`
-      INSERT INTO accounts (address) VALUES (${args.address}) RETURNING *`.catch(
-      (e) => {
-        this.loggingService.warn(
-          `Error creating account: ${asError(e).message}`,
-        );
-        throw new UnprocessableEntityException('Error creating account.');
-      },
+    const encryptedAccountData = await this.encryptAccountData(
+      args.createAccountDto,
     );
-    const cacheDir = CacheRouter.getAccountCacheDir(args.address);
-    await this.cacheService.set(
+    const [dbAccount] = await this.sql<[Account]>`
+      INSERT INTO accounts (address, name, name_hash)
+        VALUES (${encryptedAccountData.address}, ${encryptedAccountData.name}, ${encryptedAccountData.nameHash})
+      RETURNING *
+      `.catch((e) => {
+      this.loggingService.warn(`Error creating account: ${asError(e).message}`);
+      throw new UnprocessableEntityException('Error creating account.');
+    });
+    const cacheDir = CacheRouter.getAccountCacheDir(
+      args.createAccountDto.address,
+    );
+    const account = {
+      ...dbAccount,
+      name: Buffer.from(dbAccount.name).toString('utf8'),
+    };
+    await this.cacheService.hSet(
       cacheDir,
       JSON.stringify([account]),
       this.defaultExpirationTimeInSeconds,
     );
-    return account;
+    return omit(await this.decryptAccountData(account), 'name_hash');
   }
 
   async getAccount(address: `0x${string}`): Promise<Account> {
@@ -101,7 +124,7 @@ export class AccountsDatasource implements IAccountsDatasource, OnModuleInit {
       throw new NotFoundException('Error getting account.');
     }
 
-    return account;
+    return this.decryptAccountData(account);
   }
 
   async deleteAccount(address: `0x${string}`): Promise<void> {
@@ -185,7 +208,7 @@ export class AccountsDatasource implements IAccountsDatasource, OnModuleInit {
     });
 
     const cacheDir = CacheRouter.getAccountDataSettingsCacheDir(args.address);
-    await this.cacheService.set(
+    await this.cacheService.hSet(
       cacheDir,
       JSON.stringify(result),
       this.defaultExpirationTimeInSeconds,
@@ -243,5 +266,21 @@ export class AccountsDatasource implements IAccountsDatasource, OnModuleInit {
         throw new AccountsCreationRateLimitError();
       }
     }
+  }
+
+  async encryptAccountData(
+    createAccountDto: CreateAccountDto,
+  ): Promise<{ address: `0x${string}`; name: string; nameHash: string }> {
+    const hash = crypto.createHash('sha256');
+    hash.update(createAccountDto.name);
+    const nameHash = hash.digest('hex');
+    const api = await this.encryptionApiManager.getApi();
+    const encryptedName = await api.encrypt(createAccountDto.name);
+    return { address: createAccountDto.address, name: encryptedName, nameHash };
+  }
+
+  async decryptAccountData(account: Account): Promise<Account> {
+    const api = await this.encryptionApiManager.getApi();
+    return { ...account, name: await api.decrypt(account.name) };
   }
 }
