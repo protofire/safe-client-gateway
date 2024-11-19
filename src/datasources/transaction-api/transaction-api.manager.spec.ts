@@ -1,12 +1,12 @@
-import { IConfigurationService } from '@/config/configuration.service.interface';
-import { CacheFirstDataSource } from '@/datasources/cache/cache.first.data.source';
-import { ICacheService } from '@/datasources/cache/cache.service.interface';
-import { HttpErrorFactory } from '@/datasources/errors/http-error-factory';
-import { INetworkService } from '@/datasources/network/network.service.interface';
+import type { IConfigurationService } from '@/config/configuration.service.interface';
+import type { CacheFirstDataSource } from '@/datasources/cache/cache.first.data.source';
+import type { ICacheService } from '@/datasources/cache/cache.service.interface';
+import type { HttpErrorFactory } from '@/datasources/errors/http-error-factory';
+import type { INetworkService } from '@/datasources/network/network.service.interface';
 import { TransactionApiManager } from '@/datasources/transaction-api/transaction-api.manager';
 import { chainBuilder } from '@/domain/chains/entities/__tests__/chain.builder';
-import { IConfigApi } from '@/domain/interfaces/config-api.interface';
-import { ILoggingService } from '@/logging/logging.interface';
+import type { IConfigApi } from '@/domain/interfaces/config-api.interface';
+import type { ILoggingService } from '@/logging/logging.interface';
 import { faker } from '@faker-js/faker';
 
 const configurationService = {
@@ -58,12 +58,15 @@ describe('Transaction API Manager Tests', () => {
       .with('vpcTransactionService', vpcTxServiceUrl)
       .build();
     const expirationTimeInSeconds = faker.number.int();
+    const indexingExpirationTimeInSeconds = faker.number.int();
     const notFoundExpireTimeSeconds = faker.number.int();
     const ownersTtlSeconds = faker.number.int();
     configurationServiceMock.getOrThrow.mockImplementation((key) => {
       if (key === 'safeTransaction.useVpcUrl') return useVpcUrl;
       else if (key === 'expirationTimeInSeconds.default')
         return expirationTimeInSeconds;
+      else if (key === 'expirationTimeInSeconds.indexing')
+        return indexingExpirationTimeInSeconds;
       else if (key === 'expirationTimeInSeconds.notFound.default')
         return notFoundExpireTimeSeconds;
       else if (key === 'expirationTimeInSeconds.notFound.contract')

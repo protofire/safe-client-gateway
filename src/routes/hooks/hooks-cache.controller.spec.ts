@@ -1,6 +1,7 @@
 import { faker } from '@faker-js/faker';
-import { INestApplication } from '@nestjs/common';
-import { Test, TestingModule } from '@nestjs/testing';
+import type { INestApplication } from '@nestjs/common';
+import type { TestingModule } from '@nestjs/testing';
+import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { TestCacheModule } from '@/datasources/cache/__tests__/test.cache.module';
 import { TestNetworkModule } from '@/datasources/network/__tests__/test.network.module';
@@ -9,25 +10,28 @@ import { TestLoggingModule } from '@/logging/__tests__/test.logging.module';
 import configuration from '@/config/entities/__tests__/configuration';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import { CacheDir } from '@/datasources/cache/entities/cache-dir.entity';
-import { FakeCacheService } from '@/datasources/cache/__tests__/fake.cache.service';
+import type { FakeCacheService } from '@/datasources/cache/__tests__/fake.cache.service';
 import { CacheService } from '@/datasources/cache/cache.service.interface';
 import { AppModule } from '@/app.module';
 import { CacheModule } from '@/datasources/cache/cache.module';
 import { RequestScopedLoggingModule } from '@/logging/logging.module';
 import { NetworkModule } from '@/datasources/network/network.module';
-import {
-  INetworkService,
-  NetworkService,
-} from '@/datasources/network/network.service.interface';
+import type { INetworkService } from '@/datasources/network/network.service.interface';
+import { NetworkService } from '@/datasources/network/network.service.interface';
 import { getAddress } from 'viem';
 import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
 import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
-import { Server } from 'net';
+import type { Server } from 'net';
 import { safeBuilder } from '@/domain/safe/entities/__tests__/safe.builder';
 import { IBlockchainApiManager } from '@/domain/interfaces/blockchain-api.manager.interface';
 import { safeCreatedEventBuilder } from '@/routes/hooks/entities/__tests__/safe-created.build';
 import { ITransactionApiManager } from '@/domain/interfaces/transaction-api.manager.interface';
 import { IBalancesApiManager } from '@/domain/interfaces/balances-api.manager.interface';
+import { NotificationsDatasourceModule } from '@/datasources/notifications/notifications.datasource.module';
+import { TestNotificationsDatasourceModule } from '@/datasources/notifications/__tests__/test.notifications.datasource.module';
+import { IStakingApiManager } from '@/domain/interfaces/staking-api.manager.interface';
+import { KilnDecoder } from '@/domain/staking/contracts/decoders/kiln-decoder.helper';
+import { stakeBuilder } from '@/datasources/staking-api/entities/__tests__/stake.entity.builder';
 
 describe('Post Hook Events for Cache (Unit)', () => {
   let app: INestApplication<Server>;
@@ -36,6 +40,7 @@ describe('Post Hook Events for Cache (Unit)', () => {
   let fakeCacheService: FakeCacheService;
   let networkService: jest.MockedObjectDeep<INetworkService>;
   let configurationService: IConfigurationService;
+  let stakingApiManager: IStakingApiManager;
   let blockchainApiManager: IBlockchainApiManager;
   let transactionApiManager: ITransactionApiManager;
   let balancesApiManager: IBalancesApiManager;
@@ -52,11 +57,15 @@ describe('Post Hook Events for Cache (Unit)', () => {
       .useModule(TestNetworkModule)
       .overrideModule(QueuesApiModule)
       .useModule(TestQueuesApiModule)
+      .overrideModule(NotificationsDatasourceModule)
+      .useModule(TestNotificationsDatasourceModule)
       .compile();
     app = moduleFixture.createNestApplication();
 
     fakeCacheService = moduleFixture.get<FakeCacheService>(CacheService);
     configurationService = moduleFixture.get(IConfigurationService);
+    stakingApiManager =
+      moduleFixture.get<IStakingApiManager>(IStakingApiManager);
     blockchainApiManager = moduleFixture.get<IBlockchainApiManager>(
       IBlockchainApiManager,
     );
@@ -76,45 +85,6 @@ describe('Post Hook Events for Cache (Unit)', () => {
 
   afterAll(async () => {
     await app.close();
-  });
-
-  it('should return 410 if the eventsQueue FF is active and the hook is not CHAIN_UPDATE or SAFE_APPS_UPDATE', async () => {
-    const defaultConfiguration = configuration();
-    const testConfiguration = (): typeof defaultConfiguration => ({
-      ...defaultConfiguration,
-      features: {
-        ...defaultConfiguration.features,
-        eventsQueue: true,
-      },
-    });
-
-    await initApp(testConfiguration);
-
-    const payload = {
-      type: 'INCOMING_TOKEN',
-      tokenAddress: faker.finance.ethereumAddress(),
-      txHash: faker.string.hexadecimal({ length: 32 }),
-    };
-    const safeAddress = faker.finance.ethereumAddress();
-    const chainId = faker.string.numeric();
-    const data = {
-      address: safeAddress,
-      chainId: chainId,
-      ...payload,
-    };
-
-    await request(app.getHttpServer())
-      .post(`/hooks/events`)
-      .set('Authorization', `Basic ${authToken}`)
-      .send(data)
-      .expect(410);
-  });
-
-  it('should throw an error if authorization is not sent in the request headers', async () => {
-    await request(app.getHttpServer())
-      .post(`/hooks/events`)
-      .send({})
-      .expect(403);
   });
 
   it.each([
@@ -297,7 +267,7 @@ describe('Post Hook Events for Cache (Unit)', () => {
       `${chainId}_safe_balances_${safeAddress}`,
       faker.string.alpha(),
     );
-    await fakeCacheService.set(
+    await fakeCacheService.hSet(
       cacheDir,
       faker.string.alpha(),
       faker.number.int({ min: 1 }),
@@ -327,7 +297,7 @@ describe('Post Hook Events for Cache (Unit)', () => {
       .send(data)
       .expect(202);
 
-    await expect(fakeCacheService.get(cacheDir)).resolves.toBeUndefined();
+    await expect(fakeCacheService.hGet(cacheDir)).resolves.toBeUndefined();
   });
 
   it.each([
@@ -356,7 +326,7 @@ describe('Post Hook Events for Cache (Unit)', () => {
       `${chainId}_multisig_transactions_${getAddress(safeAddress)}`,
       faker.string.alpha(),
     );
-    await fakeCacheService.set(
+    await fakeCacheService.hSet(
       cacheDir,
       faker.string.alpha(),
       faker.number.int({ min: 1 }),
@@ -384,7 +354,7 @@ describe('Post Hook Events for Cache (Unit)', () => {
       .send(data)
       .expect(202);
 
-    await expect(fakeCacheService.get(cacheDir)).resolves.toBeUndefined();
+    await expect(fakeCacheService.hGet(cacheDir)).resolves.toBeUndefined();
   });
 
   it.each([
@@ -413,7 +383,7 @@ describe('Post Hook Events for Cache (Unit)', () => {
       `${chainId}_multisig_transaction_${payload.safeTxHash}`,
       faker.string.alpha(),
     );
-    await fakeCacheService.set(
+    await fakeCacheService.hSet(
       cacheDir,
       faker.string.alpha(),
       faker.number.int({ min: 1 }),
@@ -441,7 +411,7 @@ describe('Post Hook Events for Cache (Unit)', () => {
       .send(data)
       .expect(202);
 
-    await expect(fakeCacheService.get(cacheDir)).resolves.toBeUndefined();
+    await expect(fakeCacheService.hGet(cacheDir)).resolves.toBeUndefined();
   });
 
   it.each([
@@ -462,7 +432,7 @@ describe('Post Hook Events for Cache (Unit)', () => {
       `${chainId}_safe_${getAddress(safeAddress)}`,
       faker.string.alpha(),
     );
-    await fakeCacheService.set(
+    await fakeCacheService.hSet(
       cacheDir,
       faker.string.alpha(),
       faker.number.int({ min: 1 }),
@@ -490,7 +460,62 @@ describe('Post Hook Events for Cache (Unit)', () => {
       .send(data)
       .expect(202);
 
-    await expect(fakeCacheService.get(cacheDir)).resolves.toBeUndefined();
+    await expect(fakeCacheService.hGet(cacheDir)).resolves.toBeUndefined();
+  });
+
+  it.each([
+    {
+      type: 'EXECUTED_MULTISIG_TRANSACTION',
+      safeTxHash: faker.string.hexadecimal({ length: 32 }),
+      txHash: faker.string.hexadecimal({ length: 32 }),
+    },
+    {
+      type: 'MODULE_TRANSACTION',
+      module: faker.finance.ethereumAddress(),
+      txHash: faker.string.hexadecimal({ length: 32 }),
+    },
+  ])('$type clears Safe stakes', async (payload) => {
+    const safeAddress = faker.finance.ethereumAddress();
+    const chainId = faker.string.numeric();
+    const validatorsPublicKeys = faker.string.hexadecimal({
+      length: KilnDecoder.KilnPublicKeyLength,
+    });
+    const stakes = Array.from({ length: validatorsPublicKeys.length }, () =>
+      stakeBuilder().build(),
+    );
+    const cacheDir = new CacheDir(
+      `${chainId}_staking_stakes_${getAddress(safeAddress)}`,
+      validatorsPublicKeys,
+    );
+    await fakeCacheService.hSet(
+      cacheDir,
+      JSON.stringify(stakes),
+      faker.number.int({ min: 1 }),
+    );
+    const data = {
+      address: safeAddress,
+      chainId: chainId,
+      ...payload,
+    };
+    networkService.get.mockImplementation(({ url }) => {
+      switch (url) {
+        case `${safeConfigUrl}/api/v1/chains/${chainId}`:
+          return Promise.resolve({
+            data: chainBuilder().with('chainId', chainId).build(),
+            status: 200,
+          });
+        default:
+          return Promise.reject(new Error(`Could not match ${url}`));
+      }
+    });
+
+    await request(app.getHttpServer())
+      .post(`/hooks/events`)
+      .set('Authorization', `Basic ${authToken}`)
+      .send(data)
+      .expect(202);
+
+    await expect(fakeCacheService.hGet(cacheDir)).resolves.toBeUndefined();
   });
 
   it.each([
@@ -522,7 +547,7 @@ describe('Post Hook Events for Cache (Unit)', () => {
       `${chainId}_safe_collectibles_${safeAddress}`,
       faker.string.alpha(),
     );
-    await fakeCacheService.set(
+    await fakeCacheService.hSet(
       cacheDir,
       faker.string.alpha(),
       faker.number.int({ min: 1 }),
@@ -552,7 +577,7 @@ describe('Post Hook Events for Cache (Unit)', () => {
       .send(data)
       .expect(202);
 
-    await expect(fakeCacheService.get(cacheDir)).resolves.toBeUndefined();
+    await expect(fakeCacheService.hGet(cacheDir)).resolves.toBeUndefined();
   });
 
   it.each([
@@ -578,7 +603,7 @@ describe('Post Hook Events for Cache (Unit)', () => {
       `${chainId}_transfers_${getAddress(safeAddress)}`,
       faker.string.alpha(),
     );
-    await fakeCacheService.set(
+    await fakeCacheService.hSet(
       cacheDir,
       faker.string.alpha(),
       faker.number.int({ min: 1 }),
@@ -606,7 +631,7 @@ describe('Post Hook Events for Cache (Unit)', () => {
       .send(data)
       .expect(202);
 
-    await expect(fakeCacheService.get(cacheDir)).resolves.toBeUndefined();
+    await expect(fakeCacheService.hGet(cacheDir)).resolves.toBeUndefined();
   });
 
   it.each([
@@ -627,7 +652,7 @@ describe('Post Hook Events for Cache (Unit)', () => {
       `${chainId}_incoming_transfers_${getAddress(safeAddress)}`,
       faker.string.alpha(),
     );
-    await fakeCacheService.set(
+    await fakeCacheService.hSet(
       cacheDir,
       faker.string.alpha(),
       faker.number.int({ min: 1 }),
@@ -655,7 +680,7 @@ describe('Post Hook Events for Cache (Unit)', () => {
       .send(data)
       .expect(202);
 
-    await expect(fakeCacheService.get(cacheDir)).resolves.toBeUndefined();
+    await expect(fakeCacheService.hGet(cacheDir)).resolves.toBeUndefined();
   });
 
   it.each([
@@ -671,7 +696,7 @@ describe('Post Hook Events for Cache (Unit)', () => {
       `${chainId}_module_transactions_${getAddress(safeAddress)}`,
       faker.string.alpha(),
     );
-    await fakeCacheService.set(
+    await fakeCacheService.hSet(
       cacheDir,
       faker.string.alpha(),
       faker.number.int({ min: 1 }),
@@ -699,7 +724,7 @@ describe('Post Hook Events for Cache (Unit)', () => {
       .send(data)
       .expect(202);
 
-    await expect(fakeCacheService.get(cacheDir)).resolves.toBeUndefined();
+    await expect(fakeCacheService.hGet(cacheDir)).resolves.toBeUndefined();
   });
 
   it.each([
@@ -740,7 +765,7 @@ describe('Post Hook Events for Cache (Unit)', () => {
       `${chainId}_all_transactions_${getAddress(safeAddress)}`,
       faker.string.alpha(),
     );
-    await fakeCacheService.set(
+    await fakeCacheService.hSet(
       cacheDir,
       faker.string.alpha(),
       faker.number.int({ min: 1 }),
@@ -768,7 +793,7 @@ describe('Post Hook Events for Cache (Unit)', () => {
       .send(data)
       .expect(202);
 
-    await expect(fakeCacheService.get(cacheDir)).resolves.toBeUndefined();
+    await expect(fakeCacheService.hGet(cacheDir)).resolves.toBeUndefined();
   });
 
   it.each([
@@ -787,7 +812,7 @@ describe('Post Hook Events for Cache (Unit)', () => {
       `${chainId}_messages_${getAddress(safeAddress)}`,
       faker.string.alpha(),
     );
-    await fakeCacheService.set(
+    await fakeCacheService.hSet(
       cacheDir,
       faker.string.alpha(),
       faker.number.int({ min: 1 }),
@@ -815,7 +840,7 @@ describe('Post Hook Events for Cache (Unit)', () => {
       .send(data)
       .expect(202);
 
-    await expect(fakeCacheService.get(cacheDir)).resolves.toBeUndefined();
+    await expect(fakeCacheService.hGet(cacheDir)).resolves.toBeUndefined();
   });
 
   it.each([
@@ -823,17 +848,25 @@ describe('Post Hook Events for Cache (Unit)', () => {
       type: 'CHAIN_UPDATE',
     },
   ])('$type clears chain', async (payload) => {
-    const chainId = faker.string.numeric();
-    const cacheDir = new CacheDir(`${chainId}_chain`, '');
-    await fakeCacheService.set(
+    const chain = chainBuilder().build();
+    const cacheDir = new CacheDir(`${chain.chainId}_chain`, '');
+    await fakeCacheService.hSet(
       cacheDir,
-      faker.string.alpha(),
+      JSON.stringify(chain),
       faker.number.int({ min: 1 }),
     );
     const data = {
-      chainId: chainId,
+      chainId: chain.chainId,
       ...payload,
     };
+    networkService.get.mockImplementation(({ url }) => {
+      switch (url) {
+        case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
+          return Promise.resolve({ data: chain, status: 200 });
+        default:
+          return Promise.reject(new Error(`Could not match ${url}`));
+      }
+    });
 
     await request(app.getHttpServer())
       .post(`/hooks/events`)
@@ -841,7 +874,7 @@ describe('Post Hook Events for Cache (Unit)', () => {
       .send(data)
       .expect(202);
 
-    await expect(fakeCacheService.get(cacheDir)).resolves.toBeUndefined();
+    await expect(fakeCacheService.hGet(cacheDir)).resolves.toBeUndefined();
   });
 
   it.each([
@@ -849,17 +882,28 @@ describe('Post Hook Events for Cache (Unit)', () => {
       type: 'CHAIN_UPDATE',
     },
   ])('$type clears chains', async (payload) => {
-    const chainId = faker.string.numeric();
+    const chain = chainBuilder().build();
     const cacheDir = new CacheDir(`chains`, '');
-    await fakeCacheService.set(
+    await fakeCacheService.hSet(
       cacheDir,
-      faker.string.alpha(),
+      JSON.stringify(chain),
       faker.number.int({ min: 1 }),
     );
     const data = {
-      chainId: chainId,
+      chainId: chain.chainId,
       ...payload,
     };
+    networkService.get.mockImplementation(({ url }) => {
+      switch (url) {
+        case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
+          return Promise.resolve({
+            data: chainBuilder().with('chainId', chain.chainId).build(),
+            status: 200,
+          });
+        default:
+          return Promise.reject(new Error(`Could not match ${url}`));
+      }
+    });
 
     await request(app.getHttpServer())
       .post(`/hooks/events`)
@@ -867,7 +911,40 @@ describe('Post Hook Events for Cache (Unit)', () => {
       .send(data)
       .expect(202);
 
-    await expect(fakeCacheService.get(cacheDir)).resolves.toBeUndefined();
+    await expect(fakeCacheService.hGet(cacheDir)).resolves.toBeUndefined();
+  });
+
+  it.each([
+    {
+      type: 'CHAIN_UPDATE',
+    },
+  ])('$type clears the staking API', async (payload) => {
+    const chainId = faker.string.numeric();
+    const data = {
+      chainId: chainId,
+      ...payload,
+    };
+    networkService.get.mockImplementation(({ url }) => {
+      switch (url) {
+        case `${safeConfigUrl}/api/v1/chains/${chainId}`:
+          return Promise.resolve({
+            data: chainBuilder().with('chainId', chainId).build(),
+            status: 200,
+          });
+        default:
+          return Promise.reject(new Error(`Could not match ${url}`));
+      }
+    });
+    const api = await stakingApiManager.getApi(chainId);
+
+    await request(app.getHttpServer())
+      .post(`/hooks/events`)
+      .set('Authorization', `Basic ${authToken}`)
+      .send(data)
+      .expect(202);
+
+    const newApi = await stakingApiManager.getApi(chainId);
+    expect(api).not.toBe(newApi);
   });
 
   it.each([
@@ -975,17 +1052,28 @@ describe('Post Hook Events for Cache (Unit)', () => {
       type: 'SAFE_APPS_UPDATE',
     },
   ])('$type clears safe apps', async (payload) => {
-    const chainId = faker.string.numeric();
-    const cacheDir = new CacheDir(`${chainId}_safe_apps`, '');
-    await fakeCacheService.set(
+    const chain = chainBuilder().build();
+    const cacheDir = new CacheDir(`${chain.chainId}_safe_apps`, '');
+    await fakeCacheService.hSet(
       cacheDir,
-      faker.string.alpha(),
+      JSON.stringify(chain),
       faker.number.int({ min: 1 }),
     );
     const data = {
-      chainId: chainId,
+      chainId: chain.chainId,
       ...payload,
     };
+    networkService.get.mockImplementation(({ url }) => {
+      switch (url) {
+        case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
+          return Promise.resolve({
+            data: chain,
+            status: 200,
+          });
+        default:
+          return Promise.reject(new Error(`Could not match ${url}`));
+      }
+    });
 
     await request(app.getHttpServer())
       .post(`/hooks/events`)
@@ -993,7 +1081,7 @@ describe('Post Hook Events for Cache (Unit)', () => {
       .send(data)
       .expect(202);
 
-    await expect(fakeCacheService.get(cacheDir)).resolves.toBeUndefined();
+    await expect(fakeCacheService.hGet(cacheDir)).resolves.toBeUndefined();
   });
 
   it.each([
@@ -1012,17 +1100,28 @@ describe('Post Hook Events for Cache (Unit)', () => {
         },
       });
       await initApp(testConfiguration);
-      const chainId = faker.string.numeric();
+      const chain = chainBuilder().build();
       const cacheDir = new CacheDir(`chains`, '');
-      await fakeCacheService.set(
+      await fakeCacheService.hSet(
         cacheDir,
-        faker.string.alpha(),
+        JSON.stringify(chain),
         faker.number.int({ min: 1 }),
       );
       const data = {
-        chainId: chainId,
+        chainId: chain.chainId,
         ...payload,
       };
+      networkService.get.mockImplementation(({ url }) => {
+        switch (url) {
+          case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
+            return Promise.resolve({
+              data: chain,
+              status: 200,
+            });
+          default:
+            return Promise.reject(new Error(`Could not match ${url}`));
+        }
+      });
 
       await request(app.getHttpServer())
         .post(`/hooks/events`)
@@ -1030,7 +1129,7 @@ describe('Post Hook Events for Cache (Unit)', () => {
         .send(data)
         .expect(202);
 
-      await expect(fakeCacheService.get(cacheDir)).resolves.toBeUndefined();
+      await expect(fakeCacheService.hGet(cacheDir)).resolves.toBeUndefined();
     },
   );
 
@@ -1050,17 +1149,29 @@ describe('Post Hook Events for Cache (Unit)', () => {
         },
       });
       await initApp(testConfiguration);
-      const chainId = faker.string.numeric();
-      const cacheDir = new CacheDir(`${chainId}_safe_apps`, '');
-      await fakeCacheService.set(
+      const chain = chainBuilder().build();
+      const cacheDir = new CacheDir(`${chain.chainId}_safe_apps`, '');
+      await fakeCacheService.hSet(
         cacheDir,
-        faker.string.alpha(),
+        JSON.stringify(chain),
         faker.number.int({ min: 1 }),
       );
       const data = {
-        chainId: chainId,
+        chainId: chain.chainId,
         ...payload,
       };
+
+      networkService.get.mockImplementation(({ url }) => {
+        switch (url) {
+          case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
+            return Promise.resolve({
+              data: chain,
+              status: 200,
+            });
+          default:
+            return Promise.reject(new Error(`Could not match ${url}`));
+        }
+      });
 
       await request(app.getHttpServer())
         .post(`/hooks/events`)
@@ -1068,7 +1179,7 @@ describe('Post Hook Events for Cache (Unit)', () => {
         .send(data)
         .expect(202);
 
-      await expect(fakeCacheService.get(cacheDir)).resolves.toBeUndefined();
+      await expect(fakeCacheService.hGet(cacheDir)).resolves.toBeUndefined();
     },
   );
 
@@ -1093,7 +1204,7 @@ describe('Post Hook Events for Cache (Unit)', () => {
           return Promise.reject(new Error(`Could not match ${url}`));
       }
     });
-    await fakeCacheService.set(
+    await fakeCacheService.hSet(
       cacheDir,
       faker.string.alpha(),
       faker.number.int({ min: 1 }),
@@ -1105,6 +1216,6 @@ describe('Post Hook Events for Cache (Unit)', () => {
       .send(data)
       .expect(202);
 
-    await expect(fakeCacheService.get(cacheDir)).resolves.toBeUndefined();
+    await expect(fakeCacheService.hGet(cacheDir)).resolves.toBeUndefined();
   });
 });

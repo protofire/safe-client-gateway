@@ -1,9 +1,10 @@
+import crypto from 'crypto';
 import { CacheDir } from '@/datasources/cache/entities/cache-dir.entity';
 
 export class CacheRouter {
-  private static readonly ACCOUNT_KEY = 'account';
   private static readonly ACCOUNT_DATA_SETTINGS_KEY = 'account_data_settings';
   private static readonly ACCOUNT_DATA_TYPES_KEY = 'account_data_types';
+  private static readonly ACCOUNT_KEY = 'account';
   private static readonly ALL_TRANSACTIONS_KEY = 'all_transactions';
   private static readonly AUTH_NONCE_KEY = 'auth_nonce';
   private static readonly BACKBONE_KEY = 'backbone';
@@ -16,6 +17,7 @@ export class CacheRouter {
   private static readonly DELEGATES_KEY = 'delegates';
   private static readonly FIREBASE_OAUTH2_TOKEN_KEY = 'firebase_oauth2_token';
   private static readonly INCOMING_TRANSFERS_KEY = 'incoming_transfers';
+  private static readonly INDEXING_KEY = 'indexing';
   private static readonly MESSAGE_KEY = 'message';
   private static readonly MESSAGES_KEY = 'messages';
   private static readonly MODULE_TRANSACTION_KEY = 'module_transaction';
@@ -24,7 +26,9 @@ export class CacheRouter {
   private static readonly MULTISIG_TRANSACTIONS_KEY = 'multisig_transactions';
   private static readonly NATIVE_COIN_PRICE_KEY = 'native_coin_price';
   private static readonly OWNERS_SAFE_KEY = 'owner_safes';
+  private static readonly RATE_LIMIT_KEY = 'rate_limit';
   private static readonly RELAY_KEY = 'relay';
+  private static readonly RPC_REQUESTS_KEY = 'rpc_requests';
   private static readonly SAFE_APPS_KEY = 'safe_apps';
   private static readonly SAFE_BALANCES_KEY = 'safe_balances';
   private static readonly SAFE_COLLECTIBLES_KEY = 'safe_collectibles';
@@ -32,14 +36,29 @@ export class CacheRouter {
   private static readonly SAFE_FIAT_CODES_KEY = 'safe_fiat_codes';
   private static readonly SAFE_KEY = 'safe';
   private static readonly SINGLETONS_KEY = 'singletons';
+  private static readonly STAKING_DEDICATED_STAKING_STATS_KEY =
+    'staking_dedicated_staking_stats';
+  private static readonly STAKING_DEFI_VAULT_STATS_KEY =
+    'staking_defi_vault_stats';
+  private static readonly STAKING_DEPLOYMENTS_KEY = 'staking_deployments';
+  private static readonly STAKING_NETWORK_STATS_KEY = 'staking_network_stats';
+  private static readonly STAKING_POOLED_STAKING_STATS_KEY =
+    'staking_pooled_staking_stats';
+  private static readonly STAKING_STAKES_KEY = 'staking_stakes';
+  private static readonly STAKING_TRANSACTION_STATUS_KEY =
+    'staking_transaction_status';
+  private static readonly TARGETED_MESSAGING_SUBMISSION_KEY =
+    'targeted_messaging_submission';
+  private static readonly TARGETED_MESSAGING_TARGETED_SAFE_KEY =
+    'targeted_messaging_targeted_safe';
   private static readonly TOKEN_KEY = 'token';
   private static readonly TOKEN_PRICE_KEY = 'token_price';
   private static readonly TOKENS_KEY = 'tokens';
   private static readonly TRANSFER_KEY = 'transfer';
   private static readonly TRANSFERS_KEY = 'transfers';
+  private static readonly UNSUPPORTED_CHAIN_EVENT = 'unsupported_chain_event';
   private static readonly ZERION_BALANCES_KEY = 'zerion_balances';
   private static readonly ZERION_COLLECTIBLES_KEY = 'zerion_collectibles';
-  private static readonly RATE_LIMIT_KEY = 'rate_limit';
 
   static getAuthNonceCacheKey(nonce: string): string {
     return `${CacheRouter.AUTH_NONCE_KEY}_${nonce}`;
@@ -266,12 +285,13 @@ export class CacheRouter {
     to?: string;
     value?: string;
     tokenAddress?: string;
+    txHash?: string;
     limit?: number;
     offset?: number;
   }): CacheDir {
     return new CacheDir(
       CacheRouter.getIncomingTransfersCacheKey(args),
-      `${args.executionDateGte}_${args.executionDateLte}_${args.to}_${args.value}_${args.tokenAddress}_${args.limit}_${args.offset}`,
+      `${args.executionDateGte}_${args.executionDateLte}_${args.to}_${args.value}_${args.tokenAddress}_${args.txHash}_${args.limit}_${args.offset}`,
     );
   }
 
@@ -280,6 +300,10 @@ export class CacheRouter {
     safeAddress: string;
   }): string {
     return `${args.chainId}_${CacheRouter.INCOMING_TRANSFERS_KEY}_${args.safeAddress}`;
+  }
+
+  static getIndexingCacheDir(chainId: string): CacheDir {
+    return new CacheDir(`${chainId}_${CacheRouter.INDEXING_KEY}`, '');
   }
 
   static getMultisigTransactionsCacheDir(args: {
@@ -530,6 +554,129 @@ export class CacheRouter {
     return new CacheDir(
       `${CacheRouter.COUNTERFACTUAL_SAFES_KEY}_${address}`,
       '',
+    );
+  }
+
+  static getRpcRequestsKey(chainId: string): string {
+    return `${chainId}_${CacheRouter.RPC_REQUESTS_KEY}`;
+  }
+
+  static getRpcRequestsCacheDir(args: {
+    chainId: string;
+    method: string;
+    params: string;
+  }): CacheDir {
+    return new CacheDir(
+      CacheRouter.getRpcRequestsKey(args.chainId),
+      `${args.method}_${args.params}`,
+    );
+  }
+
+  static getStakingDeploymentsCacheDir(): CacheDir {
+    return new CacheDir(this.STAKING_DEPLOYMENTS_KEY, '');
+  }
+
+  static getStakingNetworkStatsCacheDir(): CacheDir {
+    return new CacheDir(this.STAKING_NETWORK_STATS_KEY, '');
+  }
+
+  static getStakingDedicatedStakingStatsCacheDir(): CacheDir {
+    return new CacheDir(this.STAKING_DEDICATED_STAKING_STATS_KEY, '');
+  }
+
+  static getStakingPooledStakingStatsCacheDir(pool: `0x${string}`): CacheDir {
+    return new CacheDir(`${this.STAKING_POOLED_STAKING_STATS_KEY}_${pool}`, '');
+  }
+
+  static getStakingDefiVaultStatsCacheDir(args: {
+    chainId: string;
+    vault: `0x${string}`;
+  }): CacheDir {
+    return new CacheDir(
+      `${args.chainId}_${this.STAKING_DEFI_VAULT_STATS_KEY}_${args.vault}`,
+      '',
+    );
+  }
+
+  /**
+   * Calculated the chain/Safe-specific cache key of {@link Stake}.
+   *
+   * @param {string} args.chainId - Chain ID
+   * @param {string} args.safeAddress - Safe address
+   * @returns {string} - Cache key
+   */
+  static getStakingStakesCacheKey(args: {
+    chainId: string;
+    safeAddress: `0x${string}`;
+  }): string {
+    return `${args.chainId}_${CacheRouter.STAKING_STAKES_KEY}_${args.safeAddress}`;
+  }
+
+  /**
+   * Calculate cache directory for staking stakes.
+   *
+   * Note: This function hashes the validators' public keys to keep the
+   * cache field short and deterministic. Redis and other cache systems
+   * may experience performance degradation with long fields.
+   *
+   * @param {string} args.chainId - Chain ID
+   * @param {string} args.safeAddress - Safe address
+   * @param {string} args.validatorsPublicKeys - Array of validators public keys
+   * @returns {@link CacheDir} - Cache directory
+   */
+  static getStakingStakesCacheDir(args: {
+    chainId: string;
+    safeAddress: `0x${string}`;
+    validatorsPublicKeys: Array<`0x${string}`>;
+  }): CacheDir {
+    const hash = crypto.createHash('sha256');
+    hash.update(args.validatorsPublicKeys.join('_'));
+    return new CacheDir(
+      CacheRouter.getStakingStakesCacheKey(args),
+      hash.digest('hex'),
+    );
+  }
+
+  static getUnsupportedChainEventCacheKey(chainId: string): string {
+    return `${chainId}_${this.UNSUPPORTED_CHAIN_EVENT}`;
+  }
+
+  static getStakingTransactionStatusCacheDir(args: {
+    chainId: string;
+    txHash: `0x${string}`;
+  }): CacheDir {
+    return new CacheDir(
+      `${args.chainId}_${CacheRouter.STAKING_TRANSACTION_STATUS_KEY}_${args.txHash}`,
+      '',
+    );
+  }
+
+  static getTargetedSafeCacheKey(outreachId: number): string {
+    return `${CacheRouter.TARGETED_MESSAGING_TARGETED_SAFE_KEY}_${outreachId}`;
+  }
+
+  static getTargetedSafeCacheDir(args: {
+    outreachId: number;
+    safeAddress: `0x${string}`;
+  }): CacheDir {
+    return new CacheDir(
+      CacheRouter.getTargetedSafeCacheKey(args.outreachId),
+      args.safeAddress,
+    );
+  }
+
+  static getSubmissionCacheKey(outreachId: number): string {
+    return `${CacheRouter.TARGETED_MESSAGING_SUBMISSION_KEY}_${outreachId}`;
+  }
+
+  static getSubmissionCacheDir(args: {
+    outreachId: number;
+    safeAddress: `0x${string}`;
+    signerAddress: `0x${string}`;
+  }): CacheDir {
+    return new CacheDir(
+      CacheRouter.getSubmissionCacheKey(args.outreachId),
+      `${args.safeAddress}_${args.signerAddress}`,
     );
   }
 }

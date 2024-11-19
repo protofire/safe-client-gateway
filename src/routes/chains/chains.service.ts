@@ -11,6 +11,8 @@ import {
   PaginationData,
   cursorUrlFromLimitAndOffset,
 } from '@/routes/common/pagination/pagination.data';
+import { IndexingStatus } from '@/routes/chains/entities/indexing-status.entity';
+import { IBlockchainApiManager } from '@/domain/interfaces/blockchain-api.manager.interface';
 
 @Injectable()
 export class ChainsService {
@@ -21,6 +23,8 @@ export class ChainsService {
     private readonly chainsRepository: IChainsRepository,
     @Inject(IBackboneRepository)
     private readonly backboneRepository: IBackboneRepository,
+    @Inject(IBlockchainApiManager)
+    private readonly blockchainApiManager: IBlockchainApiManager,
   ) {}
 
   async getChains(
@@ -44,6 +48,7 @@ export class ChainsService {
         nativeCurrency: chain.nativeCurrency,
         transactionService: chain.transactionService,
         blockExplorerUriTemplate: chain.blockExplorerUriTemplate,
+        beaconChainExplorerUriTemplate: chain.beaconChainExplorerUriTemplate,
         disabledWallets: chain.disabledWallets,
         features: chain.features,
         gasPrice: chain.gasPrice,
@@ -78,6 +83,7 @@ export class ChainsService {
       nativeCurrency: result.nativeCurrency,
       transactionService: result.transactionService,
       blockExplorerUriTemplate: result.blockExplorerUriTemplate,
+      beaconChainExplorerUriTemplate: result.beaconChainExplorerUriTemplate,
       disabledWallets: result.disabledWallets,
       features: result.features,
       gasPrice: result.gasPrice,
@@ -116,5 +122,25 @@ export class ChainsService {
       address: singleton.address,
       version: singleton.version,
     }));
+  }
+
+  async getIndexingStatus(chainId: string): Promise<IndexingStatus> {
+    const [indexingStatus, blockchainApi] = await Promise.all([
+      this.chainsRepository.getIndexingStatus(chainId),
+      this.blockchainApiManager.getApi(chainId),
+    ]);
+
+    const lastSyncedBlock = Math.min(
+      indexingStatus.erc20BlockNumber,
+      indexingStatus.masterCopiesBlockNumber,
+    );
+    const block = await blockchainApi.getBlock({
+      blockNumber: BigInt(lastSyncedBlock),
+    });
+
+    return new IndexingStatus({
+      lastSync: Number(block.timestamp),
+      synced: indexingStatus.synced,
+    });
   }
 }

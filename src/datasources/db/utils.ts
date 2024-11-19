@@ -1,9 +1,9 @@
-import { ICacheService } from '@/datasources/cache/cache.service.interface';
-import { CacheDir } from '@/datasources/cache/entities/cache-dir.entity';
-import { ILoggingService } from '@/logging/logging.interface';
+import type { ICacheService } from '@/datasources/cache/cache.service.interface';
+import type { CacheDir } from '@/datasources/cache/entities/cache-dir.entity';
+import type { ILoggingService } from '@/logging/logging.interface';
 import { asError } from '@/logging/utils';
 import { InternalServerErrorException } from '@nestjs/common';
-import postgres from 'postgres';
+import type postgres from 'postgres';
 
 /**
  * Returns the content from cache or executes the query and caches the result.
@@ -28,7 +28,7 @@ export async function getFromCacheOrExecuteAndCache<
   ttl: number,
 ): Promise<T> {
   const { key, field } = cacheDir;
-  const cached = await cacheService.get(cacheDir);
+  const cached = await cacheService.hGet(cacheDir);
   if (cached != null) {
     loggingService.debug({ type: 'cache_hit', key, field });
     return JSON.parse(cached);
@@ -42,7 +42,7 @@ export async function getFromCacheOrExecuteAndCache<
   });
 
   if (result.count > 0) {
-    await cacheService.set(cacheDir, JSON.stringify(result), ttl);
+    await cacheService.hSet(cacheDir, JSON.stringify(result), ttl);
   }
   return result;
 }

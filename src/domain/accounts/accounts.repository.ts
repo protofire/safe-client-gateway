@@ -9,6 +9,7 @@ import { UpsertAccountDataSettingsDto } from '@/domain/accounts/entities/upsert-
 import { AuthPayload } from '@/domain/auth/entities/auth-payload.entity';
 import { IAccountsDatasource } from '@/domain/interfaces/accounts.datasource.interface';
 import { Inject, Injectable, UnauthorizedException } from '@nestjs/common';
+import { Request } from 'express';
 
 @Injectable()
 export class AccountsRepository implements IAccountsRepository {
@@ -20,11 +21,15 @@ export class AccountsRepository implements IAccountsRepository {
   async createAccount(args: {
     authPayload: AuthPayload;
     address: `0x${string}`;
+    clientIp: Request['ip'];
   }): Promise<Account> {
-    if (!args.authPayload.isForSigner(args.address)) {
+    if (!args.clientIp || !args.authPayload.isForSigner(args.address)) {
       throw new UnauthorizedException();
     }
-    const account = await this.datasource.createAccount(args.address);
+    const account = await this.datasource.createAccount({
+      address: args.address,
+      clientIp: args.clientIp,
+    });
     return AccountSchema.parse(account);
   }
 

@@ -110,7 +110,7 @@ export class ZerionBalancesApi implements IBalancesApi {
       fiatCode: args.fiatCode,
     });
     const chainName = this._getChainName(args.chain);
-    const cached = await this.cacheService.get(cacheDir);
+    const cached = await this.cacheService.hGet(cacheDir);
     if (cached != null) {
       const { key, field } = cacheDir;
       this.loggingService.debug({ type: 'cache_hit', key, field });
@@ -138,7 +138,7 @@ export class ZerionBalancesApi implements IBalancesApi {
         networkRequest,
       });
       const zerionBalances = ZerionBalancesSchema.parse(data);
-      await this.cacheService.set(
+      await this.cacheService.hSet(
         cacheDir,
         JSON.stringify(zerionBalances.data),
         this.defaultExpirationTimeInSeconds,
@@ -146,7 +146,7 @@ export class ZerionBalancesApi implements IBalancesApi {
       return this._mapBalances(chainName, data.data);
     } catch (error) {
       if (error instanceof LimitReachedError) {
-        throw new DataSourceError(error.message, 429);
+        throw error;
       }
       throw this.httpErrorFactory.from(error);
     }
@@ -171,7 +171,7 @@ export class ZerionBalancesApi implements IBalancesApi {
       ...args,
       chainId: args.chain.chainId,
     });
-    const cached = await this.cacheService.get(cacheDir);
+    const cached = await this.cacheService.hGet(cacheDir);
     if (cached != null) {
       const { key, field } = cacheDir;
       this.loggingService.debug({ type: 'cache_hit', key, field });
@@ -196,7 +196,7 @@ export class ZerionBalancesApi implements IBalancesApi {
           url,
           networkRequest,
         });
-        await this.cacheService.set(
+        await this.cacheService.hSet(
           cacheDir,
           JSON.stringify(data),
           this.defaultExpirationTimeInSeconds,
