@@ -90,7 +90,7 @@ export class SwapTransferInfoMapper {
       direction: args.direction,
       transferInfo: args.transferInfo,
       humanDescription: null,
-      richDecodedInfo: null,
+
       // SwapOrderTransactionInfo
       uid: order.uid,
       orderStatus: order.status,
@@ -104,7 +104,9 @@ export class SwapTransferInfoMapper {
       sellToken,
       buyToken,
       explorerUrl: this.swapOrderHelper.getOrderExplorerUrl(order).toString(),
-      executedSurplusFee: order.executedSurplusFee?.toString() ?? null,
+      executedSurplusFee: order.executedSurplusFee.toString(),
+      executedFee: order.executedFee.toString(),
+      executedFeeToken: sellToken,
       receiver: order.receiver,
       owner: order.owner,
       fullAppData: order.fullAppData,

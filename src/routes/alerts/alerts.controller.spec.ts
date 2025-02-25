@@ -49,14 +49,15 @@ import {
   ALERTS_CONFIGURATION_MODULE,
 } from '@/routes/alerts/configuration/alerts.configuration.module';
 import alertsConfiguration from '@/routes/alerts/configuration/__tests__/alerts.configuration';
-import jwtConfiguration from '@/datasources/jwt/configuration/__tests__/jwt.configuration';
-import {
-  JWT_CONFIGURATION_MODULE,
-  JwtConfigurationModule,
-} from '@/datasources/jwt/configuration/jwt.configuration.module';
 import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
 import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 import type { Server } from 'net';
+import { TestPostgresDatabaseModule } from '@/datasources/db/__tests__/test.postgres-database.module';
+import { PostgresDatabaseModule } from '@/datasources/db/v1/postgres-database.module';
+import { PostgresDatabaseModuleV2 } from '@/datasources/db/v2/postgres-database.module';
+import { TestPostgresDatabaseModuleV2 } from '@/datasources/db/v2/test.postgres-database.module';
+import { TestTargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/__tests__/test.targeted-messaging.datasource.module';
+import { TargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/targeted-messaging.datasource.module';
 
 // The `x-tenderly-signature` header contains a cryptographic signature. The webhook request signature is
 // a HMAC SHA256 hash of concatenated signing secret, request payload, and timestamp, in this order.
@@ -102,8 +103,10 @@ describe('Alerts (Unit)', () => {
       const moduleFixture: TestingModule = await Test.createTestingModule({
         imports: [AppModule.register(testConfiguration)],
       })
-        .overrideModule(JWT_CONFIGURATION_MODULE)
-        .useModule(JwtConfigurationModule.register(jwtConfiguration))
+        .overrideModule(PostgresDatabaseModule)
+        .useModule(TestPostgresDatabaseModule)
+        .overrideModule(TargetedMessagingDatasourceModule)
+        .useModule(TestTargetedMessagingDatasourceModule)
         .overrideModule(ALERTS_CONFIGURATION_MODULE)
         .useModule(AlertsConfigurationModule.register(alertsConfiguration))
         .overrideModule(ALERTS_API_CONFIGURATION_MODULE)
@@ -120,6 +123,8 @@ describe('Alerts (Unit)', () => {
         .useModule(TestEmailApiModule)
         .overrideModule(QueuesApiModule)
         .useModule(TestQueuesApiModule)
+        .overrideModule(PostgresDatabaseModuleV2)
+        .useModule(TestPostgresDatabaseModuleV2)
         .compile();
 
       configurationService = moduleFixture.get(IConfigurationService);
@@ -894,6 +899,10 @@ describe('Alerts (Unit)', () => {
         const moduleFixture: TestingModule = await Test.createTestingModule({
           imports: [AppModule.register(testConfiguration)],
         })
+          .overrideModule(PostgresDatabaseModule)
+          .useModule(TestPostgresDatabaseModule)
+          .overrideModule(TargetedMessagingDatasourceModule)
+          .useModule(TestTargetedMessagingDatasourceModule)
           .overrideModule(CacheModule)
           .useModule(TestCacheModule)
           .overrideModule(RequestScopedLoggingModule)
@@ -902,6 +911,8 @@ describe('Alerts (Unit)', () => {
           .useModule(TestNetworkModule)
           .overrideModule(QueuesApiModule)
           .useModule(TestQueuesApiModule)
+          .overrideModule(PostgresDatabaseModuleV2)
+          .useModule(TestPostgresDatabaseModuleV2)
           .compile();
 
         app = moduleFixture.createNestApplication();

@@ -45,9 +45,15 @@ lerna-debug.log*
 
 # env
 .env
+.env.test
+.env.dev
+.envrc
 
 # Database mounted volume
 data
 
 # ABIs
 /abis/*
+
+# Targeted Messaging data files
+/assets/targeted-messaging/*

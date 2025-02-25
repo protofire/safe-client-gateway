@@ -1,6 +1,9 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  ApiProperty,
+  ApiPropertyOptional,
+  getSchemaPath,
+} from '@nestjs/swagger';
 import { AddressInfo } from '@/routes/common/entities/address-info.entity';
-import { RichDecodedInfo } from '@/routes/transactions/entities/human-description.entity';
 import {
   TransactionInfo,
   TransactionInfoType,
@@ -17,11 +20,17 @@ import {
   TransferDirection,
   TransferTransactionInfo,
 } from '@/routes/transactions/entities/transfer-transaction-info.entity';
+import { Erc20Transfer } from '@/routes/transactions/entities/transfers/erc20-transfer.entity';
+import { Erc721Transfer } from '@/routes/transactions/entities/transfers/erc721-transfer.entity';
+import { NativeCoinTransfer } from '@/routes/transactions/entities/transfers/native-coin-transfer.entity';
 
 export class SwapTransferTransactionInfo
   extends TransactionInfo
   implements TransferTransactionInfo, SwapOrderTransactionInfo
 {
+  @ApiProperty({ enum: [TransactionInfoType.SwapTransfer] })
+  override type = TransactionInfoType.SwapTransfer;
+
   // TransferTransactionInfo properties
   @ApiProperty()
   sender: AddressInfo;
@@ -32,7 +41,13 @@ export class SwapTransferTransactionInfo
   @ApiProperty()
   direction: TransferDirection;
 
-  @ApiProperty()
+  @ApiProperty({
+    oneOf: [
+      { $ref: getSchemaPath(Erc20Transfer) },
+      { $ref: getSchemaPath(Erc721Transfer) },
+      { $ref: getSchemaPath(NativeCoinTransfer) },
+    ],
+  })
   transferInfo: Transfer;
 
   // SwapOrderTransactionInfo properties
@@ -87,12 +102,24 @@ export class SwapTransferTransactionInfo
   })
   explorerUrl: string;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     type: String,
-    nullable: true,
+    description: 'The amount of fees paid for this order.',
+    deprecated: true,
+  })
+  executedSurplusFee: string;
+
+  @ApiProperty({
+    type: String,
     description: 'The amount of fees paid for this order.',
   })
-  executedSurplusFee: string | null;
+  executedFee: string;
+
+  @ApiProperty({
+    description:
+      'The token in which the fee was paid, expressed by SURPLUS tokens (BUY tokens for SELL orders and SELL tokens for BUY orders).',
+  })
+  executedFeeToken: TokenInfo;
 
   @ApiPropertyOptional({
     type: String,
@@ -120,7 +147,6 @@ export class SwapTransferTransactionInfo
     direction: TransferDirection;
     transferInfo: Transfer;
     humanDescription: string | null;
-    richDecodedInfo: RichDecodedInfo | null | undefined;
     // SwapOrderTransactionInfo properties
     uid: string;
     orderStatus: OrderStatus;
@@ -134,17 +160,15 @@ export class SwapTransferTransactionInfo
     sellToken: TokenInfo;
     buyToken: TokenInfo;
     explorerUrl: string;
-    executedSurplusFee: string | null;
+    executedSurplusFee: string;
+    executedFee: string;
+    executedFeeToken: TokenInfo;
     receiver: string | null;
     owner: `0x${string}`;
     fullAppData: Record<string, unknown> | null;
   }) {
     // TransferTransactionInfo constructor
-    super(
-      TransactionInfoType.SwapTransfer,
-      args.humanDescription,
-      args.richDecodedInfo,
-    );
+    super(TransactionInfoType.SwapTransfer, args.humanDescription);
     this.sender = args.sender;
     this.recipient = args.recipient;
     this.direction = args.direction;
@@ -163,6 +187,8 @@ export class SwapTransferTransactionInfo
     this.buyToken = args.buyToken;
     this.explorerUrl = args.explorerUrl;
     this.executedSurplusFee = args.executedSurplusFee;
+    this.executedFee = args.executedFee;
+    this.executedFeeToken = args.executedFeeToken;
     this.receiver = args.receiver;
     this.owner = args.owner;
     this.fullAppData = args.fullAppData;
@@ -171,6 +197,6 @@ export class SwapTransferTransactionInfo
 
 export function isSwapTransferTransactionInfo(
   txInfo: TransactionInfo,
-): txInfo is TransferTransactionInfo {
+): txInfo is SwapTransferTransactionInfo {
   return txInfo.type === TransactionInfoType.SwapTransfer;
 }

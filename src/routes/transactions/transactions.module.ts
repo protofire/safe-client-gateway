@@ -1,6 +1,6 @@
 import { ChainsRepositoryModule } from '@/domain/chains/chains.repository.interface';
 import { ContractsRepositoryModule } from '@/domain/contracts/contracts.repository.interface';
-import { DataDecodedRepositoryModule } from '@/domain/data-decoder/data-decoded.repository.interface';
+import { DataDecodedRepositoryModule } from '@/domain/data-decoder/v1/data-decoded.repository.interface';
 import { HumanDescriptionRepositoryModule } from '@/domain/human-description/human-description.repository.interface';
 import { SafeAppsRepositoryModule } from '@/domain/safe-apps/safe-apps.repository.interface';
 import { SafeRepositoryModule } from '@/domain/safe/safe.repository.interface';
@@ -35,6 +35,7 @@ import { MultisigTransactionDetailsMapper } from '@/routes/transactions/mappers/
 import { MultisigTransactionExecutionDetailsMapper } from '@/routes/transactions/mappers/multisig-transactions/multisig-transaction-execution-details.mapper';
 import { MultisigTransactionExecutionInfoMapper } from '@/routes/transactions/mappers/multisig-transactions/multisig-transaction-execution-info.mapper';
 import { MultisigTransactionStatusMapper } from '@/routes/transactions/mappers/multisig-transactions/multisig-transaction-status.mapper';
+import { MultisigTransactionNoteMapper } from '@/routes/transactions/mappers/multisig-transactions/multisig-transaction-note.mapper';
 import { MultisigTransactionMapper } from '@/routes/transactions/mappers/multisig-transactions/multisig-transaction.mapper';
 import { QueuedItemsMapper } from '@/routes/transactions/mappers/queued-items/queued-items.mapper';
 import { TransactionPreviewMapper } from '@/routes/transactions/mappers/transaction-preview.mapper';
@@ -86,6 +87,7 @@ import { Module } from '@nestjs/common';
     MultisigTransactionInfoMapper,
     MultisigTransactionMapper,
     MultisigTransactionStatusMapper,
+    MultisigTransactionNoteMapper,
     NativeCoinTransferMapper,
     NativeStakingMapper,
     QueuedItemsMapper,

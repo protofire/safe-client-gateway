@@ -13,7 +13,7 @@ import { contractBuilder } from '@/domain/contracts/entities/__tests__/contract.
 import {
   dataDecodedBuilder,
   dataDecodedParameterBuilder,
-} from '@/domain/data-decoder/entities/__tests__/data-decoded.builder';
+} from '@/domain/data-decoder/v1/entities/__tests__/data-decoded.builder';
 import { pageBuilder } from '@/domain/entities/__tests__/page.builder';
 import { safeAppBuilder } from '@/domain/safe-apps/entities/__tests__/safe-app.builder';
 import { confirmationBuilder } from '@/domain/safe/entities/__tests__/multisig-transaction-confirmation.builder';
@@ -36,6 +36,13 @@ import { getAddress } from 'viem';
 import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
 import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 import type { Server } from 'net';
+import { TestPostgresDatabaseModule } from '@/datasources/db/__tests__/test.postgres-database.module';
+import { PostgresDatabaseModule } from '@/datasources/db/v1/postgres-database.module';
+import { PostgresDatabaseModuleV2 } from '@/datasources/db/v2/postgres-database.module';
+import { TestPostgresDatabaseModuleV2 } from '@/datasources/db/v2/test.postgres-database.module';
+import { TestTargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/__tests__/test.targeted-messaging.datasource.module';
+import { TargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/targeted-messaging.datasource.module';
+import { rawify } from '@/validation/entities/raw.entity';
 
 describe('List multisig transactions by Safe - Transactions Controller (Unit)', () => {
   let app: INestApplication<Server>;
@@ -48,6 +55,10 @@ describe('List multisig transactions by Safe - Transactions Controller (Unit)', 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(configuration)],
     })
+      .overrideModule(PostgresDatabaseModule)
+      .useModule(TestPostgresDatabaseModule)
+      .overrideModule(TargetedMessagingDatasourceModule)
+      .useModule(TestTargetedMessagingDatasourceModule)
       .overrideModule(CacheModule)
       .useModule(TestCacheModule)
       .overrideModule(RequestScopedLoggingModule)
@@ -56,6 +67,8 @@ describe('List multisig transactions by Safe - Transactions Controller (Unit)', 
       .useModule(TestNetworkModule)
       .overrideModule(QueuesApiModule)
       .useModule(TestQueuesApiModule)
+      .overrideModule(PostgresDatabaseModuleV2)
+      .useModule(TestPostgresDatabaseModuleV2)
       .compile();
 
     const configurationService = moduleFixture.get<IConfigurationService>(
@@ -102,7 +115,7 @@ describe('List multisig transactions by Safe - Transactions Controller (Unit)', 
     const safeAddress = faker.finance.ethereumAddress();
     const chainResponse = chainBuilder().with('chainId', chainId).build();
     networkService.get.mockResolvedValueOnce({
-      data: chainResponse,
+      data: rawify(chainResponse),
       status: 200,
     });
     const error = new NetworkResponseError(
@@ -144,18 +157,18 @@ describe('List multisig transactions by Safe - Transactions Controller (Unit)', 
     const safeAddress = faker.finance.ethereumAddress();
     const chainResponse = chainBuilder().with('chainId', chainId).build();
     networkService.get.mockResolvedValueOnce({
-      data: chainResponse,
+      data: rawify(chainResponse),
       status: 200,
     });
     networkService.get.mockResolvedValueOnce({
-      data: { results: ['invalidData'] },
+      data: rawify({ results: ['invalidData'] }),
       status: 200,
     });
 
     await request(app.getHttpServer())
       .get(`/v1/chains/${chainId}/safes/${safeAddress}/multisig-transactions`)
-      .expect(500)
-      .expect({ statusCode: 500, message: 'Internal server error' });
+      .expect(502)
+      .expect({ statusCode: 502, message: 'Bad gateway' });
   });
 
   it('Failure: data page validation fails', async () => {
@@ -164,18 +177,18 @@ describe('List multisig transactions by Safe - Transactions Controller (Unit)', 
     const chainResponse = chainBuilder().with('chainId', chainId).build();
     const page = pageBuilder().build();
     networkService.get.mockResolvedValueOnce({
-      data: chainResponse,
+      data: rawify(chainResponse),
       status: 200,
     });
     networkService.get.mockResolvedValueOnce({
-      data: { ...page, count: 'invalid' },
+      data: rawify({ ...page, count: 'invalid' }),
       status: 200,
     });
 
     await request(app.getHttpServer())
       .get(`/v1/chains/${chainId}/safes/${safeAddress}/multisig-transactions`)
-      .expect(500)
-      .expect({ statusCode: 500, message: 'Internal server error' });
+      .expect(502)
+      .expect({ statusCode: 502, message: 'Bad gateway' });
   });
 
   it('Should get a ERC20 transfer mapped to the expected format', async () => {
@@ -225,24 +238,26 @@ describe('List multisig transactions by Safe - Transactions Controller (Unit)', 
       const getContractUrlPattern = `${chain.transactionService}/api/v1/contracts/`;
       const getTokenUrlPattern = `${chain.transactionService}/api/v1/tokens/${multisigTransaction.to}`;
       if (url === getChainUrl) {
-        return Promise.resolve({ data: chain, status: 200 });
+        return Promise.resolve({ data: rawify(chain), status: 200 });
       }
       if (url === getMultisigTransactionsUrl) {
         return Promise.resolve({
-          data: pageBuilder()
-            .with('results', [multisigTransactionToJson(multisigTransaction)])
-            .build(),
+          data: rawify(
+            pageBuilder()
+              .with('results', [multisigTransactionToJson(multisigTransaction)])
+              .build(),
+          ),
           status: 200,
         });
       }
       if (url === getSafeUrl) {
-        return Promise.resolve({ data: safe, status: 200 });
+        return Promise.resolve({ data: rawify(safe), status: 200 });
       }
       if (url.includes(getContractUrlPattern)) {
         return Promise.reject({ detail: 'Not found', status: 404 });
       }
       if (url === getTokenUrlPattern) {
-        return Promise.resolve({ data: token, status: 200 });
+        return Promise.resolve({ data: rawify(token), status: 200 });
       }
       return Promise.reject(new Error(`Could not match ${url}`));
     });
@@ -349,24 +364,26 @@ describe('List multisig transactions by Safe - Transactions Controller (Unit)', 
       const getContractUrlPattern = `${chain.transactionService}/api/v1/contracts/`;
       const getTokenUrlPattern = `${chain.transactionService}/api/v1/tokens/0x7Af3460d552f832fD7E2DE973c628ACeA59B0712`;
       if (url === getChainUrl) {
-        return Promise.resolve({ data: chain, status: 200 });
+        return Promise.resolve({ data: rawify(chain), status: 200 });
       }
       if (url === getMultisigTransactionsUrl) {
         return Promise.resolve({
-          data: pageBuilder()
-            .with('results', [multisigTransactionToJson(multisigTransaction)])
-            .build(),
+          data: rawify(
+            pageBuilder()
+              .with('results', [multisigTransactionToJson(multisigTransaction)])
+              .build(),
+          ),
           status: 200,
         });
       }
       if (url === getSafeUrl) {
-        return Promise.resolve({ data: safe, status: 200 });
+        return Promise.resolve({ data: rawify(safe), status: 200 });
       }
       if (url.includes(getContractUrlPattern)) {
         return Promise.reject({ detail: 'Not found', status: 404 });
       }
       if (url === getTokenUrlPattern) {
-        return Promise.resolve({ data: token, status: 200 });
+        return Promise.resolve({ data: rawify(token), status: 200 });
       }
       return Promise.reject(new Error(`Could not match ${url}`));
     });
@@ -450,22 +467,25 @@ describe('List multisig transactions by Safe - Transactions Controller (Unit)', 
       const getSafeUrl = `${chain.transactionService}/api/v1/safes/${domainTransaction.safe}`;
       const getContractUrlPattern = `${chain.transactionService}/api/v1/contracts/`;
       if (url === getChainUrl) {
-        return Promise.resolve({ data: chain, status: 200 });
+        return Promise.resolve({ data: rawify(chain), status: 200 });
       }
       if (url === getSafeAppsUrl) {
-        return Promise.resolve({ data: safeAppsResponse, status: 200 });
+        return Promise.resolve({ data: rawify(safeAppsResponse), status: 200 });
       }
       if (url === getMultisigTransactionsUrl) {
         return Promise.resolve({
-          data: multisigTransactionsPage,
+          data: rawify(multisigTransactionsPage),
           status: 200,
         });
       }
       if (url === getSafeUrl) {
-        return Promise.resolve({ data: safeBuilder().build(), status: 200 });
+        return Promise.resolve({
+          data: rawify(safeBuilder().build()),
+          status: 200,
+        });
       }
       if (url.includes(getContractUrlPattern)) {
-        return Promise.resolve({ data: contractResponse, status: 200 });
+        return Promise.resolve({ data: rawify(contractResponse), status: 200 });
       }
       return Promise.reject(new Error(`Could not match ${url}`));
     });

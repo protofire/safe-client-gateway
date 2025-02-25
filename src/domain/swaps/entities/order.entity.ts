@@ -74,7 +74,6 @@ export const OrderSchema = z.object({
   executedFeeAmount: z.coerce.bigint(),
   invalidated: z.boolean(),
   status: z.nativeEnum(OrderStatus).catch(OrderStatus.Unknown),
-  fullFeeAmount: z.coerce.bigint(),
   isLiquidityOrder: z.boolean(),
   ethflowData: z
     .object({
@@ -100,7 +99,9 @@ export const OrderSchema = z.object({
     })
     .nullish()
     .default(null),
-  executedSurplusFee: z.coerce.bigint().nullish().default(null),
+  executedSurplusFee: z.coerce.bigint(),
+  executedFee: z.coerce.bigint(),
+  executedFeeToken: AddressSchema,
   fullAppData: FullAppDataSchema.shape.fullAppData,
 });
 

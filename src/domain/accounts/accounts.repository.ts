@@ -5,6 +5,7 @@ import {
   Account,
   AccountSchema,
 } from '@/domain/accounts/entities/account.entity';
+import { CreateAccountDto } from '@/domain/accounts/entities/create-account.dto.entity';
 import { UpsertAccountDataSettingsDto } from '@/domain/accounts/entities/upsert-account-data-settings.dto.entity';
 import { AuthPayload } from '@/domain/auth/entities/auth-payload.entity';
 import { IAccountsDatasource } from '@/domain/interfaces/accounts.datasource.interface';
@@ -20,14 +21,17 @@ export class AccountsRepository implements IAccountsRepository {
 
   async createAccount(args: {
     authPayload: AuthPayload;
-    address: `0x${string}`;
+    createAccountDto: CreateAccountDto;
     clientIp: Request['ip'];
   }): Promise<Account> {
-    if (!args.clientIp || !args.authPayload.isForSigner(args.address)) {
+    if (
+      !args.clientIp ||
+      !args.authPayload.isForSigner(args.createAccountDto.address)
+    ) {
       throw new UnauthorizedException();
     }
     const account = await this.datasource.createAccount({
-      address: args.address,
+      createAccountDto: args.createAccountDto,
       clientIp: args.clientIp,
     });
     return AccountSchema.parse(account);
@@ -54,14 +58,14 @@ export class AccountsRepository implements IAccountsRepository {
     return this.datasource.deleteAccount(args.address);
   }
 
-  async getDataTypes(): Promise<AccountDataType[]> {
+  async getDataTypes(): Promise<Array<AccountDataType>> {
     return this.datasource.getDataTypes();
   }
 
   async getAccountDataSettings(args: {
     authPayload: AuthPayload;
     address: `0x${string}`;
-  }): Promise<AccountDataSetting[]> {
+  }): Promise<Array<AccountDataSetting>> {
     if (!args.authPayload.isForSigner(args.address)) {
       throw new UnauthorizedException();
     }
@@ -73,7 +77,7 @@ export class AccountsRepository implements IAccountsRepository {
     authPayload: AuthPayload;
     address: `0x${string}`;
     upsertAccountDataSettingsDto: UpsertAccountDataSettingsDto;
-  }): Promise<AccountDataSetting[]> {
+  }): Promise<Array<AccountDataSetting>> {
     const { address, upsertAccountDataSettingsDto } = args;
     if (!args.authPayload.isForSigner(args.address)) {
       throw new UnauthorizedException();

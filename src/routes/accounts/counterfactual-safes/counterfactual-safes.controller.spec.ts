@@ -4,20 +4,23 @@ import { AppModule } from '@/app.module';
 import configuration from '@/config/entities/__tests__/configuration';
 import { TestAccountsDataSourceModule } from '@/datasources/accounts/__tests__/test.accounts.datasource.module';
 import { AccountsDatasourceModule } from '@/datasources/accounts/accounts.datasource.module';
+import { TestAddressBooksDataSourceModule } from '@/datasources/accounts/address-books/__tests__/test.address-books.datasource.module';
+import { AddressBooksDatasourceModule } from '@/datasources/accounts/address-books/address-books.datasource.module';
 import { TestCounterfactualSafesDataSourceModule } from '@/datasources/accounts/counterfactual-safes/__tests__/test.counterfactual-safes.datasource.module';
 import { CounterfactualSafesDatasourceModule } from '@/datasources/accounts/counterfactual-safes/counterfactual-safes.datasource.module';
 import { TestCacheModule } from '@/datasources/cache/__tests__/test.cache.module';
 import { CacheModule } from '@/datasources/cache/cache.module';
-import jwtConfiguration from '@/datasources/jwt/configuration/__tests__/jwt.configuration';
-import {
-  JWT_CONFIGURATION_MODULE,
-  JwtConfigurationModule,
-} from '@/datasources/jwt/configuration/jwt.configuration.module';
+import { TestPostgresDatabaseModule } from '@/datasources/db/__tests__/test.postgres-database.module';
+import { PostgresDatabaseModule } from '@/datasources/db/v1/postgres-database.module';
+import { PostgresDatabaseModuleV2 } from '@/datasources/db/v2/postgres-database.module';
+import { TestPostgresDatabaseModuleV2 } from '@/datasources/db/v2/test.postgres-database.module';
 import { IJwtService } from '@/datasources/jwt/jwt.service.interface';
 import { TestNetworkModule } from '@/datasources/network/__tests__/test.network.module';
 import { NetworkModule } from '@/datasources/network/network.module';
 import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
 import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
+import { TestTargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/__tests__/test.targeted-messaging.datasource.module';
+import { TargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/targeted-messaging.datasource.module';
 import type { IAccountsRepository } from '@/domain/accounts/accounts.repository.interface';
 import { counterfactualSafeBuilder } from '@/domain/accounts/counterfactual-safes/entities/__tests__/counterfactual-safe.builder';
 import { createCounterfactualSafeDtoBuilder } from '@/domain/accounts/counterfactual-safes/entities/__tests__/create-counterfactual-safe.dto.entity.builder';
@@ -48,7 +51,8 @@ describe('CounterfactualSafesController', () => {
   let accountsRepository: jest.MockedObjectDeep<IAccountsRepository>;
   let counterfactualSafesDataSource: jest.MockedObjectDeep<ICounterfactualSafesDatasource>;
 
-  beforeAll(async () => {
+  beforeEach(async () => {
+    jest.resetAllMocks();
     const defaultConfiguration = configuration();
     const testConfiguration = (): typeof defaultConfiguration => ({
       ...defaultConfiguration,
@@ -62,12 +66,14 @@ describe('CounterfactualSafesController', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(testConfiguration)],
     })
-      .overrideModule(JWT_CONFIGURATION_MODULE)
-      .useModule(JwtConfigurationModule.register(jwtConfiguration))
       .overrideModule(AccountsDatasourceModule)
       .useModule(TestAccountsDataSourceModule)
+      .overrideModule(AddressBooksDatasourceModule)
+      .useModule(TestAddressBooksDataSourceModule)
       .overrideModule(CounterfactualSafesDatasourceModule)
       .useModule(TestCounterfactualSafesDataSourceModule)
+      .overrideModule(TargetedMessagingDatasourceModule)
+      .useModule(TestTargetedMessagingDatasourceModule)
       .overrideModule(CacheModule)
       .useModule(TestCacheModule)
       .overrideModule(RequestScopedLoggingModule)
@@ -76,6 +82,10 @@ describe('CounterfactualSafesController', () => {
       .useModule(TestNetworkModule)
       .overrideModule(QueuesApiModule)
       .useModule(TestQueuesApiModule)
+      .overrideModule(PostgresDatabaseModuleV2)
+      .useModule(TestPostgresDatabaseModuleV2)
+      .overrideModule(PostgresDatabaseModule)
+      .useModule(TestPostgresDatabaseModule)
       .compile();
     jwtService = moduleFixture.get<IJwtService>(IJwtService);
     accountsRepository = moduleFixture.get(IAccountsDatasource);
@@ -85,10 +95,6 @@ describe('CounterfactualSafesController', () => {
 
     app = await new TestAppProvider().provide(moduleFixture);
     await app.init();
-  });
-
-  beforeEach(() => {
-    jest.resetAllMocks();
   });
 
   afterAll(async () => {
@@ -170,9 +176,9 @@ describe('CounterfactualSafesController', () => {
   describe('Get Counterfactual Safes', () => {
     it('should return all the Counterfactual Safes associated with the account address', async () => {
       const address = getAddress(faker.finance.ethereumAddress());
-      const counterfactualSafes = Array.from(
-        { length: faker.number.int({ min: 1, max: 4 }) },
+      const counterfactualSafes = faker.helpers.multiple(
         () => counterfactualSafeBuilder().build(),
+        { count: { min: 1, max: 4 } },
       );
       counterfactualSafesDataSource.getCounterfactualSafesForAddress.mockResolvedValue(
         counterfactualSafes,

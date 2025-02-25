@@ -12,14 +12,17 @@ import { IBalancesApiManager } from '@/domain/interfaces/balances-api.manager.in
 import { IConfigApi } from '@/domain/interfaces/config-api.interface';
 import { IPricesApi } from '@/datasources/balances-api/prices-api.interface';
 import { Inject, Injectable } from '@nestjs/common';
-import { intersection } from 'lodash';
+import intersection from 'lodash/intersection';
 import { ITransactionApiManager } from '@/domain/interfaces/transaction-api.manager.interface';
+import { ChainSchema } from '@/domain/chains/entities/schemas/chain.schema';
+import { z } from 'zod';
+import { type Raw, rawify } from '@/validation/entities/raw.entity';
 
 @Injectable()
 export class BalancesApiManager implements IBalancesApiManager {
   private safeBalancesApiMap: Record<string, SafeBalancesApi> = {};
   private readonly isCounterFactualBalancesEnabled: boolean;
-  private readonly zerionChainIds: string[];
+  private readonly zerionChainIds: Array<string>;
   private readonly zerionBalancesApi: IBalancesApi;
   private readonly useVpcUrl: boolean;
 
@@ -39,7 +42,7 @@ export class BalancesApiManager implements IBalancesApiManager {
       this.configurationService.getOrThrow<boolean>(
         'features.counterfactualBalances',
       );
-    this.zerionChainIds = this.configurationService.getOrThrow<string[]>(
+    this.zerionChainIds = this.configurationService.getOrThrow<Array<string>>(
       'features.zerionBalancesChainIds',
     );
     this.useVpcUrl = this.configurationService.getOrThrow<boolean>(
@@ -71,19 +74,21 @@ export class BalancesApiManager implements IBalancesApiManager {
     }
   }
 
-  async getFiatCodes(): Promise<string[]> {
+  async getFiatCodes(): Promise<Raw<Array<string>>> {
     const [zerionFiatCodes, safeFiatCodes] = await Promise.all([
       this.zerionBalancesApi.getFiatCodes(),
       this.coingeckoApi.getFiatCodes(),
-    ]);
-    return intersection(zerionFiatCodes, safeFiatCodes).sort();
+    ]).then(z.array(z.array(z.string())).parse);
+    return rawify(intersection(zerionFiatCodes, safeFiatCodes).sort());
   }
 
   private async _getSafeBalancesApi(chainId: string): Promise<SafeBalancesApi> {
     const safeBalancesApi = this.safeBalancesApiMap[chainId];
     if (safeBalancesApi !== undefined) return safeBalancesApi;
 
-    const chain = await this.configApi.getChain(chainId);
+    const chain = await this.configApi
+      .getChain(chainId)
+      .then(ChainSchema.parse);
     this.safeBalancesApiMap[chainId] = new SafeBalancesApi(
       chainId,
       this.useVpcUrl ? chain.vpcTransactionService : chain.transactionService,

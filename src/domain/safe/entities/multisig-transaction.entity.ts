@@ -1,4 +1,4 @@
-import { DataDecodedSchema } from '@/domain/data-decoder/entities/schemas/data-decoded.schema';
+import { DataDecodedSchema } from '@/domain/data-decoder/v1/entities/schemas/data-decoded.schema';
 import { buildPageSchema } from '@/domain/entities/schemas/page.schema.factory';
 import { SignatureType } from '@/domain/common/entities/signature-type.entity';
 import { Operation } from '@/domain/safe/entities/operation.entity';
@@ -11,7 +11,7 @@ export type Confirmation = z.infer<typeof ConfirmationSchema>;
 
 export type MultisigTransaction = z.infer<typeof MultisigTransactionSchema>;
 
-const ConfirmationSchema = z.object({
+export const ConfirmationSchema = z.object({
   owner: AddressSchema,
   submissionDate: z.coerce.date(),
   transactionHash: HexSchema.nullish().default(null),
@@ -31,6 +31,7 @@ export const MultisigTransactionSchema = z.object({
   baseGas: z.number().nullish().default(null),
   gasPrice: NumericStringSchema.nullish().default(null),
   proposer: AddressSchema.nullish().default(null),
+  proposedByDelegate: AddressSchema.nullish().default(null),
   refundReceiver: AddressSchema.nullish().default(null),
   nonce: z.number(),
   executionDate: z.coerce.date().nullish().default(null),

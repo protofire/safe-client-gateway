@@ -91,14 +91,20 @@ export class TwapOrderMapper {
     // to avoid requesting too many orders
     const hasAbundantParts = twapParts.length > this.maxNumberOfParts;
 
-    // Fetch all order parts if the transaction has been executed, otherwise none
-    const partsToFetch = transaction.executionDate
-      ? hasAbundantParts
-        ? // We use the last part (and only one) to get the amounts/fees of the entire
-          // order and we only need one to get the token info
-          twapParts.slice(-1)
-        : twapParts
-      : [];
+    let partsToFetch: Array<GPv2OrderParameters>;
+
+    // If the transaction is not executed, there are no parts to fetch
+    if (!transaction.executionDate) {
+      partsToFetch = [];
+    } else {
+      // Otherwise, fetch parts to get amounts/fees of order/token info
+      if (!hasAbundantParts) {
+        partsToFetch = twapParts;
+      } else {
+        // Can use the last part to get the amounts/fees for entire order
+        partsToFetch = twapParts.slice(-1);
+      }
+    }
 
     const activePart = this.getActivePart({
       twapParts,
@@ -138,10 +144,10 @@ export class TwapOrderMapper {
         ? null
         : this.getExecutedBuyAmount(partOrders).toString();
 
-    const executedSurplusFee: TwapOrderInfo['executedSurplusFee'] =
+    const executedFee: TwapOrderInfo['executedFee'] =
       hasAbundantParts || !partOrders
         ? null
-        : this.getExecutedSurplusFee(partOrders).toString();
+        : this.getExecutedFee(partOrders).toString();
 
     const [sellToken, buyToken] = await Promise.all([
       this.swapOrderHelper.getToken({
@@ -164,7 +170,18 @@ export class TwapOrderMapper {
       buyAmount: twapOrderData.buyAmount,
       executedSellAmount,
       executedBuyAmount,
-      executedSurplusFee,
+      executedSurplusFee: executedFee,
+      executedFee,
+      // TODO: still tbd by CoW but this will be expressed in SURPLUS tokens
+      // (BUY tokens for SELL orders and SELL tokens for BUY orders)
+      executedFeeToken: new TokenInfo({
+        address: sellToken.address,
+        decimals: sellToken.decimals,
+        logoUri: sellToken.logoUri,
+        name: sellToken.name,
+        symbol: sellToken.symbol,
+        trusted: sellToken.trusted,
+      }),
       sellToken: new TokenInfo({
         address: sellToken.address,
         decimals: sellToken.decimals,
@@ -318,9 +335,9 @@ export class TwapOrderMapper {
     }, BigInt(0));
   }
 
-  private getExecutedSurplusFee(orders: Array<KnownOrder>): bigint {
+  private getExecutedFee(orders: Array<KnownOrder>): bigint {
     return orders.reduce((acc, order) => {
-      return acc + BigInt(order.executedSurplusFee ?? BigInt(0));
+      return acc + BigInt(order.executedFee ?? BigInt(0));
     }, BigInt(0));
   }
 }
