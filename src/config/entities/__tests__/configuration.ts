@@ -159,6 +159,15 @@ export default (): ReturnType<typeof configuration> => ({
     pushNotifications: false,
     hookHttpPostEvent: false,
     improvedAddressPoisoning: false,
+    signatureVerification: {
+      api: true,
+      proposal: true,
+    },
+    hashVerification: {
+      api: true,
+      proposal: true,
+    },
+    ethSign: true,
   },
   httpClient: { requestTimeout: faker.number.int() },
   locking: {
@@ -283,5 +292,8 @@ export default (): ReturnType<typeof configuration> => ({
         baseDir: 'assets/targeted-messaging',
       },
     },
+  },
+  users: {
+    maxInvites: faker.number.int({ min: 5, max: 10 }),
   },
 });

@@ -13,6 +13,12 @@ import type { MultisigTransactionInfoMapper } from '@/routes/transactions/mapper
 import { MultisigTransactionDetailsMapper } from '@/routes/transactions/mappers/multisig-transactions/multisig-transaction-details.mapper';
 import type { MultisigTransactionExecutionDetailsMapper } from '@/routes/transactions/mappers/multisig-transactions/multisig-transaction-execution-details.mapper';
 import type { MultisigTransactionStatusMapper } from '@/routes/transactions/mappers/multisig-transactions/multisig-transaction-status.mapper';
+import type { IConfigurationService } from '@/config/configuration.service.interface';
+import { TransactionVerifierHelper } from '@/routes/transactions/helpers/transaction-verifier.helper';
+import type { DelegatesV2Repository } from '@/domain/delegate/v2/delegates.v2.repository';
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
+import type { ILoggingService } from '@/logging/logging.interface';
+import { SignatureType } from '@/domain/common/entities/signature-type.entity';
 
 const addressInfoHelper = jest.mocked({
   getOrDefault: jest.fn(),
@@ -43,11 +49,31 @@ const multisigTransactionNoteMapper = jest.mocked({
   mapTxNote: jest.fn(),
 });
 
+const mockConfigurationService = jest.mocked({
+  getOrThrow: jest.fn(),
+} as jest.MockedObjectDeep<IConfigurationService>);
+
+const mockDelegatesRepository = jest.mocked({
+  getDelegates: jest.fn(),
+} as jest.MockedObjectDeep<DelegatesV2Repository>);
+
+const mockLoggingService = {
+  error: jest.fn(),
+} as jest.MockedObjectDeep<ILoggingService>;
+
 describe('MultisigTransactionDetails mapper (Unit)', () => {
   let mapper: MultisigTransactionDetailsMapper;
 
-  beforeEach(() => {
-    jest.resetAllMocks();
+  function initTarget(ethSign: boolean): void {
+    mockConfigurationService.getOrThrow.mockImplementation((key) => {
+      return [
+        'features.hashVerification.api',
+        'features.signatureVerification.api',
+        'features.hashVerification.proposal',
+        'features.signatureVerification.proposal',
+        ethSign ? 'features.ethSign' : null,
+      ].includes(key);
+    });
     mapper = new MultisigTransactionDetailsMapper(
       addressInfoHelper,
       statusMapper,
@@ -56,15 +82,33 @@ describe('MultisigTransactionDetails mapper (Unit)', () => {
       safeAppInfoMapper,
       multisigExecutionDetailsMapper,
       multisigTransactionNoteMapper,
+      new TransactionVerifierHelper(
+        mockConfigurationService,
+        mockDelegatesRepository,
+        mockLoggingService,
+      ),
     );
+  }
+
+  beforeEach(() => {
+    jest.resetAllMocks();
+
+    initTarget(true);
   });
 
   it('should return a TransactionDetails object with null addressInfoIndex', async () => {
     const chainId = faker.string.numeric();
-    const safe = safeBuilder().build();
-    const transaction = multisigTransactionBuilder()
+    const privateKey = generatePrivateKey();
+    const signer = privateKeyToAccount(privateKey);
+    const safe = safeBuilder().with('owners', [signer.address]).build();
+    const transaction = await multisigTransactionBuilder()
       .with('safe', safe.address)
-      .build();
+      .with('isExecuted', false)
+      .buildWithConfirmations({
+        chainId,
+        safe,
+        signers: [signer],
+      });
     const txStatus = faker.helpers.objectValue(TransactionStatus);
     statusMapper.mapTransactionStatus.mockReturnValue(txStatus);
     const txInfo = transferTransactionInfoBuilder().build();
@@ -105,10 +149,17 @@ describe('MultisigTransactionDetails mapper (Unit)', () => {
 
   it('should return a TransactionDetails object with non-null addressInfoIndex', async () => {
     const chainId = faker.string.numeric();
-    const safe = safeBuilder().build();
-    const transaction = multisigTransactionBuilder()
+    const privateKey = generatePrivateKey();
+    const signer = privateKeyToAccount(privateKey);
+    const safe = safeBuilder().with('owners', [signer.address]).build();
+    const transaction = await multisigTransactionBuilder()
       .with('safe', safe.address)
-      .build();
+      .with('isExecuted', false)
+      .buildWithConfirmations({
+        chainId,
+        safe,
+        signers: [signer],
+      });
     const txStatus = faker.helpers.objectValue(TransactionStatus);
     statusMapper.mapTransactionStatus.mockReturnValue(txStatus);
     const txInfo = transferTransactionInfoBuilder().build();
@@ -151,5 +202,27 @@ describe('MultisigTransactionDetails mapper (Unit)', () => {
       detailedExecutionInfo: multisigExecutionDetails,
       safeAppInfo,
     });
+  });
+
+  it('should block eth_sign', async () => {
+    initTarget(false);
+
+    const chainId = faker.string.numeric();
+    const privateKey = generatePrivateKey();
+    const signer = privateKeyToAccount(privateKey);
+    const safe = safeBuilder().with('owners', [signer.address]).build();
+    const transaction = await multisigTransactionBuilder()
+      .with('safe', safe.address)
+      .with('isExecuted', false)
+      .buildWithConfirmations({
+        chainId,
+        safe,
+        signers: [signer],
+        signatureType: SignatureType.EthSign,
+      });
+
+    await expect(mapper.mapDetails(chainId, transaction, safe)).rejects.toThrow(
+      'eth_sign is disabled',
+    );
   });
 });

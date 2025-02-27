@@ -38,6 +38,8 @@ import { TransferDetailsMapper } from '@/routes/transactions/mappers/transfers/t
 import { TransferMapper } from '@/routes/transactions/mappers/transfers/transfer.mapper';
 import { getAddress, isAddress } from 'viem';
 import { LoggingService, ILoggingService } from '@/logging/logging.interface';
+import { MultisigTransactionNoteMapper } from '@/routes/transactions/mappers/multisig-transactions/multisig-transaction-note.mapper';
+import { LogType } from '@/domain/common/entities/log-type.entity';
 
 @Injectable()
 export class TransactionsService {
@@ -51,6 +53,7 @@ export class TransactionsService {
     private readonly transactionPreviewMapper: TransactionPreviewMapper,
     private readonly moduleTransactionDetailsMapper: ModuleTransactionDetailsMapper,
     private readonly multisigTransactionDetailsMapper: MultisigTransactionDetailsMapper,
+    private readonly multisigTransactionNoteMapper: MultisigTransactionNoteMapper,
     private readonly transferDetailsMapper: TransferDetailsMapper,
     @Inject(LoggingService) private readonly loggingService: ILoggingService,
   ) {}
@@ -434,6 +437,10 @@ export class TransactionsService {
     safeAddress: `0x${string}`;
     proposeTransactionDto: ProposeTransactionDto;
   }): Promise<TransactionDetails> {
+    this.logProposeTx(args);
+    args.proposeTransactionDto.origin = this.verifyOrigin(
+      args.proposeTransactionDto,
+    );
     await this.safeRepository.proposeTransaction(args);
 
     const safe = await this.safeRepository.getSafe({
@@ -533,5 +540,33 @@ export class TransactionsService {
     page: Page<DomainMultisigTransaction>,
   ): number | null {
     return page.results.at(-1)?.nonce ?? null;
+  }
+
+  private verifyOrigin(transaction: ProposeTransactionDto): string | null {
+    if (transaction.origin) {
+      try {
+        const note = this.multisigTransactionNoteMapper.mapTxNote(transaction);
+
+        const origin = JSON.parse(transaction.origin);
+        origin.note = note;
+
+        return JSON.stringify(origin);
+      } catch {
+        // If the origin is not a valid JSON, we return null
+      }
+    }
+
+    return null;
+  }
+
+  private logProposeTx(
+    args: Parameters<TransactionsService['proposeTransaction']>[0],
+  ): void {
+    this.loggingService.info({
+      ...args.proposeTransactionDto,
+      safeAddress: args.safeAddress,
+      chainId: args.chainId,
+      type: LogType.TransactionPropose,
+    });
   }
 }
