@@ -43,7 +43,7 @@ describe('OrganizationController', () => {
   let app: INestApplication<Server>;
   let jwtService: IJwtService;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     jest.resetAllMocks();
 
     const defaultConfiguration = configuration();
@@ -606,7 +606,7 @@ describe('OrganizationController', () => {
             statusCode: 401,
             error: 'Unauthorized',
             message:
-              'User is unauthorized. SignerAddress= ' +
+              'User is unauthorized. signer_address= ' +
               authPayloadDto.signer_address,
           }),
         );
@@ -633,12 +633,14 @@ describe('OrganizationController', () => {
       await request(app.getHttpServer())
         .post(`/v1/organizations/${organizationId}/members/invite`)
         .set('Cookie', [`access_token=${adminAccessToken}`])
-        .send([
-          {
-            role: 'MEMBER',
-            address: memberAuthPayloadDto.signer_address,
-          },
-        ])
+        .send({
+          users: [
+            {
+              role: 'MEMBER',
+              address: memberAuthPayloadDto.signer_address,
+            },
+          ],
+        })
         .expect(201);
 
       await request(app.getHttpServer())
@@ -653,7 +655,7 @@ describe('OrganizationController', () => {
           statusCode: 401,
           error: 'Unauthorized',
           message:
-            'User is unauthorized. SignerAddress= ' +
+            'User is unauthorized. signer_address= ' +
             memberAuthPayloadDto.signer_address,
         });
     });
@@ -691,7 +693,7 @@ describe('OrganizationController', () => {
           statusCode: 401,
           error: 'Unauthorized',
           message:
-            'User is unauthorized. SignerAddress= ' +
+            'User is unauthorized. signer_address= ' +
             nonMemberAuthPayloadDto.signer_address,
         });
     });
@@ -743,7 +745,7 @@ describe('OrganizationController', () => {
             statusCode: 401,
             error: 'Unauthorized',
             message:
-              'User is unauthorized. SignerAddress= ' +
+              'User is unauthorized. signer_address= ' +
               authPayloadDto.signer_address,
           }),
         );
@@ -769,12 +771,14 @@ describe('OrganizationController', () => {
       await request(app.getHttpServer())
         .post(`/v1/organizations/${organizationId}/members/invite`)
         .set('Cookie', [`access_token=${adminAccessToken}`])
-        .send([
-          {
-            role: 'MEMBER',
-            address: memberAuthPayloadDto.signer_address,
-          },
-        ])
+        .send({
+          users: [
+            {
+              role: 'MEMBER',
+              address: memberAuthPayloadDto.signer_address,
+            },
+          ],
+        })
         .expect(201);
 
       await request(app.getHttpServer())
@@ -785,7 +789,7 @@ describe('OrganizationController', () => {
           statusCode: 401,
           error: 'Unauthorized',
           message:
-            'User is unauthorized. SignerAddress= ' +
+            'User is unauthorized. signer_address= ' +
             memberAuthPayloadDto.signer_address,
         });
     });
@@ -818,7 +822,7 @@ describe('OrganizationController', () => {
           statusCode: 401,
           error: 'Unauthorized',
           message:
-            'User is unauthorized. SignerAddress= ' +
+            'User is unauthorized. signer_address= ' +
             nonMemberAuthPayloadDto.signer_address,
         });
     });

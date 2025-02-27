@@ -22,16 +22,16 @@ import { UserOrganizationsService } from '@/routes/organizations/user-organizati
 import { Auth } from '@/routes/auth/decorators/auth.decorator';
 import { AuthGuard } from '@/routes/auth/guards/auth.guard';
 import { ValidationPipe } from '@/validation/pipes/validation.pipe';
-import { InviteUsersDtoSchema } from '@/routes/organizations/entities/invite-users.dto.entity';
+import {
+  InviteUsersDto,
+  InviteUsersDtoSchema,
+} from '@/routes/organizations/entities/invite-users.dto.entity';
 import { UpdateRoleDtoSchema } from '@/routes/organizations/entities/update-role.dto.entity';
 import { RowSchema } from '@/datasources/db/v1/entities/row.entity';
 import { UserOrganizationsDto } from '@/routes/organizations/entities/user-organizations.dto.entity';
 import { Invitation } from '@/routes/organizations/entities/invitation.entity';
 import type { AuthPayload } from '@/domain/auth/entities/auth-payload.entity';
-import type { Organization } from '@/domain/organizations/entities/organization.entity';
-import type { InviteUsersDto } from '@/routes/organizations/entities/invite-users.dto.entity';
-import type { UpdateRoleDto } from '@/routes/organizations/entities/update-role.dto.entity';
-import type { User } from '@/domain/users/entities/user.entity';
+import { UpdateRoleDto } from '@/routes/organizations/entities/update-role.dto.entity';
 
 @ApiTags('organizations')
 @Controller({ path: 'organizations', version: '1' })
@@ -57,7 +57,7 @@ export class UserOrganizationsController {
   public async inviteUser(
     @Auth() authPayload: AuthPayload,
     @Param('orgId', ParseIntPipe, new ValidationPipe(RowSchema.shape.id))
-    orgId: Organization['id'],
+    orgId: number,
     @Body(new ValidationPipe(InviteUsersDtoSchema))
     inviteUsersDto: InviteUsersDto,
   ): Promise<Array<Invitation>> {
@@ -79,7 +79,7 @@ export class UserOrganizationsController {
   public async acceptInvite(
     @Auth() authPayload: AuthPayload,
     @Param('orgId', ParseIntPipe, new ValidationPipe(RowSchema.shape.id))
-    orgId: Organization['id'],
+    orgId: number,
   ): Promise<void> {
     return await this.userOrgService.acceptInvite({
       authPayload,
@@ -98,7 +98,7 @@ export class UserOrganizationsController {
   public async declineInvite(
     @Auth() authPayload: AuthPayload,
     @Param('orgId', ParseIntPipe, new ValidationPipe(RowSchema.shape.id))
-    orgId: Organization['id'],
+    orgId: number,
   ): Promise<void> {
     return await this.userOrgService.declineInvite({
       authPayload,
@@ -119,7 +119,7 @@ export class UserOrganizationsController {
   public async getUsers(
     @Auth() authPayload: AuthPayload,
     @Param('orgId', ParseIntPipe, new ValidationPipe(RowSchema.shape.id))
-    orgId: Organization['id'],
+    orgId: number,
   ): Promise<UserOrganizationsDto> {
     return await this.userOrgService.get({
       authPayload,
@@ -140,9 +140,9 @@ export class UserOrganizationsController {
   public async updateRole(
     @Auth() authPayload: AuthPayload,
     @Param('orgId', ParseIntPipe, new ValidationPipe(RowSchema.shape.id))
-    orgId: Organization['id'],
+    orgId: number,
     @Param('userId', ParseIntPipe, new ValidationPipe(RowSchema.shape.id))
-    userId: User['id'],
+    userId: number,
     @Body(new ValidationPipe(UpdateRoleDtoSchema))
     updateRoleDto: UpdateRoleDto,
   ): Promise<void> {
@@ -166,9 +166,9 @@ export class UserOrganizationsController {
   public async removeUser(
     @Auth() authPayload: AuthPayload,
     @Param('orgId', ParseIntPipe, new ValidationPipe(RowSchema.shape.id))
-    orgId: Organization['id'],
+    orgId: number,
     @Param('userId', ParseIntPipe, new ValidationPipe(RowSchema.shape.id))
-    userId: User['id'],
+    userId: number,
   ): Promise<void> {
     return await this.userOrgService.removeUser({
       authPayload,
