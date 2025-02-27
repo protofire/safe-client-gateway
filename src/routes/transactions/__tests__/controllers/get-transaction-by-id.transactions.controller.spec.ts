@@ -16,11 +16,6 @@ import {
   toJson as moduleTransactionToJson,
 } from '@/domain/safe/entities/__tests__/module-transaction.builder';
 import {
-  confirmationBuilder,
-  eoaConfirmationBuilder,
-  ethSignConfirmationBuilder,
-} from '@/domain/safe/entities/__tests__/multisig-transaction-confirmation.builder';
-import {
   multisigTransactionBuilder,
   toJson as multisigToJson,
 } from '@/domain/safe/entities/__tests__/multisig-transaction.builder';
@@ -51,19 +46,17 @@ import { TestPostgresDatabaseModuleV2 } from '@/datasources/db/v2/test.postgres-
 import { TestTargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/__tests__/test.targeted-messaging.datasource.module';
 import { TargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/targeted-messaging.datasource.module';
 import { rawify } from '@/validation/entities/raw.entity';
-import { getSafeTxHash } from '@/domain/common/utils/safe';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
+import { SignatureType } from '@/domain/common/entities/signature-type.entity';
 
 describe('Get by id - Transactions Controller (Unit)', () => {
   let app: INestApplication<Server>;
   let safeConfigUrl: string;
   let networkService: jest.MockedObjectDeep<INetworkService>;
 
-  beforeEach(async () => {
-    jest.resetAllMocks();
-
+  async function initApp(config: typeof configuration): Promise<void> {
     const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule.register(configuration)],
+      imports: [AppModule.register(config)],
     })
       .overrideModule(PostgresDatabaseModule)
       .useModule(TestPostgresDatabaseModule)
@@ -89,6 +82,21 @@ describe('Get by id - Transactions Controller (Unit)', () => {
 
     app = await new TestAppProvider().provide(moduleFixture);
     await app.init();
+  }
+
+  beforeEach(async () => {
+    jest.resetAllMocks();
+
+    const baseConfiguration = configuration();
+    const testConfiguration = (): typeof baseConfiguration => ({
+      ...baseConfiguration,
+      features: {
+        ...baseConfiguration.features,
+        ethSign: true,
+      },
+    });
+
+    await initApp(testConfiguration);
   });
 
   afterAll(async () => {
@@ -425,17 +433,22 @@ describe('Get by id - Transactions Controller (Unit)', () => {
   it('Get an Multisig Transaction by ID', async () => {
     const chainId = faker.string.numeric();
     const chain = chainBuilder().with('chainId', chainId).build();
-    const safeOwners = [
-      getAddress(faker.finance.ethereumAddress()),
-      getAddress(faker.finance.ethereumAddress()),
-    ];
-    const safe = safeBuilder().with('owners', safeOwners).build();
+    const signers = Array.from({ length: 2 }, () => {
+      const privateKey = generatePrivateKey();
+      return privateKeyToAccount(privateKey);
+    });
+    const safe = safeBuilder()
+      .with(
+        'owners',
+        signers.map((signer) => signer.address),
+      )
+      .build();
     const contract = contractBuilder().build();
     const executionDate = faker.date.recent();
     const safeTxGas = faker.number.int();
     const gasPrice = faker.string.numeric();
     const baseGas = faker.number.int();
-    const tx = (await multisigTransactionBuilder())
+    const tx = await multisigTransactionBuilder()
       .with('safe', safe.address)
       .with('operation', 0)
       .with('data', faker.string.hexadecimal({ length: 32 }) as `0x${string}`)
@@ -445,20 +458,12 @@ describe('Get by id - Transactions Controller (Unit)', () => {
       .with('safeTxGas', safeTxGas)
       .with('gasPrice', gasPrice)
       .with('baseGas', baseGas)
-      .build();
-    tx.safeTxHash = getSafeTxHash({ transaction: tx, safe, chainId });
-    tx.confirmations = await Promise.all(
-      Array.from({ length: 2 }, async () => {
-        return (await confirmationBuilder()).build();
-      }),
-    );
-    const rejectionTx = (await multisigTransactionBuilder()).build();
-    rejectionTx.safeTxHash = getSafeTxHash({
-      transaction: rejectionTx,
-      safe,
-      chainId,
-    });
-    rejectionTx.confirmations = [(await confirmationBuilder()).build()];
+      .buildWithConfirmations({
+        chainId,
+        safe,
+        signers,
+      });
+    const rejectionTx = multisigTransactionBuilder().build();
     const rejectionTxsPage = pageBuilder()
       .with('results', [multisigToJson(rejectionTx)])
       .build();
@@ -561,8 +566,8 @@ describe('Get by id - Transactions Controller (Unit)', () => {
             safeTxHash: tx.safeTxHash,
             executor: expect.objectContaining({ value: tx.executor }),
             signers: [
-              expect.objectContaining({ value: safeOwners[0] }),
-              expect.objectContaining({ value: safeOwners[1] }),
+              expect.objectContaining({ value: safe.owners[0] }),
+              expect.objectContaining({ value: safe.owners[1] }),
             ],
             confirmationsRequired: tx.confirmationsRequired,
             confirmations: [
@@ -603,18 +608,22 @@ describe('Get by id - Transactions Controller (Unit)', () => {
   it('Get an Multisig Transaction by safeTxHash', async () => {
     const chainId = faker.string.numeric();
     const chain = chainBuilder().with('chainId', chainId).build();
-    const privateKey1 = generatePrivateKey();
-    const signer1 = privateKeyToAccount(privateKey1);
-    const privateKey2 = generatePrivateKey();
-    const signer2 = privateKeyToAccount(privateKey2);
-    const safeOwners = [signer1.address, signer2.address];
-    const safe = safeBuilder().with('owners', safeOwners).build();
+    const signers = Array.from({ length: 2 }, () => {
+      const privateKey = generatePrivateKey();
+      return privateKeyToAccount(privateKey);
+    });
+    const safe = safeBuilder()
+      .with(
+        'owners',
+        signers.map((signer) => signer.address),
+      )
+      .build();
     const contract = contractBuilder().build();
     const executionDate = faker.date.recent();
     const safeTxGas = faker.number.int();
     const gasPrice = faker.string.numeric();
     const baseGas = faker.number.int();
-    const tx = (await multisigTransactionBuilder())
+    const tx = await multisigTransactionBuilder()
       .with('safe', safe.address)
       .with('operation', 0)
       .with('data', faker.string.hexadecimal({ length: 32 }) as `0x${string}`)
@@ -624,29 +633,18 @@ describe('Get by id - Transactions Controller (Unit)', () => {
       .with('safeTxGas', safeTxGas)
       .with('gasPrice', gasPrice)
       .with('baseGas', baseGas)
-      .build();
-    tx.safeTxHash = getSafeTxHash({ transaction: tx, safe, chainId });
-    const signature1 = await signer1.sign({ hash: tx.safeTxHash });
-    const signature2 = await signer2.sign({ hash: tx.safeTxHash });
-    tx.confirmations = [
-      (await eoaConfirmationBuilder(tx.safeTxHash))
-        .with('owner', signer1.address)
-        .with('signature', signature1)
-        .build(),
-      (await eoaConfirmationBuilder(tx.safeTxHash))
-        .with('owner', signer2.address)
-        .with('signature', signature2)
-        .build(),
-    ];
-    const rejectionTx = (await multisigTransactionBuilder()).build();
-    rejectionTx.safeTxHash = getSafeTxHash({
-      transaction: rejectionTx,
-      safe,
-      chainId,
-    });
-    rejectionTx.confirmations = [
-      (await confirmationBuilder(rejectionTx.safeTxHash)).build(),
-    ];
+      .buildWithConfirmations({
+        signers,
+        chainId: chain.chainId,
+        safe,
+      });
+    const rejectionTx = await multisigTransactionBuilder()
+      .with('safe', safe.address)
+      .buildWithConfirmations({
+        signers: [signers[0]],
+        chainId: chain.chainId,
+        safe,
+      });
     const rejectionTxsPage = pageBuilder()
       .with('results', [multisigToJson(rejectionTx)])
       .build();
@@ -749,8 +747,8 @@ describe('Get by id - Transactions Controller (Unit)', () => {
             safeTxHash: tx.safeTxHash,
             executor: expect.objectContaining({ value: tx.executor }),
             signers: [
-              expect.objectContaining({ value: safeOwners[0] }),
-              expect.objectContaining({ value: safeOwners[1] }),
+              expect.objectContaining({ value: safe.owners[0] }),
+              expect.objectContaining({ value: safe.owners[1] }),
             ],
             confirmationsRequired: tx.confirmationsRequired,
             confirmations: [
@@ -791,13 +789,15 @@ describe('Get by id - Transactions Controller (Unit)', () => {
   it('Get a CANCELLED Multisig Transaction by ID', async () => {
     const chainId = faker.string.numeric();
     const chain = chainBuilder().with('chainId', chainId).build();
-    const privateKey1 = generatePrivateKey();
-    const signer1 = privateKeyToAccount(privateKey1);
-    const privateKey2 = generatePrivateKey();
-    const signer2 = privateKeyToAccount(privateKey2);
-    const safeOwners = [signer1.address, signer2.address];
+    const signers = Array.from({ length: 2 }, () => {
+      const privateKey = generatePrivateKey();
+      return privateKeyToAccount(privateKey);
+    });
     const safe = safeBuilder()
-      .with('owners', safeOwners)
+      .with(
+        'owners',
+        signers.map((signer) => signer.address),
+      )
       .with('nonce', 5)
       .build();
     const contract = contractBuilder().build();
@@ -805,7 +805,7 @@ describe('Get by id - Transactions Controller (Unit)', () => {
     const safeTxGas = faker.number.int();
     const gasPrice = faker.string.numeric();
     const baseGas = faker.number.int();
-    const tx = (await multisigTransactionBuilder())
+    const tx = await multisigTransactionBuilder()
       .with('safe', safe.address)
       .with('operation', 0)
       .with('nonce', 4)
@@ -816,31 +816,18 @@ describe('Get by id - Transactions Controller (Unit)', () => {
       .with('safeTxGas', safeTxGas)
       .with('gasPrice', gasPrice)
       .with('baseGas', baseGas)
-      .build();
-    tx.safeTxHash = getSafeTxHash({ transaction: tx, safe, chainId });
-    const signature1 = await signer1.sign({ hash: tx.safeTxHash });
-    const signature2 = await signer2.sign({ hash: tx.safeTxHash });
-    tx.confirmations = [
-      (await eoaConfirmationBuilder(tx.safeTxHash))
-        .with('owner', signer1.address)
-        .with('signature', signature1)
-        .build(),
-      (await eoaConfirmationBuilder(tx.safeTxHash))
-        .with('owner', signer2.address)
-        .with('signature', signature2)
-        .build(),
-    ];
-    const rejectionTx = (await multisigTransactionBuilder()).build();
-    rejectionTx.safeTxHash = getSafeTxHash({
-      transaction: rejectionTx,
-      safe,
-      chainId,
-    });
-    rejectionTx.confirmations = await Promise.all(
-      Array.from({ length: 2 }, async () => {
-        return (await confirmationBuilder()).build();
-      }),
-    );
+      .buildWithConfirmations({
+        chainId: chain.chainId,
+        signers,
+        safe,
+      });
+    const rejectionTx = await multisigTransactionBuilder()
+      .with('safe', safe.address)
+      .buildWithConfirmations({
+        chainId: chain.chainId,
+        signers,
+        safe,
+      });
     const rejectionTxsPage = pageBuilder()
       .with('results', [multisigToJson(rejectionTx)])
       .build();
@@ -938,8 +925,8 @@ describe('Get by id - Transactions Controller (Unit)', () => {
             safeTxHash: tx.safeTxHash,
             executor: expect.objectContaining({ value: tx.executor }),
             signers: expect.arrayContaining([
-              expect.objectContaining({ value: safeOwners[0] }),
-              expect.objectContaining({ value: safeOwners[1] }),
+              expect.objectContaining({ value: safe.owners[0] }),
+              expect.objectContaining({ value: safe.owners[1] }),
             ]),
             confirmationsRequired: tx.confirmationsRequired,
             confirmations: expect.arrayContaining([
@@ -989,7 +976,7 @@ describe('Get by id - Transactions Controller (Unit)', () => {
         getAddress(faker.finance.ethereumAddress()),
       ])
       .build();
-    const multisigTransaction = (await multisigTransactionBuilder())
+    const multisigTransaction = multisigTransactionBuilder()
       .with('safe', safe.address)
       .with('isExecuted', false)
       .build();
@@ -1025,27 +1012,23 @@ describe('Get by id - Transactions Controller (Unit)', () => {
   });
 
   it('should return a 502 if there are duplicate owners in a confirmation', async () => {
-    const chainId = faker.string.numeric();
-    const chain = chainBuilder().with('chainId', chainId).build();
+    const chain = chainBuilder().build();
+    const privateKey = generatePrivateKey();
+    const signer = privateKeyToAccount(privateKey);
     const safe = safeBuilder()
       .with('owners', [
-        getAddress(faker.finance.ethereumAddress()),
+        signer.address,
         getAddress(faker.finance.ethereumAddress()),
       ])
       .build();
-    const multisigTransaction = (await multisigTransactionBuilder())
+    const multisigTransaction = await multisigTransactionBuilder()
       .with('safe', safe.address)
       .with('isExecuted', false)
-      .build();
-    multisigTransaction.safeTxHash = getSafeTxHash({
-      transaction: multisigTransaction,
-      safe,
-      chainId,
-    });
-    const confirmation = (
-      await confirmationBuilder(multisigTransaction.safeTxHash)
-    ).build();
-    multisigTransaction.confirmations = [confirmation, confirmation];
+      .buildWithConfirmations({
+        chainId: chain.chainId,
+        safe,
+        signers: [signer, signer],
+      });
     const getSafeUrl = `${chain.transactionService}/api/v1/safes/${safe.address}`;
     const getChainUrl = `${safeConfigUrl}/api/v1/chains/${chain.chainId}`;
     const getMultisigTransactionUrl = `${chain.transactionService}/api/v1/multisig-transactions/${multisigTransaction.safeTxHash}/`;
@@ -1071,40 +1054,34 @@ describe('Get by id - Transactions Controller (Unit)', () => {
       )
       .expect(502)
       .expect({
-        message: 'Duplicate owners',
+        message: 'Duplicate owners in confirmations',
         error: 'Bad Gateway',
         statusCode: 502,
       });
   });
 
   it('should return a 502 if there are duplicate signatures in a confirmation', async () => {
-    const chainId = faker.string.numeric();
-    const chain = chainBuilder().with('chainId', chainId).build();
+    const chain = chainBuilder().build();
+    const privateKey = generatePrivateKey();
+    const signer = privateKeyToAccount(privateKey);
     const safe = safeBuilder()
       .with('owners', [
-        getAddress(faker.finance.ethereumAddress()),
+        signer.address,
         getAddress(faker.finance.ethereumAddress()),
       ])
       .build();
-    const multisigTransaction = (await multisigTransactionBuilder())
+    const multisigTransaction = await multisigTransactionBuilder()
       .with('safe', safe.address)
       .with('isExecuted', false)
-      .build();
-    multisigTransaction.safeTxHash = getSafeTxHash({
-      transaction: multisigTransaction,
-      safe,
-      chainId,
+      .buildWithConfirmations({
+        chainId: chain.chainId,
+        safe,
+        signers: [signer],
+      });
+    multisigTransaction.confirmations!.push({
+      ...multisigTransaction.confirmations![0],
+      owner: getAddress(faker.finance.ethereumAddress()),
     });
-    const confirmation = (
-      await confirmationBuilder(multisigTransaction.safeTxHash)
-    ).build();
-    multisigTransaction.confirmations = [
-      confirmation,
-      {
-        ...confirmation,
-        owner: safe.owners[0],
-      },
-    ];
     const getSafeUrl = `${chain.transactionService}/api/v1/safes/${safe.address}`;
     const getChainUrl = `${safeConfigUrl}/api/v1/chains/${chain.chainId}`;
     const getMultisigTransactionUrl = `${chain.transactionService}/api/v1/multisig-transactions/${multisigTransaction.safeTxHash}/`;
@@ -1130,7 +1107,7 @@ describe('Get by id - Transactions Controller (Unit)', () => {
       )
       .expect(502)
       .expect({
-        message: 'Duplicate signatures',
+        message: 'Duplicate signatures in confirmations',
         error: 'Bad Gateway',
         statusCode: 502,
       });
@@ -1138,28 +1115,27 @@ describe('Get by id - Transactions Controller (Unit)', () => {
 
   it('should return a 502 if there are invalid EOA confirmations', async () => {
     const chainId = faker.string.numeric();
+    const privateKey = generatePrivateKey();
+    const signer = privateKeyToAccount(privateKey);
     const chain = chainBuilder().with('chainId', chainId).build();
     const safe = safeBuilder()
       .with('owners', [
-        getAddress(faker.finance.ethereumAddress()),
+        signer.address,
         getAddress(faker.finance.ethereumAddress()),
       ])
       .build();
-    const multisigTransaction = (await multisigTransactionBuilder())
+    const multisigTransaction = await multisigTransactionBuilder()
       .with('safe', safe.address)
       .with('isExecuted', false)
-      .build();
-    multisigTransaction.safeTxHash = getSafeTxHash({
-      transaction: multisigTransaction,
-      safe,
-      chainId,
-    });
-    const confirmation = (
-      await eoaConfirmationBuilder(multisigTransaction.safeTxHash)
-    )
-      .with('owner', getAddress(faker.finance.ethereumAddress()))
-      .build();
-    multisigTransaction.confirmations = [confirmation];
+      .buildWithConfirmations({
+        chainId: chain.chainId,
+        signers: [signer],
+        safe,
+        signatureType: SignatureType.Eoa,
+      });
+    multisigTransaction.confirmations![0].owner = getAddress(
+      faker.finance.ethereumAddress(),
+    );
     const getSafeUrl = `${chain.transactionService}/api/v1/safes/${safe.address}`;
     const getChainUrl = `${safeConfigUrl}/api/v1/chains/${chain.chainId}`;
     const getMultisigTransactionUrl = `${chain.transactionService}/api/v1/multisig-transactions/${multisigTransaction.safeTxHash}/`;
@@ -1185,7 +1161,7 @@ describe('Get by id - Transactions Controller (Unit)', () => {
       )
       .expect(502)
       .expect({
-        message: 'Invalid EOA signature',
+        message: 'Invalid signature',
         error: 'Bad Gateway',
         statusCode: 502,
       });
@@ -1193,28 +1169,27 @@ describe('Get by id - Transactions Controller (Unit)', () => {
 
   it('should return a 502 if there are invalid ETH_SIGN confirmations', async () => {
     const chainId = faker.string.numeric();
+    const privateKey = generatePrivateKey();
+    const signer = privateKeyToAccount(privateKey);
     const chain = chainBuilder().with('chainId', chainId).build();
     const safe = safeBuilder()
       .with('owners', [
-        getAddress(faker.finance.ethereumAddress()),
+        signer.address,
         getAddress(faker.finance.ethereumAddress()),
       ])
       .build();
-    const multisigTransaction = (await multisigTransactionBuilder())
+    const multisigTransaction = await multisigTransactionBuilder()
       .with('safe', safe.address)
       .with('isExecuted', false)
-      .build();
-    multisigTransaction.safeTxHash = getSafeTxHash({
-      transaction: multisigTransaction,
-      safe,
-      chainId,
-    });
-    const confirmation = (
-      await ethSignConfirmationBuilder(multisigTransaction.safeTxHash)
-    )
-      .with('owner', getAddress(faker.finance.ethereumAddress()))
-      .build();
-    multisigTransaction.confirmations = [confirmation];
+      .buildWithConfirmations({
+        chainId: chain.chainId,
+        signers: [signer],
+        safe,
+        signatureType: SignatureType.EthSign,
+      });
+    multisigTransaction.confirmations![0].owner = getAddress(
+      faker.finance.ethereumAddress(),
+    );
     const getSafeUrl = `${chain.transactionService}/api/v1/safes/${safe.address}`;
     const getChainUrl = `${safeConfigUrl}/api/v1/chains/${chain.chainId}`;
     const getMultisigTransactionUrl = `${chain.transactionService}/api/v1/multisig-transactions/${multisigTransaction.safeTxHash}/`;
@@ -1240,7 +1215,73 @@ describe('Get by id - Transactions Controller (Unit)', () => {
       )
       .expect(502)
       .expect({
-        message: 'Invalid ETH_SIGN signature',
+        message: 'Invalid signature',
+        error: 'Bad Gateway',
+        statusCode: 502,
+      });
+  });
+
+  it('should block eth_sign', async () => {
+    const baseConfiguration = configuration();
+    const testConfiguration = (): typeof baseConfiguration => ({
+      ...baseConfiguration,
+      features: {
+        ...baseConfiguration.features,
+        ethSign: false,
+      },
+    });
+    await initApp(testConfiguration);
+
+    const chain = chainBuilder().build();
+    const signers = Array.from(
+      { length: faker.number.int({ min: 1, max: 5 }) },
+      () => {
+        const privateKey = generatePrivateKey();
+        return privateKeyToAccount(privateKey);
+      },
+    );
+    const safe = safeBuilder()
+      .with(
+        'owners',
+        signers.map((signer) => signer.address),
+      )
+      .build();
+    const multisigTransaction = await multisigTransactionBuilder()
+      .with('safe', safe.address)
+      .with('nonce', safe.nonce)
+      .with('isExecuted', false)
+      .buildWithConfirmations({
+        signers: signers,
+        chainId: chain.chainId,
+        safe,
+        signatureType: SignatureType.EthSign,
+      });
+    const getChainUrl = `${safeConfigUrl}/api/v1/chains/${chain.chainId}`;
+    const getMultisigTransactionUrl = `${chain.transactionService}/api/v1/multisig-transactions/${multisigTransaction.safeTxHash}/`;
+    const getSafeUrl = `${chain.transactionService}/api/v1/safes/${safe.address}`;
+    networkService.get.mockImplementation(({ url }) => {
+      if (url === getChainUrl) {
+        return Promise.resolve({ data: rawify(chain), status: 200 });
+      }
+      if (url === getMultisigTransactionUrl) {
+        return Promise.resolve({
+          data: rawify(multisigToJson(multisigTransaction)),
+          status: 200,
+        });
+      }
+      if (url === getSafeUrl) {
+        return Promise.resolve({ data: rawify(safe), status: 200 });
+      }
+      return Promise.reject(new Error(`Could not match ${url}`));
+    });
+
+    await request(app.getHttpServer())
+      .get(
+        `/v1/chains/${chain.chainId}/transactions/multisig_${safe.address}_${multisigTransaction.safeTxHash}`,
+      )
+      .expect(502)
+      .expect({
+        message: 'eth_sign is disabled',
         error: 'Bad Gateway',
         statusCode: 502,
       });
