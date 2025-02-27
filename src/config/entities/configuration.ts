@@ -6,7 +6,7 @@ import { randomBytes } from 'crypto';
 export default () => ({
   about: {
     name: 'safe-client-gateway',
-    version: process.env.APPLICATION_VERSION || 'v1.58.0',
+    version: process.env.APPLICATION_VERSION || 'v1.72.0',
     buildNumber: process.env.APPLICATION_BUILD_NUMBER,
   },
   accounts: {
