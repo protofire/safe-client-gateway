@@ -443,7 +443,7 @@ export default () => ({
       process.env.SAFE_CONFIG_BASE_URI || 'https://safe-config.safe.global/',
     chains: {
       maxSequentialPages: parseInt(
-        process.env.SAFE_CONFIG_CHAINS_MAX_SEQUENTIAL_PAGES ?? `${3}`,
+        process.env.SAFE_CONFIG_CHAINS_MAX_SEQUENTIAL_PAGES ?? `${20}`,
       ),
     },
   },
