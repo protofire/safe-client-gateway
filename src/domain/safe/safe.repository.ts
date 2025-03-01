@@ -431,27 +431,79 @@ export class SafeRepository implements ISafeRepository {
   async deprecated__getAllSafesByOwner(args: {
     ownerAddress: `0x${string}`;
   }): Promise<{ [chainId: string]: Array<string> }> {
-    const chains = await this.chainsRepository.getAllChains();
-    const allSafeLists = await Promise.all(
-      chains.map(async ({ chainId }) => {
-        const safeList = await this.getSafesByOwner({
-          chainId,
-          ownerAddress: args.ownerAddress,
-        });
+    try {
+      this.loggingService.info({
+        message: 'Starting to fetch all safes by owner',
+        owner_address: args.ownerAddress,
+        method: 'deprecated__getAllSafesByOwner'
+      });
 
+      const chains = await this.chainsRepository.getAllChains();
+      this.loggingService.debug({
+        message: 'Retrieved chains from repository',
+        chains_count: chains.length,
+        chain_ids: chains.map(c => c.chainId),
+        method: 'deprecated__getAllSafesByOwner'
+      });
+
+      const allSafeLists = await Promise.all(
+        chains.map(async ({ chainId }) => {
+          try {
+            this.loggingService.debug({
+              message: 'Fetching safes for chain',
+              chain_id: chainId,
+              owner_address: args.ownerAddress,
+              method: 'deprecated__getAllSafesByOwner'
+            });
+
+            const safeList = await this.getSafesByOwner({
+              chainId,
+              ownerAddress: args.ownerAddress,
+            });
+
+            this.loggingService.debug({
+              message: 'Retrieved safes for chain',
+              chain_id: chainId,
+              safes_count: safeList.safes.length,
+              safes: safeList.safes,
+              method: 'deprecated__getAllSafesByOwner'
+            });
+
+            return {
+              chainId,
+              safeList,
+            };
+          } catch (chainError) {
+            this.loggingService.error({
+              message: 'Failed to fetch safes for specific chain',
+              chain_id: chainId,
+              owner_address: args.ownerAddress,
+              error: chainError instanceof Error ? chainError.message : chainError,
+              stack: chainError instanceof Error ? chainError.stack : undefined,
+              method: 'deprecated__getAllSafesByOwner'
+            });
+            throw chainError;
+          }
+        }),
+      );
+
+      const result = allSafeLists.reduce((acc, { chainId, safeList }) => {
         return {
-          chainId,
-          safeList,
+          ...acc,
+          [chainId]: safeList.safes,
         };
-      }),
-    );
-
-    return allSafeLists.reduce((acc, { chainId, safeList }) => {
-      return {
-        ...acc,
-        [chainId]: safeList.safes,
-      };
-    }, {});
+      }, {});
+      return result;
+    } catch (error) {
+      this.loggingService.error({
+        message: 'Failed to fetch all safes by owner',
+        owner_address: args.ownerAddress,
+        error: error instanceof Error ? error.message : error,
+        stack: error instanceof Error ? error.stack : undefined,
+        method: 'deprecated__getAllSafesByOwner'
+      });
+      throw error;
+    }
   }
 
   async getAllSafesByOwner(args: {
