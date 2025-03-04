@@ -266,9 +266,10 @@ export class TransactionApi implements ITransactionApi {
         expireTimeSeconds: this.defaultExpirationTimeInSeconds,
       });
     } catch (error) {
-      this.loggingService.debug(
-        `Error in retrieving safes - detailed error (${error})`,
-      );
+      this.loggingService.debug({
+        message: {error},
+        method: 'deprecated__getAllSafesByOwner'
+      });
       throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
