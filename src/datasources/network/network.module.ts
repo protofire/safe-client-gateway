@@ -44,8 +44,7 @@ function fetchClientFactory(
       });
     } catch (error) {
       loggingService.debug({
-        message: { error: asError(error), url },
-        method: '_clientFactory'
+        message: { error: asError(error), errorDetailed: error, url , options,  method: '_clientFactory'},
       });
       throw new NetworkRequestError(urlObject, error);
     }
