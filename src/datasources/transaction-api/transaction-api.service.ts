@@ -266,10 +266,6 @@ export class TransactionApi implements ITransactionApi {
         expireTimeSeconds: this.defaultExpirationTimeInSeconds,
       });
     } catch (error) {
-      this.loggingService.debug({
-        message: {error},
-        method: 'deprecated__getAllSafesByOwner'
-      });
       throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
@@ -888,6 +884,10 @@ export class TransactionApi implements ITransactionApi {
         expireTimeSeconds: this.ownersExpirationTimeSeconds,
       });
     } catch (error) {
+      this.loggingService.debug({
+        message: {error},
+        method: 'deprecated__getAllSafesByOwnerTX'
+      });
       throw this.httpErrorFactory.from(this.mapError(error));
     }
   }
