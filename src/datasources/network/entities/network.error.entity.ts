@@ -11,7 +11,6 @@ export class NetworkResponseError extends Error {
     readonly url: URL,
     readonly response: Response,
     readonly data?: unknown,
-    readonly type?: "withResponse" | "withoutResponse"
   ) {
     super();
   }
@@ -25,7 +24,6 @@ export class NetworkRequestError extends Error {
   constructor(
     readonly url: URL | null,
     readonly data?: unknown,
-    readonly type?: "withResponse" | "withoutResponse"
   ) {
     super();
   }

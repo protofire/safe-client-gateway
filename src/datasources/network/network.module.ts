@@ -8,6 +8,7 @@ import {
   NetworkResponseError,
 } from '@/datasources/network/entities/network.error.entity';
 import type { Raw } from '@/validation/entities/raw.entity';
+import { ILoggingService, LoggingService } from '@/logging/logging.interface';
 
 export type FetchClient = <T>(
   url: string,
@@ -20,6 +21,7 @@ export type FetchClient = <T>(
  */
 function fetchClientFactory(
   configurationService: IConfigurationService,
+  loggingService: ILoggingService,
 ): FetchClient {
   const requestTimeout = configurationService.getOrThrow<number>(
     'httpClient.requestTimeout',
@@ -40,14 +42,19 @@ function fetchClientFactory(
         keepalive: true,
       });
     } catch (error) {
-      throw new NetworkRequestError(urlObject, error, "withoutResponse");
+      loggingService.debug({
+        message: { error, url },
+        method: 'No response'
+      });
+      throw new NetworkRequestError(urlObject, error);
     }
 
     // We validate data so don't need worry about casting `null` response
     const data = (await response.json().catch(() => null)) as Raw<T>;
 
     if (!response.ok) {
-      throw new NetworkResponseError(urlObject, response, data, "withResponse");
+      loggingService.debug({error: "response is not okay", response, data, url});
+      throw new NetworkResponseError(urlObject, response, data);
     }
 
     return {
@@ -70,7 +77,7 @@ function fetchClientFactory(
     {
       provide: 'FetchClient',
       useFactory: fetchClientFactory,
-      inject: [IConfigurationService],
+      inject: [IConfigurationService, LoggingService],
     },
     { provide: NetworkService, useClass: FetchNetworkService },
   ],
