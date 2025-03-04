@@ -132,6 +132,11 @@ export class CacheFirstDataSource {
       networkRequest: args.networkRequest,
     });
 
+    this.loggingService.debug({
+      message: { data, args },
+      method: '_getFromNetworkAndWriteCache'
+    });
+
     const shouldBeCached = await this._shouldBeCached(key, startTimeMs);
     if (shouldBeCached) {
       await this.cacheService.hSet(
