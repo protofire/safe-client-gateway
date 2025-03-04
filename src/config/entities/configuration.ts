@@ -332,7 +332,7 @@ export default () => ({
     // Timeout in milliseconds to be used for the HTTP client.
     // A value of 0 disables the timeout.
     requestTimeout: parseInt(
-      process.env.HTTP_CLIENT_REQUEST_TIMEOUT_MILLISECONDS ?? `${5_000}`,
+      process.env.HTTP_CLIENT_REQUEST_TIMEOUT_MILLISECONDS ?? `${10_000}`,
     ),
   },
   jwt: {
