@@ -9,6 +9,7 @@ import {
 } from '@/datasources/network/entities/network.error.entity';
 import type { Raw } from '@/validation/entities/raw.entity';
 import { ILoggingService, LoggingService } from '@/logging/logging.interface';
+import { asError } from '@/logging/utils';
 
 export type FetchClient = <T>(
   url: string,
@@ -43,8 +44,8 @@ function fetchClientFactory(
       });
     } catch (error) {
       loggingService.debug({
-        message: { error, url },
-        method: 'No response'
+        message: { error: asError(error), url },
+        method: '_clientFactory'
       });
       throw new NetworkRequestError(urlObject, error);
     }
