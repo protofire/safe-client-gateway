@@ -30,6 +30,10 @@ export class FetchNetworkService implements INetworkService {
         headers: args.networkRequest?.headers,
       });
     } catch (error) {
+      this.loggingService.debug({
+        message: { error },
+        method: '_NetworkGetResponse'
+      });
       this.logErrorResponse(error, performance.now() - startTimeMs);
       throw error;
     }
