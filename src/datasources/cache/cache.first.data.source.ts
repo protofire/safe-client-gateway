@@ -77,6 +77,12 @@ export class CacheFirstDataSource {
     try {
       return await this._getFromNetworkAndWriteCache(args);
     } catch (error) {
+      this.loggingService.debug({
+        message: {error},
+        method: 'getDatasource_TX',
+      });
+      
+
       if (
         error instanceof NetworkResponseError &&
         error.response.status === 404
