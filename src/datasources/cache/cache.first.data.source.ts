@@ -132,10 +132,13 @@ export class CacheFirstDataSource {
       networkRequest: args.networkRequest,
     });
 
-    this.loggingService.debug({
-      message: { data, args },
-      method: '_getFromNetworkAndWriteCache'
-    });
+
+    if(args.url.includes("/chains") || args.url.includes("/owners")){
+      this.loggingService.debug({
+        message: { data, args },
+        method: '_getFromNetworkAndWriteCache'
+      });
+    }
 
     const shouldBeCached = await this._shouldBeCached(key, startTimeMs);
     if (shouldBeCached) {
