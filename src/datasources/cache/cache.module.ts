@@ -28,7 +28,7 @@ async function redisClientFactory(
   const client: RedisClientType = createClient({
     socket: {
       host: redisHost,
-      port: Number(redisPort),
+      port: redisPort,
     },
     username: redisUser,
     password: redisPass,
