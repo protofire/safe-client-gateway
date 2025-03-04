@@ -40,14 +40,14 @@ function fetchClientFactory(
         keepalive: true,
       });
     } catch (error) {
-      throw new NetworkRequestError(urlObject, error);
+      throw new NetworkRequestError(urlObject, error, "withoutResponse");
     }
 
     // We validate data so don't need worry about casting `null` response
     const data = (await response.json().catch(() => null)) as Raw<T>;
 
     if (!response.ok) {
-      throw new NetworkResponseError(urlObject, response, data);
+      throw new NetworkResponseError(urlObject, response, data, "withResponse");
     }
 
     return {

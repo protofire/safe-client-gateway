@@ -127,18 +127,20 @@ export class CacheFirstDataSource {
     const { key, field } = args.cacheDir;
     this.loggingService.debug({ type: 'cache_miss', key, field });
     const startTimeMs = Date.now();
+
+    // data / url or data / url / message
     const { data } = await this.networkService.get<T>({
       url: args.url,
       networkRequest: args.networkRequest,
     });
 
 
-    if(args.url.includes("/chains") || args.url.includes("/owners")){
-      this.loggingService.debug({
-        message: { data, args },
-        method: '_getFromNetworkAndWriteCache'
-      });
-    }
+    // if(args.url.includes("/chains") || args.url.includes("/owners")){
+    //   this.loggingService.debug({
+    //     message: { data, args },
+    //     method: '_getFromNetworkAndWriteCache'
+    //   });
+    // }
 
     const shouldBeCached = await this._shouldBeCached(key, startTimeMs);
     if (shouldBeCached) {
