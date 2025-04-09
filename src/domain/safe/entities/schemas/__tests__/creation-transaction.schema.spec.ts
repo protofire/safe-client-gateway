@@ -48,6 +48,7 @@ describe('CreationTransactionSchema', () => {
     'masterCopy' as const,
     'setupData' as const,
     'dataDecoded' as const,
+    'saltNonce' as const,
   ])('should allow an optional %s', (field) => {
     const creationTransaction = creationTransactionBuilder().build();
     delete creationTransaction[field];

@@ -15,6 +15,14 @@ import { getAddress } from 'viem';
 import type { Server } from 'net';
 import { TEST_SAFE } from '@/routes/common/__tests__/constants';
 import { chainBuilder } from '@/domain/chains/entities/__tests__/chain.builder';
+import { PostgresDatabaseModuleV2 } from '@/datasources/db/v2/postgres-database.module';
+import { TestPostgresDatabaseModuleV2 } from '@/datasources/db/v2/test.postgres-database.module';
+import { TestPostgresDatabaseModule } from '@/datasources/db/__tests__/test.postgres-database.module';
+import { PostgresDatabaseModule } from '@/datasources/db/v1/postgres-database.module';
+import { TestTargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/__tests__/test.targeted-messaging.datasource.module';
+import { TargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/targeted-messaging.datasource.module';
+import { PushNotificationsApiModule } from '@/datasources/push-notifications-api/push-notifications-api.module';
+import { TestPushNotificationsApiModule } from '@/datasources/push-notifications-api/__tests__/test.push-notifications-api.module';
 
 describe('Events queue processing e2e tests', () => {
   let app: INestApplication<Server>;
@@ -32,17 +40,21 @@ describe('Events queue processing e2e tests', () => {
         ...defaultConfiguration.amqp,
         queue,
       },
-      features: {
-        ...defaultConfiguration.features,
-        eventsQueue: true,
-      },
     });
 
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule.register(testConfiguration)],
     })
+      .overrideModule(PushNotificationsApiModule)
+      .useModule(TestPushNotificationsApiModule)
       .overrideProvider(CacheKeyPrefix)
       .useValue(cacheKeyPrefix)
+      .overrideModule(PostgresDatabaseModule)
+      .useModule(TestPostgresDatabaseModule)
+      .overrideModule(PostgresDatabaseModuleV2)
+      .useModule(TestPostgresDatabaseModuleV2)
+      .overrideModule(TargetedMessagingDatasourceModule)
+      .useModule(TestTargetedMessagingDatasourceModule)
       .compile();
 
     app = await new TestAppProvider().provide(moduleRef);
@@ -110,12 +122,16 @@ describe('Events queue processing e2e tests', () => {
   it.each([
     {
       type: 'PENDING_MULTISIG_TRANSACTION',
+      to: faker.finance.ethereumAddress(),
       safeTxHash: faker.string.hexadecimal({ length: 32 }),
     },
     {
       type: 'EXECUTED_MULTISIG_TRANSACTION',
+      to: faker.finance.ethereumAddress(),
       safeTxHash: faker.string.hexadecimal({ length: 32 }),
       txHash: faker.string.hexadecimal({ length: 32 }),
+      failed: faker.helpers.arrayElement(['true', 'false']),
+      data: faker.string.hexadecimal({ length: 32 }),
     },
     {
       type: 'NEW_CONFIRMATION',
@@ -156,12 +172,16 @@ describe('Events queue processing e2e tests', () => {
   it.each([
     {
       type: 'PENDING_MULTISIG_TRANSACTION',
+      to: faker.finance.ethereumAddress(),
       safeTxHash: faker.string.hexadecimal({ length: 32 }),
     },
     {
       type: 'EXECUTED_MULTISIG_TRANSACTION',
+      to: faker.finance.ethereumAddress(),
       safeTxHash: faker.string.hexadecimal({ length: 32 }),
       txHash: faker.string.hexadecimal({ length: 32 }),
+      failed: faker.helpers.arrayElement(['true', 'false']),
+      data: faker.string.hexadecimal({ length: 32 }),
     },
     {
       type: 'NEW_CONFIRMATION',
@@ -202,8 +222,11 @@ describe('Events queue processing e2e tests', () => {
   it.each([
     {
       type: 'EXECUTED_MULTISIG_TRANSACTION',
+      to: faker.finance.ethereumAddress(),
       safeTxHash: faker.string.hexadecimal({ length: 32 }),
       txHash: faker.string.hexadecimal({ length: 32 }),
+      failed: faker.helpers.arrayElement(['true', 'false']),
+      data: faker.string.hexadecimal({ length: 32 }),
     },
     {
       type: 'MODULE_TRANSACTION',
@@ -240,8 +263,11 @@ describe('Events queue processing e2e tests', () => {
   it.each([
     {
       type: 'EXECUTED_MULTISIG_TRANSACTION',
+      to: faker.finance.ethereumAddress(),
       safeTxHash: faker.string.hexadecimal({ length: 32 }),
       txHash: faker.string.hexadecimal({ length: 32 }),
+      failed: faker.helpers.arrayElement(['true', 'false']),
+      data: faker.string.hexadecimal({ length: 32 }),
     },
     {
       type: 'INCOMING_TOKEN',
@@ -283,8 +309,11 @@ describe('Events queue processing e2e tests', () => {
   it.each([
     {
       type: 'EXECUTED_MULTISIG_TRANSACTION',
+      to: faker.finance.ethereumAddress(),
       safeTxHash: faker.string.hexadecimal({ length: 32 }),
       txHash: faker.string.hexadecimal({ length: 32 }),
+      failed: faker.helpers.arrayElement(['true', 'false']),
+      data: faker.string.hexadecimal({ length: 32 }),
     },
     {
       type: 'INCOMING_TOKEN',
@@ -402,8 +431,11 @@ describe('Events queue processing e2e tests', () => {
     },
     {
       type: 'EXECUTED_MULTISIG_TRANSACTION',
+      to: faker.finance.ethereumAddress(),
       safeTxHash: faker.string.hexadecimal({ length: 32 }),
       txHash: faker.string.hexadecimal({ length: 32 }),
+      failed: faker.helpers.arrayElement(['true', 'false']),
+      data: faker.string.hexadecimal({ length: 32 }),
     },
     {
       type: 'INCOMING_TOKEN',
@@ -536,4 +568,37 @@ describe('Events queue processing e2e tests', () => {
       expect(cacheContent).toBeNull();
     });
   });
+
+  it.each(['NEW_DELEGATE', 'UPDATED_DELEGATE', 'DELETED_DELEGATE'])(
+    '%s clears delegates',
+    async (type) => {
+      const cacheDir = new CacheDir(
+        `${TEST_SAFE.chainId}_delegates_${TEST_SAFE.address}`,
+        '',
+      );
+      await redisClient.hSet(
+        `${cacheKeyPrefix}-${cacheDir.key}`,
+        cacheDir.field,
+        faker.string.alpha(),
+      );
+      const data = {
+        type,
+        chainId: TEST_SAFE.chainId,
+        address: TEST_SAFE.address,
+        delegate: faker.finance.ethereumAddress(),
+        delegator: faker.finance.ethereumAddress(),
+        label: faker.lorem.word(),
+      };
+
+      await channel.sendToQueue(queueName, data);
+
+      await retry(async () => {
+        const cacheContent = await redisClient.hGet(
+          `${cacheKeyPrefix}-${cacheDir.key}`,
+          cacheDir.field,
+        );
+        expect(cacheContent).toBeNull();
+      });
+    },
+  );
 });

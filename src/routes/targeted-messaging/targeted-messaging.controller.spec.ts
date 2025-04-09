@@ -4,11 +4,10 @@ import { IConfigurationService } from '@/config/configuration.service.interface'
 import configuration from '@/config/entities/__tests__/configuration';
 import { TestCacheModule } from '@/datasources/cache/__tests__/test.cache.module';
 import { CacheModule } from '@/datasources/cache/cache.module';
-import jwtConfiguration from '@/datasources/jwt/configuration/jwt.configuration';
-import {
-  JWT_CONFIGURATION_MODULE,
-  JwtConfigurationModule,
-} from '@/datasources/jwt/configuration/jwt.configuration.module';
+import { TestPostgresDatabaseModule } from '@/datasources/db/__tests__/test.postgres-database.module';
+import { PostgresDatabaseModule } from '@/datasources/db/v1/postgres-database.module';
+import { PostgresDatabaseModuleV2 } from '@/datasources/db/v2/postgres-database.module';
+import { TestPostgresDatabaseModuleV2 } from '@/datasources/db/v2/test.postgres-database.module';
 import { TestNetworkModule } from '@/datasources/network/__tests__/test.network.module';
 import { NetworkModule } from '@/datasources/network/network.module';
 import type { INetworkService } from '@/datasources/network/network.service.interface';
@@ -27,6 +26,7 @@ import { SubmissionNotFoundError } from '@/domain/targeted-messaging/errors/subm
 import { TargetedSafeNotFoundError } from '@/domain/targeted-messaging/errors/targeted-safe-not-found.error';
 import { TestLoggingModule } from '@/logging/__tests__/test.logging.module';
 import { RequestScopedLoggingModule } from '@/logging/logging.module';
+import { rawify } from '@/validation/entities/raw.entity';
 import { faker } from '@faker-js/faker/.';
 import type { INestApplication } from '@nestjs/common';
 import type { TestingModule } from '@nestjs/testing';
@@ -42,20 +42,11 @@ describe('TargetedMessagingController', () => {
   let targetedMessagingDatasource: jest.MockedObjectDeep<ITargetedMessagingDatasource>;
 
   beforeEach(async () => {
-    const defaultConfiguration = configuration();
-    const testConfiguration = (): typeof defaultConfiguration => ({
-      ...defaultConfiguration,
-      features: {
-        ...defaultConfiguration.features,
-        targetedMessaging: true,
-      },
-    });
-
     const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule.register(testConfiguration)],
+      imports: [AppModule.register(configuration)],
     })
-      .overrideModule(JWT_CONFIGURATION_MODULE)
-      .useModule(JwtConfigurationModule.register(jwtConfiguration))
+      .overrideModule(PostgresDatabaseModule)
+      .useModule(TestPostgresDatabaseModule)
       .overrideModule(TargetedMessagingDatasourceModule)
       .useModule(TestTargetedMessagingDatasourceModule)
       .overrideModule(RequestScopedLoggingModule)
@@ -66,6 +57,8 @@ describe('TargetedMessagingController', () => {
       .useModule(TestCacheModule)
       .overrideModule(QueuesApiModule)
       .useModule(TestQueuesApiModule)
+      .overrideModule(PostgresDatabaseModuleV2)
+      .useModule(TestPostgresDatabaseModuleV2)
       .compile();
 
     targetedMessagingDatasource = moduleFixture.get(
@@ -84,6 +77,45 @@ describe('TargetedMessagingController', () => {
   afterEach(async () => {
     jest.resetAllMocks();
     await app.close();
+  });
+
+  describe('GET targeted Safe', () => {
+    it('should get a targeted Safe', async () => {
+      const outreachId = faker.number.int();
+      const chain = chainBuilder().build();
+      const safe = safeBuilder().build();
+      const targetedSafe = targetedSafeBuilder()
+        .with('address', safe.address)
+        .build();
+      targetedMessagingDatasource.getTargetedSafe.mockResolvedValue(
+        targetedSafe,
+      );
+
+      await request(app.getHttpServer())
+        .get(
+          `/v1/targeted-messaging/outreaches/${outreachId}/chains/${chain.chainId}/safes/${safe.address}`,
+        )
+        .expect(200)
+        .expect({
+          outreachId: targetedSafe.outreachId,
+          address: targetedSafe.address,
+        });
+    });
+
+    it('should return 404 Not Found if the Safe is not targeted', async () => {
+      const outreachId = faker.number.int();
+      const chain = chainBuilder().build();
+      const safe = safeBuilder().build();
+      targetedMessagingDatasource.getTargetedSafe.mockRejectedValue(
+        new TargetedSafeNotFoundError(),
+      );
+
+      await request(app.getHttpServer())
+        .get(
+          `/v1/targeted-messaging/outreaches/${outreachId}/chains/${chain.chainId}/safes/${safe.address}`,
+        )
+        .expect(404);
+    });
   });
 
   describe('GET submissions', () => {
@@ -108,10 +140,10 @@ describe('TargetedMessagingController', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
-            return Promise.resolve({ data: chain, status: 200 });
+            return Promise.resolve({ data: rawify(chain), status: 200 });
           case `${chain.transactionService}/api/v1/safes/${safe.address}`:
             return Promise.resolve({
-              data: safe,
+              data: rawify(safe),
               status: 200,
             });
           default:
@@ -156,10 +188,10 @@ describe('TargetedMessagingController', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
-            return Promise.resolve({ data: chain, status: 200 });
+            return Promise.resolve({ data: rawify(chain), status: 200 });
           case `${chain.transactionService}/api/v1/safes/${safe.address}`:
             return Promise.resolve({
-              data: safe,
+              data: rawify(safe),
               status: 200,
             });
           default:
@@ -222,10 +254,10 @@ describe('TargetedMessagingController', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
-            return Promise.resolve({ data: chain, status: 200 });
+            return Promise.resolve({ data: rawify(chain), status: 200 });
           case `${chain.transactionService}/api/v1/safes/${safe.address}`:
             return Promise.resolve({
-              data: safe,
+              data: rawify(safe),
               status: 200,
             });
           default:
@@ -298,10 +330,10 @@ describe('TargetedMessagingController', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
-            return Promise.resolve({ data: chain, status: 200 });
+            return Promise.resolve({ data: rawify(chain), status: 200 });
           case `${chain.transactionService}/api/v1/safes/${safe.address}`:
             return Promise.resolve({
-              data: safe,
+              data: rawify(safe),
               status: 200,
             });
           default:
@@ -312,6 +344,77 @@ describe('TargetedMessagingController', () => {
       await request(app.getHttpServer())
         .post(
           `/v1/targeted-messaging/outreaches/${outreachId}/chains/${chain.chainId}/safes/${safe.address}/signers/${signerAddress}/submissions`,
+        )
+        .send({ completed: true })
+        .expect(201)
+        .expect(({ body }) => {
+          expect(body).toEqual({
+            outreachId,
+            targetedSafeId: submission.targetedSafeId,
+            signerAddress: submission.signerAddress,
+            completionDate: submission.completionDate.toISOString(),
+          });
+        });
+    });
+
+    it('should create a submission for a campaign targeting all Safes', async () => {
+      const outreachId = faker.number.int();
+      const chain = chainBuilder().build();
+      const submission = submissionBuilder().build();
+      const safe = safeBuilder()
+        .with('owners', [
+          getAddress(faker.finance.ethereumAddress()),
+          submission.signerAddress,
+        ])
+        .build();
+      const targetedSafe = targetedSafeBuilder()
+        .with('address', safe.address)
+        .build();
+      targetedMessagingDatasource.getTargetedSafe.mockRejectedValue(
+        new TargetedSafeNotFoundError(),
+      );
+      targetedMessagingDatasource.createTargetedSafes.mockResolvedValueOnce([
+        targetedSafe,
+      ]);
+      targetedMessagingDatasource.getSubmission.mockRejectedValue(
+        new SubmissionNotFoundError(),
+      );
+      targetedMessagingDatasource.createSubmission.mockResolvedValueOnce(
+        submission,
+      );
+      targetedMessagingDatasource.getOutreachOrFail.mockResolvedValue({
+        id: expect.any(Number),
+        created_at: expect.any(Date),
+        updated_at: expect.any(Date),
+        type: expect.any(String),
+        name: expect.any(String),
+        startDate: expect.any(Date),
+        endDate: expect.any(Date),
+        sourceId: expect.any(Number),
+        teamName: expect.any(String),
+        sourceFile: null,
+        sourceFileProcessedDate: null,
+        sourceFileChecksum: null,
+        targetAll: true,
+      });
+
+      networkService.get.mockImplementation(({ url }) => {
+        switch (url) {
+          case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
+            return Promise.resolve({ data: rawify(chain), status: 200 });
+          case `${chain.transactionService}/api/v1/safes/${safe.address}`:
+            return Promise.resolve({
+              data: rawify(safe),
+              status: 200,
+            });
+          default:
+            return Promise.reject(new Error(`Could not match ${url}`));
+        }
+      });
+
+      await request(app.getHttpServer())
+        .post(
+          `/v1/targeted-messaging/outreaches/${outreachId}/chains/${chain.chainId}/safes/${safe.address}/signers/${submission.signerAddress}/submissions`,
         )
         .send({ completed: true })
         .expect(201)
@@ -368,10 +471,10 @@ describe('TargetedMessagingController', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
-            return Promise.resolve({ data: chain, status: 200 });
+            return Promise.resolve({ data: rawify(chain), status: 200 });
           case `${chain.transactionService}/api/v1/safes/${safe.address}`:
             return Promise.resolve({
-              data: safe,
+              data: rawify(safe),
               status: 200,
             });
           default:
@@ -420,10 +523,10 @@ describe('TargetedMessagingController', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
-            return Promise.resolve({ data: chain, status: 200 });
+            return Promise.resolve({ data: rawify(chain), status: 200 });
           case `${chain.transactionService}/api/v1/safes/${safe.address}`:
             return Promise.resolve({
-              data: safe,
+              data: rawify(safe),
               status: 200,
             });
           default:
@@ -452,6 +555,21 @@ describe('TargetedMessagingController', () => {
       targetedMessagingDatasource.getTargetedSafe.mockRejectedValue(
         new TargetedSafeNotFoundError(),
       );
+      targetedMessagingDatasource.getOutreachOrFail.mockResolvedValue({
+        id: expect.any(Number),
+        created_at: expect.any(Date),
+        updated_at: expect.any(Date),
+        type: expect.any(String),
+        name: expect.any(String),
+        startDate: expect.any(Date),
+        endDate: expect.any(Date),
+        sourceId: expect.any(Number),
+        teamName: expect.any(String),
+        sourceFile: null,
+        sourceFileProcessedDate: null,
+        sourceFileChecksum: null,
+        targetAll: false,
+      });
 
       await request(app.getHttpServer())
         .post(

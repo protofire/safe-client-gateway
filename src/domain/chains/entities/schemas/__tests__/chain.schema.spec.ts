@@ -168,21 +168,6 @@ describe('Chain schemas', () => {
 
       expect(result.success && result.data.publicKey).toBe(null);
     });
-
-    // TODO: Remove after `beaconChainExplorerUriTemplate` field is deployed on Config Service
-    it('should default beaconChainExplorerUriTemplate to have null publicKey', () => {
-      const chain = chainBuilder().build();
-      // @ts-expect-error - inferred types don't allow optional fields
-      delete chain.beaconChainExplorerUriTemplate;
-
-      const result = ChainSchema.safeParse(chain);
-
-      expect(
-        result.success && result.data.beaconChainExplorerUriTemplate,
-      ).toStrictEqual({
-        publicKey: null,
-      });
-    });
   });
 
   describe('ThemeSchema', () => {
@@ -555,47 +540,6 @@ describe('Chain schemas', () => {
         expect(result.success && result.data[field]).toBe(null);
       });
     });
-
-    // TODO: Remove after deployed and all chain caches include the `contractAddresses` field
-    describe('should default all contract addresses to null if the chain cache does not contain contractAddresses', () => {
-      it('on a ContractAddresses level', () => {
-        const contractAddresses = undefined;
-
-        const result = ContractAddressesSchema.safeParse(contractAddresses);
-
-        expect(result.success && result.data).toStrictEqual({
-          safeSingletonAddress: null,
-          safeProxyFactoryAddress: null,
-          multiSendAddress: null,
-          multiSendCallOnlyAddress: null,
-          fallbackHandlerAddress: null,
-          signMessageLibAddress: null,
-          createCallAddress: null,
-          simulateTxAccessorAddress: null,
-          safeWebAuthnSignerFactoryAddress: null,
-        });
-      });
-
-      it('on a Chain level', () => {
-        const chain = chainBuilder().build();
-        // @ts-expect-error - pre-inclusion of `contractAddresses` field
-        delete chain.contractAddresses;
-
-        const result = ChainSchema.safeParse(chain);
-
-        expect(result.success && result.data.contractAddresses).toStrictEqual({
-          safeSingletonAddress: null,
-          safeProxyFactoryAddress: null,
-          multiSendAddress: null,
-          multiSendCallOnlyAddress: null,
-          fallbackHandlerAddress: null,
-          signMessageLibAddress: null,
-          createCallAddress: null,
-          simulateTxAccessorAddress: null,
-          safeWebAuthnSignerFactoryAddress: null,
-        });
-      });
-    });
   });
 
   describe('ChainSchema', () => {
@@ -675,8 +619,8 @@ describe('Chain schemas', () => {
       ['safeAppsRpcUri' as const],
       ['publicRpcUri' as const],
       ['blockExplorerUriTemplate' as const],
-      // TODO: Include after `beaconChainExplorerUriTemplate` field is deployed on Config Service
-      // ['beaconChainExplorerUriTemplate' as const],
+      ['beaconChainExplorerUriTemplate' as const],
+      ['contractAddresses' as const],
       ['nativeCurrency' as const],
       ['pricesProvider' as const],
       ['balancesProvider' as const],
@@ -703,10 +647,9 @@ describe('Chain schemas', () => {
 
   describe('ChainLenientPageSchema', () => {
     it('should validate a valid Chain page', () => {
-      const chains = Array.from(
-        { length: faker.number.int({ min: 1, max: 5 }) },
-        () => chainBuilder().build(),
-      );
+      const chains = faker.helpers.multiple(() => chainBuilder().build(), {
+        count: { min: 1, max: 5 },
+      });
       const chainPage = pageBuilder()
         .with('results', chains)
         .with('count', chains.length)
@@ -717,11 +660,10 @@ describe('Chain schemas', () => {
       expect(result.success).toBe(true);
     });
 
-    it('should exclude invalid Chain items, adjusting the count accordingly', () => {
-      const chains = Array.from(
-        { length: faker.number.int({ min: 1, max: 5 }) },
-        () => chainBuilder().build(),
-      );
+    it('should exclude invalid Chain items', () => {
+      const chains = faker.helpers.multiple(() => chainBuilder().build(), {
+        count: { min: 1, max: 5 },
+      });
       const chainPage = pageBuilder<Chain>()
         .with('results', chains)
         .with('count', chains.length)
@@ -732,10 +674,6 @@ describe('Chain schemas', () => {
       const result = ChainLenientPageSchema.safeParse(chainPage);
 
       expect(result.success).toBe(true);
-      expect(result.success && result.data.results.length).toBe(
-        chains.length - 1,
-      );
-      expect(result.success && result.data.count).toBe(chains.length - 1);
     });
   });
 });

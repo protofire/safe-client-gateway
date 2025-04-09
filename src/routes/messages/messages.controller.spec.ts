@@ -32,6 +32,13 @@ import { NetworkResponseError } from '@/datasources/network/entities/network.err
 import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
 import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 import type { Server } from 'net';
+import { TestPostgresDatabaseModule } from '@/datasources/db/__tests__/test.postgres-database.module';
+import { PostgresDatabaseModule } from '@/datasources/db/v1/postgres-database.module';
+import { PostgresDatabaseModuleV2 } from '@/datasources/db/v2/postgres-database.module';
+import { TestPostgresDatabaseModuleV2 } from '@/datasources/db/v2/test.postgres-database.module';
+import { TestTargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/__tests__/test.targeted-messaging.datasource.module';
+import { TargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/targeted-messaging.datasource.module';
+import { rawify } from '@/validation/entities/raw.entity';
 
 describe('Messages controller', () => {
   let app: INestApplication<Server>;
@@ -44,6 +51,10 @@ describe('Messages controller', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(configuration)],
     })
+      .overrideModule(PostgresDatabaseModule)
+      .useModule(TestPostgresDatabaseModule)
+      .overrideModule(TargetedMessagingDatasourceModule)
+      .useModule(TestTargetedMessagingDatasourceModule)
       .overrideModule(CacheModule)
       .useModule(TestCacheModule)
       .overrideModule(RequestScopedLoggingModule)
@@ -52,6 +63,8 @@ describe('Messages controller', () => {
       .useModule(TestNetworkModule)
       .overrideModule(QueuesApiModule)
       .useModule(TestQueuesApiModule)
+      .overrideModule(PostgresDatabaseModuleV2)
+      .useModule(TestPostgresDatabaseModuleV2)
       .compile();
 
     const configurationService = moduleFixture.get<IConfigurationService>(
@@ -84,16 +97,16 @@ describe('Messages controller', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
-            return Promise.resolve({ data: chain, status: 200 });
+            return Promise.resolve({ data: rawify(chain), status: 200 });
           case `${chain.transactionService}/api/v1/messages/${message.messageHash}`:
             return Promise.resolve({
-              data: messageToJson(message),
+              data: rawify(messageToJson(message)),
               status: 200,
             });
           case `${chain.transactionService}/api/v1/safes/${message.safe}`:
-            return Promise.resolve({ data: safe, status: 200 });
+            return Promise.resolve({ data: rawify(safe), status: 200 });
           case `${safeConfigUrl}/api/v1/safe-apps/`:
-            return Promise.resolve({ data: safeApps, status: 200 });
+            return Promise.resolve({ data: rawify(safeApps), status: 200 });
           default:
             return Promise.reject(`No matching rule for url: ${url}`);
         }
@@ -126,6 +139,7 @@ describe('Messages controller', () => {
             signature: confirmation.signature,
           })),
           preparedSignature: message.preparedSignature,
+          origin: message.origin,
         });
     });
 
@@ -151,16 +165,16 @@ describe('Messages controller', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
-            return Promise.resolve({ data: chain, status: 200 });
+            return Promise.resolve({ data: rawify(chain), status: 200 });
           case `${chain.transactionService}/api/v1/messages/${message.messageHash}`:
             return Promise.resolve({
-              data: messageToJson(message),
+              data: rawify(messageToJson(message)),
               status: 200,
             });
           case `${chain.transactionService}/api/v1/safes/${message.safe}`:
-            return Promise.resolve({ data: safe, status: 200 });
+            return Promise.resolve({ data: rawify(safe), status: 200 });
           case `${safeConfigUrl}/api/v1/safe-apps/`:
-            return Promise.resolve({ data: safeApps, status: 200 });
+            return Promise.resolve({ data: rawify(safeApps), status: 200 });
           default:
             return Promise.reject(`No matching rule for url: ${url}`);
         }
@@ -193,6 +207,7 @@ describe('Messages controller', () => {
             signature: confirmation.signature,
           })),
           preparedSignature: message.preparedSignature,
+          origin: message.origin,
         });
     });
 
@@ -215,16 +230,16 @@ describe('Messages controller', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
-            return Promise.resolve({ data: chain, status: 200 });
+            return Promise.resolve({ data: rawify(chain), status: 200 });
           case `${chain.transactionService}/api/v1/messages/${message.messageHash}`:
             return Promise.resolve({
-              data: messageToJson(message),
+              data: rawify(messageToJson(message)),
               status: 200,
             });
           case `${chain.transactionService}/api/v1/safes/${message.safe}`:
-            return Promise.resolve({ data: safe, status: 200 });
+            return Promise.resolve({ data: rawify(safe), status: 200 });
           case `${safeConfigUrl}/api/v1/safe-apps/`:
-            return Promise.resolve({ data: safeApps, status: 200 });
+            return Promise.resolve({ data: rawify(safeApps), status: 200 });
           default:
             return Promise.reject(`No matching rule for url: ${url}`);
         }
@@ -257,6 +272,7 @@ describe('Messages controller', () => {
             signature: confirmation.signature,
           })),
           preparedSignature: null,
+          origin: message.origin,
         });
     });
 
@@ -282,16 +298,16 @@ describe('Messages controller', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
-            return Promise.resolve({ data: chain, status: 200 });
+            return Promise.resolve({ data: rawify(chain), status: 200 });
           case `${chain.transactionService}/api/v1/messages/${message.messageHash}`:
             return Promise.resolve({
-              data: messageToJson(message),
+              data: rawify(messageToJson(message)),
               status: 200,
             });
           case `${chain.transactionService}/api/v1/safes/${message.safe}`:
-            return Promise.resolve({ data: safe, status: 200 });
+            return Promise.resolve({ data: rawify(safe), status: 200 });
           case `${safeConfigUrl}/api/v1/safe-apps/`:
-            return Promise.resolve({ data: safeApps, status: 200 });
+            return Promise.resolve({ data: rawify(safeApps), status: 200 });
           default:
             return Promise.reject(`No matching rule for url: ${url}`);
         }
@@ -324,6 +340,7 @@ describe('Messages controller', () => {
             signature: confirmation.signature,
           })),
           preparedSignature: null,
+          origin: message.origin,
         });
     });
 
@@ -346,16 +363,16 @@ describe('Messages controller', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
-            return Promise.resolve({ data: chain, status: 200 });
+            return Promise.resolve({ data: rawify(chain), status: 200 });
           case `${chain.transactionService}/api/v1/messages/${message.messageHash}`:
             return Promise.resolve({
-              data: messageToJson(message),
+              data: rawify(messageToJson(message)),
               status: 200,
             });
           case `${chain.transactionService}/api/v1/safes/${message.safe}`:
-            return Promise.resolve({ data: safe, status: 200 });
+            return Promise.resolve({ data: rawify(safe), status: 200 });
           case `${safeConfigUrl}/api/v1/safe-apps/`:
-            return Promise.resolve({ data: [], status: 200 });
+            return Promise.resolve({ data: rawify([]), status: 200 });
           default:
             return Promise.reject(`No matching rule for url: ${url}`);
         }
@@ -388,6 +405,7 @@ describe('Messages controller', () => {
             signature: confirmation.signature,
           })),
           preparedSignature: null,
+          origin: message.origin,
         });
     });
 
@@ -410,14 +428,14 @@ describe('Messages controller', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
-            return Promise.resolve({ data: chain, status: 200 });
+            return Promise.resolve({ data: rawify(chain), status: 200 });
           case `${chain.transactionService}/api/v1/messages/${message.messageHash}`:
             return Promise.resolve({
-              data: messageToJson(message),
+              data: rawify(messageToJson(message)),
               status: 200,
             });
           case `${chain.transactionService}/api/v1/safes/${message.safe}`:
-            return Promise.resolve({ data: safe, status: 200 });
+            return Promise.resolve({ data: rawify(safe), status: 200 });
           default:
             return Promise.reject(`No matching rule for url: ${url}`);
         }
@@ -450,6 +468,7 @@ describe('Messages controller', () => {
             signature: confirmation.signature,
           })),
           preparedSignature: null,
+          origin: message.origin,
         });
     });
   });
@@ -462,12 +481,12 @@ describe('Messages controller', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
-            return Promise.resolve({ data: chain, status: 200 });
+            return Promise.resolve({ data: rawify(chain), status: 200 });
           case `${chain.transactionService}/api/v1/safes/${safe.address}`:
-            return Promise.resolve({ data: safe, status: 200 });
+            return Promise.resolve({ data: rawify(safe), status: 200 });
           case `${chain.transactionService}/api/v1/safes/${safe.address}/messages/`:
             return Promise.resolve({
-              data: { ...page, previous: faker.number.int() },
+              data: rawify({ ...page, previous: faker.number.int() }),
               status: 200,
             });
           default:
@@ -477,8 +496,8 @@ describe('Messages controller', () => {
 
       await request(app.getHttpServer())
         .get(`/v1/chains/${chain.chainId}/safes/${safe.address}/messages`)
-        .expect(500)
-        .expect({ statusCode: 500, message: 'Internal server error' });
+        .expect(502)
+        .expect({ statusCode: 502, message: 'Bad gateway' });
     });
 
     it('should get a message with a date label', async () => {
@@ -507,11 +526,11 @@ describe('Messages controller', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
-            return Promise.resolve({ data: chain, status: 200 });
+            return Promise.resolve({ data: rawify(chain), status: 200 });
           case `${chain.transactionService}/api/v1/safes/${safe.address}`:
-            return Promise.resolve({ data: safe, status: 200 });
+            return Promise.resolve({ data: rawify(safe), status: 200 });
           case `${chain.transactionService}/api/v1/safes/${safe.address}/messages/`:
-            return Promise.resolve({ data: page, status: 200 });
+            return Promise.resolve({ data: rawify(page), status: 200 });
           default:
             return Promise.reject(`No matching rule for url: ${url}`);
         }
@@ -562,6 +581,7 @@ describe('Messages controller', () => {
                     signature: confirmation.signature,
                   })),
                   preparedSignature: null,
+                  origin: message.origin,
                 },
               ])
               .build(),
@@ -593,11 +613,11 @@ describe('Messages controller', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
-            return Promise.resolve({ data: chain, status: 200 });
+            return Promise.resolve({ data: rawify(chain), status: 200 });
           case `${chain.transactionService}/api/v1/safes/${safe.address}`:
-            return Promise.resolve({ data: safe, status: 200 });
+            return Promise.resolve({ data: rawify(safe), status: 200 });
           case `${chain.transactionService}/api/v1/safes/${safe.address}/messages/`:
-            return Promise.resolve({ data: page, status: 200 });
+            return Promise.resolve({ data: rawify(page), status: 200 });
           default:
             return Promise.reject(`No matching rule for url: ${url}`);
         }
@@ -692,11 +712,11 @@ describe('Messages controller', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
-            return Promise.resolve({ data: chain, status: 200 });
+            return Promise.resolve({ data: rawify(chain), status: 200 });
           case `${chain.transactionService}/api/v1/safes/${safe.address}`:
-            return Promise.resolve({ data: safe, status: 200 });
+            return Promise.resolve({ data: rawify(safe), status: 200 });
           case `${chain.transactionService}/api/v1/safes/${safe.address}/messages/`:
-            return Promise.resolve({ data: page, status: 200 });
+            return Promise.resolve({ data: rawify(page), status: 200 });
           default:
             return Promise.reject(`No matching rule for url: ${url}`);
         }
@@ -754,13 +774,16 @@ describe('Messages controller', () => {
       const message = messageBuilder().build();
       networkService.get.mockImplementation(({ url }) =>
         url === `${safeConfigUrl}/api/v1/chains/${chain.chainId}`
-          ? Promise.resolve({ data: chain, status: 200 })
+          ? Promise.resolve({ data: rawify(chain), status: 200 })
           : Promise.reject(`No matching rule for url: ${url}`),
       );
       networkService.post.mockImplementation(({ url }) =>
         url ===
         `${chain.transactionService}/api/v1/safes/${safe.address}/messages/`
-          ? Promise.resolve({ data: messageToJson(message), status: 200 })
+          ? Promise.resolve({
+              data: rawify(messageToJson(message)),
+              status: 200,
+            })
           : Promise.reject(`No matching rule for url: ${url}`),
       );
 
@@ -777,7 +800,7 @@ describe('Messages controller', () => {
       const errorMessage = faker.word.words();
       networkService.get.mockImplementation(({ url }) =>
         url === `${safeConfigUrl}/api/v1/chains/${chain.chainId}`
-          ? Promise.resolve({ data: chain, status: 200 })
+          ? Promise.resolve({ data: rawify(chain), status: 200 })
           : Promise.reject(`No matching rule for url: ${url}`),
       );
       const transactionServiceUrl = `${chain.transactionService}/api/v1/safes/${safe.address}/messages/`;
@@ -830,18 +853,20 @@ describe('Messages controller', () => {
         .with('created', faker.date.recent())
         .build();
       const expectedResponse = {
-        data: { signature: faker.string.hexadecimal() },
-        status: 200,
+        signature: faker.string.hexadecimal(),
       };
       networkService.get.mockImplementation(({ url }) =>
         url === `${safeConfigUrl}/api/v1/chains/${chain.chainId}`
-          ? Promise.resolve({ data: chain, status: 200 })
+          ? Promise.resolve({ data: rawify(chain), status: 200 })
           : Promise.reject(`No matching rule for url: ${url}`),
       );
       networkService.post.mockImplementation(({ url }) =>
         url ===
         `${chain.transactionService}/api/v1/messages/${message.messageHash}/signatures/`
-          ? Promise.resolve(expectedResponse)
+          ? Promise.resolve({
+              data: rawify(expectedResponse),
+              status: 200,
+            })
           : Promise.reject(`No matching rule for url: ${url}`),
       );
 
@@ -851,7 +876,7 @@ describe('Messages controller', () => {
         )
         .send(updateMessageSignatureDtoBuilder().build())
         .expect(200)
-        .expect(expectedResponse.data);
+        .expect(expectedResponse);
     });
 
     it('should return an error from the provider', async () => {
@@ -863,7 +888,7 @@ describe('Messages controller', () => {
       const errorMessage = faker.word.words();
       networkService.get.mockImplementation(({ url }) =>
         url === `${safeConfigUrl}/api/v1/chains/${chain.chainId}`
-          ? Promise.resolve({ data: chain, status: 200 })
+          ? Promise.resolve({ data: rawify(chain), status: 200 })
           : Promise.reject(`No matching rule for url: ${url}`),
       );
       const transactionServiceUrl = `${chain.transactionService}/api/v1/messages/${message.messageHash}/signatures/`;
