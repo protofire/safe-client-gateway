@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { isEmpty } from 'lodash';
+import isEmpty from 'lodash/isEmpty';
 import { Page } from '@/domain/entities/page.entity';
 import { ITransactionApiManager } from '@/domain/interfaces/transaction-api.manager.interface';
 import { CreationTransaction } from '@/domain/safe/entities/creation-transaction.entity';
@@ -98,7 +98,7 @@ export class SafeRepository implements ISafeRepository {
 
   async getCollectibleTransfers(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
     limit?: number;
     offset?: number;
   }): Promise<Page<Transfer>> {
@@ -115,7 +115,7 @@ export class SafeRepository implements ISafeRepository {
 
   async clearTransfers(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
   }): Promise<void> {
     const transactionService = await this.transactionApiManager.getApi(
       args.chainId,
@@ -126,12 +126,12 @@ export class SafeRepository implements ISafeRepository {
 
   async getIncomingTransfers(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
     executionDateGte?: string;
     executionDateLte?: string;
-    to?: string;
+    to?: `0x${string}`;
     value?: string;
-    tokenAddress?: string;
+    tokenAddress?: `0x${string}`;
     txHash?: string;
     limit?: number;
     offset?: number;
@@ -145,7 +145,7 @@ export class SafeRepository implements ISafeRepository {
 
   async clearIncomingTransfers(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
   }): Promise<void> {
     const transactionService = await this.transactionApiManager.getApi(
       args.chainId,
@@ -241,13 +241,12 @@ export class SafeRepository implements ISafeRepository {
     const transactionService = await this.transactionApiManager.getApi(
       args.chainId,
     );
-    const page: Page<MultisigTransaction> =
-      await transactionService.getMultisigTransactions({
-        ...args,
-        safeAddress: args.safe.address,
-        executed: false,
-        nonceGte: args.safe.nonce,
-      });
+    const page = await transactionService.getMultisigTransactions({
+      ...args,
+      safeAddress: args.safe.address,
+      executed: false,
+      nonceGte: args.safe.nonce,
+    });
     return MultisigTransactionPageSchema.parse(page);
   }
 
@@ -283,13 +282,11 @@ export class SafeRepository implements ISafeRepository {
     const transactionService = await this.transactionApiManager.getApi(
       args.chainId,
     );
-    const page: Page<Transaction> = await transactionService.getAllTransactions(
-      {
-        ...args,
-        executed: true,
-        queued: false,
-      },
-    );
+    const page = await transactionService.getAllTransactions({
+      ...args,
+      executed: true,
+      queued: false,
+    });
     return TransactionTypePageSchema.parse(page);
   }
 
@@ -338,9 +335,10 @@ export class SafeRepository implements ISafeRepository {
     const transactionService = await this.transactionApiManager.getApi(
       args.chainId,
     );
-    const { safe } = await transactionService.getMultisigTransaction(
+    const transaction = await transactionService.getMultisigTransaction(
       args.safeTxHash,
     );
+    const { safe } = MultisigTransactionSchema.parse(transaction);
     await transactionService.deleteTransaction(args);
 
     // Ensure transaction is removed from cache in case event is not received
@@ -356,7 +354,7 @@ export class SafeRepository implements ISafeRepository {
 
   async clearMultisigTransactions(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
   }): Promise<void> {
     const transactionService = await this.transactionApiManager.getApi(
       args.chainId,
@@ -370,7 +368,7 @@ export class SafeRepository implements ISafeRepository {
     executed?: boolean;
     executionDateGte?: string;
     executionDateLte?: string;
-    to?: string;
+    to?: `0x${string}`;
     value?: string;
     nonce?: string;
     nonceGte?: number;
@@ -401,7 +399,7 @@ export class SafeRepository implements ISafeRepository {
 
   async getTransfers(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
     limit?: number | undefined;
   }): Promise<Page<Transfer>> {
     const transactionService = await this.transactionApiManager.getApi(
@@ -425,14 +423,14 @@ export class SafeRepository implements ISafeRepository {
     return SafeListSchema.parse(safeList);
   }
 
-  async getAllSafesByOwner(args: {
+  // TODO: Remove with /owners/:ownerAddress/safes
+  // @deprecated
+  async deprecated__getAllSafesByOwner(args: {
     ownerAddress: `0x${string}`;
   }): Promise<{ [chainId: string]: Array<string> }> {
-    // Note: does not take pagination into account but we do not support
-    // enough chains for it to be an issue
-    const { results } = await this.chainsRepository.getChains();
+    const chains = await this.chainsRepository.getAllChains();
     const allSafeLists = await Promise.all(
-      results.map(async ({ chainId }) => {
+      chains.map(async ({ chainId }) => {
         const safeList = await this.getSafesByOwner({
           chainId,
           ownerAddress: args.ownerAddress,
@@ -453,6 +451,42 @@ export class SafeRepository implements ISafeRepository {
     }, {});
   }
 
+  async getAllSafesByOwner(args: {
+    ownerAddress: `0x${string}`;
+  }): Promise<{ [chainId: string]: Array<string> | null }> {
+    const chains = await this.chainsRepository.getAllChains();
+    const allSafeLists = await Promise.allSettled(
+      chains.map(async ({ chainId }) => {
+        const safeList = await this.getSafesByOwner({
+          chainId,
+          ownerAddress: args.ownerAddress,
+        });
+
+        return {
+          chainId,
+          safeList,
+        };
+      }),
+    );
+
+    const result: { [chainId: string]: Array<string> | null } = {};
+
+    for (const [index, allSafeList] of allSafeLists.entries()) {
+      const chainId = chains[index].chainId;
+
+      if (allSafeList.status === 'fulfilled') {
+        result[chainId] = allSafeList.value.safeList.safes;
+      } else {
+        result[chainId] = null;
+        this.loggingService.warn(
+          `Failed to fetch Safe owners. chainId=${chainId}`,
+        );
+      }
+    }
+
+    return result;
+  }
+
   async getLastTransactionSortedByNonce(args: {
     chainId: string;
     safeAddress: `0x${string}`;
@@ -460,22 +494,22 @@ export class SafeRepository implements ISafeRepository {
     const transactionService = await this.transactionApiManager.getApi(
       args.chainId,
     );
-    const page: Page<Transaction> =
-      await transactionService.getMultisigTransactions({
-        ...args,
-        ordering: '-nonce',
-        trusted: true,
-        limit: 1,
-      });
+    const page = await transactionService.getMultisigTransactions({
+      ...args,
+      ordering: '-nonce',
+      trusted: true,
+      limit: 1,
+    });
+    const { results } = MultisigTransactionPageSchema.parse(page);
 
-    return isEmpty(page.results)
+    return isEmpty(results)
       ? null
-      : MultisigTransactionSchema.parse(page.results[0]);
+      : MultisigTransactionSchema.parse(results[0]);
   }
 
   async proposeTransaction(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
     proposeTransactionDto: ProposeTransactionDto;
   }): Promise<unknown> {
     const transactionService = await this.transactionApiManager.getApi(
@@ -514,7 +548,7 @@ export class SafeRepository implements ISafeRepository {
 
   async getSafesByModule(args: {
     chainId: string;
-    moduleAddress: string;
+    moduleAddress: `0x${string}`;
   }): Promise<SafeList> {
     const transactionService = await this.transactionApiManager.getApi(
       args.chainId,

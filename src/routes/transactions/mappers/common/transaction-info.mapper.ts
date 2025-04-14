@@ -1,5 +1,4 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { IConfigurationService } from '@/config/configuration.service.interface';
 import { ModuleTransaction } from '@/domain/safe/entities/module-transaction.entity';
 import { MultisigTransaction } from '@/domain/safe/entities/multisig-transaction.entity';
 import { Operation } from '@/domain/safe/entities/operation.entity';
@@ -36,10 +35,6 @@ export class MultisigTransactionInfoMapper {
   private readonly TRANSFER_METHOD = 'transfer';
   private readonly TRANSFER_FROM_METHOD = 'transferFrom';
   private readonly SAFE_TRANSFER_FROM_METHOD = 'safeTransferFrom';
-  private readonly isRichFragmentsEnabled: boolean;
-  private readonly isSwapsDecodingEnabled: boolean;
-  private readonly isTwapsDecodingEnabled: boolean;
-  private readonly isNativeStakingDecodingEnabled: boolean;
 
   private readonly ERC20_TRANSFER_METHODS = [
     this.TRANSFER_METHOD,
@@ -54,8 +49,6 @@ export class MultisigTransactionInfoMapper {
 
   constructor(
     @Inject(ITokenRepository) private readonly tokenRepository: TokenRepository,
-    @Inject(IConfigurationService)
-    private readonly configurationService: IConfigurationService,
     @Inject(LoggingService) private readonly loggingService: ILoggingService,
     private readonly dataDecodedParamHelper: DataDecodedParamHelper,
     private readonly customTransactionMapper: CustomTransactionMapper,
@@ -71,20 +64,7 @@ export class MultisigTransactionInfoMapper {
     private readonly kilnNativeStakingHelper: KilnNativeStakingHelper,
     private readonly nativeStakingMapper: NativeStakingMapper,
     private readonly kilnDecoder: KilnDecoder,
-  ) {
-    this.isRichFragmentsEnabled = this.configurationService.getOrThrow(
-      'features.richFragments',
-    );
-    this.isSwapsDecodingEnabled = this.configurationService.getOrThrow(
-      'features.swapsDecoding',
-    );
-    this.isTwapsDecodingEnabled = this.configurationService.getOrThrow(
-      'features.twapsDecoding',
-    );
-    this.isNativeStakingDecodingEnabled = this.configurationService.getOrThrow(
-      'features.nativeStakingDecoding',
-    );
-  }
+  ) {}
 
   async mapTransactionInfo(
     chainId: string,
@@ -98,61 +78,48 @@ export class MultisigTransactionInfoMapper {
     const dataSize =
       dataByteLength >= 2 ? Math.floor((dataByteLength - 2) / 2) : 0;
 
-    const richDecodedInfo =
-      await this.humanDescriptionMapper.mapRichDecodedInfo(
-        transaction,
-        chainId,
-      );
-
     const humanDescription =
-      this.humanDescriptionMapper.mapHumanDescription(richDecodedInfo);
+      await this.humanDescriptionMapper.mapHumanDescription(
+        transaction,
+        chainId,
+      );
 
-    // If the rich fragment feature is disabled, we set it as undefined.
-    // Undefined properties are not rendered on the response
-    const richDecodedInfoApiProperty = this.isRichFragmentsEnabled
-      ? richDecodedInfo
-      : undefined;
+    const swapOrder: SwapOrderTransactionInfo | null = await this.mapSwapOrder(
+      chainId,
+      transaction,
+    );
+    // If the transaction is a swap order, we return it immediately
+    if (swapOrder) return swapOrder;
 
-    if (this.isSwapsDecodingEnabled) {
-      const swapOrder: SwapOrderTransactionInfo | null =
-        await this.mapSwapOrder(chainId, transaction);
-      // If the transaction is a swap order, we return it immediately
-      if (swapOrder) return swapOrder;
+    // If the transaction is a TWAP order, we return it immediately
+    const twapOrder = await this.mapTwapOrder(chainId, transaction);
+    if (twapOrder) {
+      return twapOrder;
     }
 
-    if (this.isTwapsDecodingEnabled) {
-      // If the transaction is a TWAP order, we return it immediately
-      const twapOrder = await this.mapTwapOrder(chainId, transaction);
-      if (twapOrder) {
-        return twapOrder;
-      }
+    const nativeStakingDeposit = await this.mapNativeStakingDeposit(
+      chainId,
+      transaction,
+    );
+    // If the transaction is a native staking deposit, we return it immediately
+    if (nativeStakingDeposit) {
+      return nativeStakingDeposit;
     }
 
-    if (this.isNativeStakingDecodingEnabled) {
-      const nativeStakingDeposit = await this.mapNativeStakingDeposit(
-        chainId,
-        transaction,
-      );
-      // If the transaction is a native staking deposit, we return it immediately
-      if (nativeStakingDeposit) {
-        return nativeStakingDeposit;
-      }
+    const nativeStakingValidatorsExit =
+      await this.mapNativeStakingValidatorsExit(chainId, transaction);
+    // If the transaction is a native staking validators exit, we return it immediately
+    if (nativeStakingValidatorsExit) {
+      return nativeStakingValidatorsExit;
+    }
 
-      const nativeStakingValidatorsExit =
-        await this.mapNativeStakingValidatorsExit(chainId, transaction);
-      // If the transaction is a native staking validators exit, we return it immediately
-      if (nativeStakingValidatorsExit) {
-        return nativeStakingValidatorsExit;
-      }
-
-      const nativeStakingWithdraw = await this.mapNativeStakingWithdraw(
-        chainId,
-        transaction,
-      );
-      // If the transaction is a native staking withdraw, we return it immediately
-      if (nativeStakingWithdraw) {
-        return nativeStakingWithdraw;
-      }
+    const nativeStakingWithdraw = await this.mapNativeStakingWithdraw(
+      chainId,
+      transaction,
+    );
+    // If the transaction is a native staking withdraw, we return it immediately
+    if (nativeStakingWithdraw) {
+      return nativeStakingWithdraw;
     }
 
     if (this.isCustomTransaction(value, dataSize, transaction.operation)) {
@@ -161,7 +128,6 @@ export class MultisigTransactionInfoMapper {
         dataSize,
         chainId,
         humanDescription,
-        richDecodedInfoApiProperty,
       );
     }
 
@@ -170,7 +136,6 @@ export class MultisigTransactionInfoMapper {
         chainId,
         transaction,
         humanDescription,
-        richDecodedInfoApiProperty,
       );
     }
 
@@ -186,7 +151,7 @@ export class MultisigTransactionInfoMapper {
         );
       }
 
-      const dataDecodedParameters: DataDecodedParameter[] | null =
+      const dataDecodedParameters: Array<DataDecodedParameter> | null =
         transaction.dataDecoded.parameters?.map(
           (parameter) =>
             new DataDecodedParameter(
@@ -201,7 +166,6 @@ export class MultisigTransactionInfoMapper {
         new DataDecoded(transaction.dataDecoded.method, dataDecodedParameters),
         settingsInfo,
         humanDescription,
-        richDecodedInfoApiProperty,
       );
     }
 
@@ -217,7 +181,6 @@ export class MultisigTransactionInfoMapper {
             chainId,
             transaction,
             humanDescription,
-            richDecodedInfoApiProperty,
           );
         case TokenType.Erc721:
           return this.erc721TransferMapper.mapErc721Transfer(
@@ -225,7 +188,6 @@ export class MultisigTransactionInfoMapper {
             chainId,
             transaction,
             humanDescription,
-            richDecodedInfoApiProperty,
           );
       }
     }
@@ -235,7 +197,6 @@ export class MultisigTransactionInfoMapper {
       dataSize,
       chainId,
       humanDescription,
-      richDecodedInfoApiProperty,
     );
   }
 

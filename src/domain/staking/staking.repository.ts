@@ -15,15 +15,15 @@ import {
 } from '@/datasources/staking-api/entities/dedicated-staking-stats.entity';
 import {
   Deployment,
-  DeploymentSchema,
+  DeploymentsSchema,
 } from '@/datasources/staking-api/entities/deployment.entity';
 import {
+  DefiVaultsStateSchema,
   DefiVaultStats,
-  DefiVaultStatsSchema,
 } from '@/datasources/staking-api/entities/defi-vault-stats.entity';
 import {
   Stake,
-  StakeSchema,
+  StakesSchema,
 } from '@/datasources/staking-api/entities/stake.entity';
 import {
   TransactionStatus,
@@ -57,7 +57,7 @@ export class StakingRepository implements IStakingRepository {
   private async getDeployments(chainId: string): Promise<Array<Deployment>> {
     const stakingApi = await this.stakingApiFactory.getApi(chainId);
     const deployments = await stakingApi.getDeployments();
-    return deployments.map((deployment) => DeploymentSchema.parse(deployment));
+    return DeploymentsSchema.parse(deployments);
   }
 
   public async getNetworkStats(chainId: string): Promise<NetworkStats> {
@@ -90,19 +90,17 @@ export class StakingRepository implements IStakingRepository {
     const stakingApi = await this.stakingApiFactory.getApi(args.chainId);
     const defiStats = await stakingApi.getDefiVaultStats(args.vault);
     // Cannot be >1 contract deployed at the same address so return first element
-    return defiStats.map((defiStats) =>
-      DefiVaultStatsSchema.parse(defiStats),
-    )[0];
+    return DefiVaultsStateSchema.parse(defiStats)[0];
   }
 
   public async getStakes(args: {
     chainId: string;
     safeAddress: `0x${string}`;
     validatorsPublicKeys: Array<`0x${string}`>;
-  }): Promise<Stake[]> {
+  }): Promise<Array<Stake>> {
     const stakingApi = await this.stakingApiFactory.getApi(args.chainId);
     const stakes = await stakingApi.getStakes(args);
-    return stakes.map((stake) => StakeSchema.parse(stake));
+    return StakesSchema.parse(stakes);
   }
 
   public async clearStakes(args: {

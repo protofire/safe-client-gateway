@@ -26,6 +26,13 @@ import { NetworkResponseError } from '@/datasources/network/entities/network.err
 import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
 import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
 import type { Server } from 'net';
+import { TestPostgresDatabaseModule } from '@/datasources/db/__tests__/test.postgres-database.module';
+import { PostgresDatabaseModule } from '@/datasources/db/v1/postgres-database.module';
+import { PostgresDatabaseModuleV2 } from '@/datasources/db/v2/postgres-database.module';
+import { TestPostgresDatabaseModuleV2 } from '@/datasources/db/v2/test.postgres-database.module';
+import { TestTargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/__tests__/test.targeted-messaging.datasource.module';
+import { TargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/targeted-messaging.datasource.module';
+import { rawify } from '@/validation/entities/raw.entity';
 
 describe('List module transactions by Safe - Transactions Controller (Unit)', () => {
   let app: INestApplication<Server>;
@@ -38,6 +45,10 @@ describe('List module transactions by Safe - Transactions Controller (Unit)', ()
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(configuration)],
     })
+      .overrideModule(PostgresDatabaseModule)
+      .useModule(TestPostgresDatabaseModule)
+      .overrideModule(TargetedMessagingDatasourceModule)
+      .useModule(TestTargetedMessagingDatasourceModule)
       .overrideModule(CacheModule)
       .useModule(TestCacheModule)
       .overrideModule(RequestScopedLoggingModule)
@@ -46,6 +57,8 @@ describe('List module transactions by Safe - Transactions Controller (Unit)', ()
       .useModule(TestNetworkModule)
       .overrideModule(QueuesApiModule)
       .useModule(TestQueuesApiModule)
+      .overrideModule(PostgresDatabaseModuleV2)
+      .useModule(TestPostgresDatabaseModuleV2)
       .compile();
 
     const configurationService = moduleFixture.get<IConfigurationService>(
@@ -90,7 +103,7 @@ describe('List module transactions by Safe - Transactions Controller (Unit)', ()
     const safeAddress = faker.finance.ethereumAddress();
     const chainResponse = chainBuilder().with('chainId', chainId).build();
     networkService.get.mockResolvedValueOnce({
-      data: chainResponse,
+      data: rawify(chainResponse),
       status: 200,
     });
     const error = new NetworkResponseError(
@@ -120,19 +133,19 @@ describe('List module transactions by Safe - Transactions Controller (Unit)', ()
     const safeAddress = faker.finance.ethereumAddress();
     const page = pageBuilder().build();
     const chain = chainBuilder().with('chainId', chainId).build();
-    networkService.get.mockResolvedValueOnce({ data: chain, status: 200 });
     networkService.get.mockResolvedValueOnce({
-      data: { ...page, count: faker.word.words() },
+      data: rawify(chain),
+      status: 200,
+    });
+    networkService.get.mockResolvedValueOnce({
+      data: rawify({ ...page, count: faker.word.words() }),
       status: 200,
     });
 
     await request(app.getHttpServer())
       .get(`/v1/chains/${chainId}/safes/${safeAddress}/module-transactions`)
-      .expect(500)
-      .expect({
-        statusCode: 500,
-        message: 'Internal server error',
-      });
+      .expect(502)
+      .expect({ statusCode: 502, message: 'Bad gateway' });
   });
 
   it('Get module transaction should return 404', async () => {
@@ -140,7 +153,7 @@ describe('List module transactions by Safe - Transactions Controller (Unit)', ()
     const safeAddress = faker.finance.ethereumAddress();
     const chainResponse = chainBuilder().with('chainId', chainId).build();
     networkService.get.mockResolvedValueOnce({
-      data: chainResponse,
+      data: rawify(chainResponse),
       status: 200,
     });
     const error = new NetworkResponseError(
@@ -183,14 +196,17 @@ describe('List module transactions by Safe - Transactions Controller (Unit)', ()
 
     const safe = safeBuilder().build();
     networkService.get.mockResolvedValueOnce({
-      data: chainResponse,
+      data: rawify(chainResponse),
       status: 200,
     });
     networkService.get.mockResolvedValueOnce({
-      data: moduleTransaction,
+      data: rawify(moduleTransaction),
       status: 200,
     });
-    networkService.get.mockResolvedValueOnce({ data: safe, status: 200 });
+    networkService.get.mockResolvedValueOnce({
+      data: rawify(safe),
+      status: 200,
+    });
 
     await request(app.getHttpServer())
       .get(`/v1/chains/${chainId}/safes/${safeAddress}/module-transactions`)
