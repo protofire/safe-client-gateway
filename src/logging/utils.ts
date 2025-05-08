@@ -1,5 +1,5 @@
-import { Request } from 'express';
-import { get } from 'lodash';
+import type { Request } from 'express';
+import get from 'lodash/get';
 
 const HEADER_IP_ADDRESS = 'X-Real-IP';
 const HEADER_SAFE_APP_USER_AGENT = 'Safe-App-User-Agent';

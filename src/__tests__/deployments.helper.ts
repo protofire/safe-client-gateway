@@ -41,6 +41,15 @@ const deploymentAliases = {
     'GnosisSafeL2', // 1.3.0
     'SafeL2', // 1.4.1
   ],
+  SafeMigration: [
+    'SafeMigration', // 1.4.1
+  ],
+  SafeToL2Migration: [
+    'SafeToL2Migration', // 1.4.1
+  ],
+  SafeToL2Setup: [
+    'SafeToL2Setup', // 1.4.1
+  ],
   SignMessageLib: [
     'SignMessageLib', // 1.3.0, 1.4.1
   ],
@@ -60,7 +69,7 @@ const assetsDir = path.join(
 );
 
 type VersionsByChainIdByDeploymentMap = {
-  [contractAlias: string]: { [chainId: string]: string[] | undefined };
+  [contractAlias: string]: { [chainId: string]: Array<string> | undefined };
 };
 
 export function getVersionsByChainIdByDeploymentMap(): VersionsByChainIdByDeploymentMap {

@@ -5,9 +5,10 @@ import { CacheDir } from '@/datasources/cache/entities/cache-dir.entity';
 import { chainBuilder } from '@/domain/chains/entities/__tests__/chain.builder';
 import { rpcUriBuilder } from '@/domain/chains/entities/__tests__/rpc-uri.builder';
 import { RpcUriAuthentication } from '@/domain/chains/entities/rpc-uri-authentication.entity';
-import { IConfigApi } from '@/domain/interfaces/config-api.interface';
+import type { IConfigApi } from '@/domain/interfaces/config-api.interface';
+import { rawify } from '@/validation/entities/raw.entity';
 import { faker } from '@faker-js/faker';
-import { toHex } from 'viem';
+import { hexToNumber, toHex } from 'viem';
 
 const configApiMock = jest.mocked({
   getChain: jest.fn(),
@@ -39,7 +40,7 @@ describe('BlockchainApiManager', () => {
   describe('getApi', () => {
     it('caches the API', async () => {
       const chain = chainBuilder().build();
-      configApiMock.getChain.mockResolvedValue(chain);
+      configApiMock.getChain.mockResolvedValue(rawify(chain));
 
       const api = await target.getApi(chain.chainId);
       const cachedApi = await target.getApi(chain.chainId);
@@ -58,7 +59,7 @@ describe('BlockchainApiManager', () => {
             .build(),
         )
         .build();
-      configApiMock.getChain.mockResolvedValue(chain);
+      configApiMock.getChain.mockResolvedValue(rawify(chain));
 
       const api = await target.getApi(chain.chainId);
 
@@ -70,7 +71,7 @@ describe('BlockchainApiManager', () => {
       const chain = chainBuilder()
         .with('rpcUri', rpcUriBuilder().with('value', rpcUriValue).build())
         .build();
-      configApiMock.getChain.mockResolvedValue(chain);
+      configApiMock.getChain.mockResolvedValue(rawify(chain));
 
       const api = await target.getApi(chain.chainId);
 
@@ -79,7 +80,7 @@ describe('BlockchainApiManager', () => {
 
     it('should not include the INFURA_API_KEY in the RPC URI for a RPC provider different from Infura', async () => {
       const chain = chainBuilder().build();
-      configApiMock.getChain.mockResolvedValue(chain);
+      configApiMock.getChain.mockResolvedValue(rawify(chain));
 
       const api = await target.getApi(chain.chainId);
 
@@ -90,7 +91,7 @@ describe('BlockchainApiManager', () => {
   describe('destroyApi', () => {
     it('clears the API', async () => {
       const chain = chainBuilder().build();
-      configApiMock.getChain.mockResolvedValue(chain);
+      configApiMock.getChain.mockResolvedValue(rawify(chain));
 
       const api = await target.getApi(chain.chainId);
       target.destroyApi(chain.chainId);
@@ -101,7 +102,7 @@ describe('BlockchainApiManager', () => {
   });
 
   describe('createCachedRpcClient', () => {
-    it('caches RPC requests', async () => {
+    it('caches string response RPC requests', async () => {
       const chain = chainBuilder().build();
       const client = target._createCachedRpcClient(chain);
       const fetchSpy = jest.spyOn(global, 'fetch');
@@ -130,7 +131,7 @@ describe('BlockchainApiManager', () => {
         `${body.method}_undefined`,
       );
 
-      await client.getChainId();
+      await expect(client.getChainId()).resolves.toBe(hexToNumber(chainId));
 
       // Should be cached
       await client.getChainId();
@@ -144,9 +145,74 @@ describe('BlockchainApiManager', () => {
         },
         method: 'POST',
         signal: expect.any(AbortSignal),
+        url: chain.rpcUri.value,
       });
       expect(fakeCacheService.keyCount()).toBe(1);
-      await expect(fakeCacheService.get(cacheDir)).resolves.toBe(chainId);
+      const cached = await fakeCacheService.hGet(cacheDir);
+      expect(JSON.parse(cached!)).toBe(chainId);
+
+      fetchSpy.mockRestore();
+    });
+
+    it('caches non-string response RPC requests', async () => {
+      const chain = chainBuilder().build();
+      const client = target._createCachedRpcClient(chain);
+      const fetchSpy = jest.spyOn(global, 'fetch');
+      const blockByNumber = {
+        baseFeePerGas: null,
+        hash: null,
+        logsBloom: null,
+        nonce: null,
+        number: null,
+        totalDifficulty: null,
+      };
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      fetchSpy.mockImplementation((_: unknown) => {
+        return Promise.resolve({
+          headers: new Headers({ 'Content-Type': 'application/json' }),
+          ok: true,
+          status: 200,
+          json: () => {
+            // Return chain ID
+            return Promise.resolve({
+              result: blockByNumber,
+            });
+          },
+        } as Response);
+      });
+      const body = {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'eth_getBlockByNumber',
+        params: ['latest', false],
+      };
+      const cacheDir = new CacheDir(
+        `${chain.chainId}_rpc_requests`,
+        `${body.method}_${JSON.stringify(body.params)}`,
+      );
+
+      await expect(client.getBlock()).resolves.toStrictEqual(
+        // Object containing in order not to mock entire return type
+        expect.objectContaining(blockByNumber),
+      );
+
+      // Should be cached
+      await client.getBlock();
+      await client.getBlock();
+
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(fetch).toHaveBeenNthCalledWith(1, chain.rpcUri.value, {
+        body: JSON.stringify(body),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        method: 'POST',
+        signal: expect.any(AbortSignal),
+        url: chain.rpcUri.value,
+      });
+      expect(fakeCacheService.keyCount()).toBe(1);
+      const cached = await fakeCacheService.hGet(cacheDir);
+      expect(JSON.parse(cached!)).toStrictEqual(blockByNumber);
 
       fetchSpy.mockRestore();
     });

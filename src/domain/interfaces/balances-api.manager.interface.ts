@@ -1,5 +1,6 @@
-import { IApiManager } from '@/domain/interfaces/api.manager.interface';
-import { IBalancesApi } from '@/domain/interfaces/balances-api.interface';
+import type { IApiManager } from '@/domain/interfaces/api.manager.interface';
+import type { IBalancesApi } from '@/domain/interfaces/balances-api.interface';
+import type { Raw } from '@/validation/entities/raw.entity';
 
 export const IBalancesApiManager = Symbol('IBalancesApiManager');
 
@@ -22,5 +23,5 @@ export interface IBalancesApiManager extends IApiManager<IBalancesApi> {
    * Gets the list of supported fiat codes.
    * @returns an alphabetically ordered list of uppercase strings representing the supported fiat codes.
    */
-  getFiatCodes(): Promise<string[]>;
+  getFiatCodes(): Promise<Raw<Array<string>>>;
 }

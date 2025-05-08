@@ -1,9 +1,11 @@
-import { HttpStatus, PipeTransform } from '@nestjs/common';
-import { ZodError, ZodIssue, ZodSchema, z } from 'zod';
+import type { PipeTransform } from '@nestjs/common';
+import { HttpStatus } from '@nestjs/common';
+import type { ZodIssue, ZodSchema, z } from 'zod';
+import { ZodError } from 'zod';
 
 export class ZodErrorWithCode extends ZodError {
   constructor(
-    public issues: ZodIssue[],
+    public issues: Array<ZodIssue>,
     public code: number,
   ) {
     super(issues);

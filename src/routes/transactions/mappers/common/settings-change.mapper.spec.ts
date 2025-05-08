@@ -1,5 +1,5 @@
 import { faker } from '@faker-js/faker';
-import { AddressInfoHelper } from '@/routes/common/address-info/address-info.helper';
+import type { AddressInfoHelper } from '@/routes/common/address-info/address-info.helper';
 import { AddressInfo } from '@/routes/common/entities/address-info.entity';
 import { AddOwner } from '@/routes/transactions/entities/settings-changes/add-owner.entity';
 import { ChangeMasterCopy } from '@/routes/transactions/entities/settings-changes/change-master-copy.entity';
@@ -15,7 +15,7 @@ import { multisigTransactionBuilder } from '@/domain/safe/entities/__tests__/mul
 import {
   dataDecodedBuilder,
   dataDecodedParameterBuilder,
-} from '@/domain/data-decoder/entities/__tests__/data-decoded.builder';
+} from '@/domain/data-decoder/v1/entities/__tests__/data-decoded.builder';
 import { DataDecodedParamHelper } from '@/routes/transactions/mappers/common/data-decoded-param.helper';
 import { SettingsChangeMapper } from '@/routes/transactions/mappers/common/settings-change.mapper';
 

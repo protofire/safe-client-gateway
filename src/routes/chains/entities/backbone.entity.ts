@@ -1,18 +1,18 @@
 import { Backbone as DomainBackbone } from '@/domain/backbone/entities/backbone.entity';
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class Backbone implements DomainBackbone {
   @ApiProperty()
   api_version!: string;
-  @ApiProperty()
-  headers!: string[] | null;
+  @ApiPropertyOptional({ type: String, nullable: true })
+  headers!: Array<string> | null;
   @ApiProperty()
   host!: string;
   @ApiProperty()
   name!: string;
   @ApiProperty()
   secure!: boolean;
-  @ApiProperty()
+  @ApiProperty({ type: Object, nullable: true })
   settings!: Record<string, unknown> | null;
   @ApiProperty()
   version!: string;

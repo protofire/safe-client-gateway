@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
 import { LoggingService, ILoggingService } from '@/logging/logging.interface';
 import { Event } from '@/routes/hooks/entities/event.entity';
 import { IConfigurationService } from '@/config/configuration.service.interface';
@@ -8,9 +8,12 @@ import { EventSchema } from '@/routes/hooks/entities/schemas/event.schema';
 import { IHooksRepository } from '@/domain/hooks/hooks.repository.interface';
 import { EventNotificationsHelper } from '@/domain/hooks/helpers/event-notifications.helper';
 import { EventCacheHelper } from '@/domain/hooks/helpers/event-cache.helper';
+import { ConfigEventType } from '@/routes/hooks/entities/event-type.entity';
 
 @Injectable()
-export class HooksRepositoryWithNotifications implements IHooksRepository {
+export class HooksRepositoryWithNotifications
+  implements IHooksRepository, OnModuleInit
+{
   private readonly queueName: string;
 
   constructor(
@@ -55,11 +58,7 @@ export class HooksRepositoryWithNotifications implements IHooksRepository {
         this.eventCacheHelper.onEventLog(event);
       });
     } else {
-      this.loggingService.warn({
-        type: 'unsupported_chain_event',
-        chainId: event.chainId,
-        eventType: event.type,
-      });
+      return this.eventCacheHelper.onUnsupportedChainEvent(event);
     }
   }
 }
@@ -69,7 +68,7 @@ export class HooksRepositoryWithNotifications implements IHooksRepository {
 // due to config injection issues from the ConfigurationService so this is a
 // temporary solution
 @Injectable()
-export class HooksRepository implements IHooksRepository {
+export class HooksRepository implements IHooksRepository, OnModuleInit {
   private readonly queueName: string;
 
   constructor(
@@ -104,16 +103,12 @@ export class HooksRepository implements IHooksRepository {
     const isSupportedChainId = await this.eventCacheHelper.isSupportedChainMemo(
       event.chainId,
     );
-    if (isSupportedChainId) {
+    if (isSupportedChainId || event.type === ConfigEventType.CHAIN_UPDATE) {
       return this.eventCacheHelper.onEventClearCache(event).finally(() => {
         this.eventCacheHelper.onEventLog(event);
       });
     } else {
-      this.loggingService.warn({
-        type: 'unsupported_chain_event',
-        chainId: event.chainId,
-        eventType: event.type,
-      });
+      return this.eventCacheHelper.onUnsupportedChainEvent(event);
     }
   }
 }

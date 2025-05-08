@@ -1,6 +1,6 @@
-import { CounterfactualSafe } from '@/domain/accounts/counterfactual-safes/entities/counterfactual-safe.entity';
-import { CreateCounterfactualSafeDto } from '@/domain/accounts/counterfactual-safes/entities/create-counterfactual-safe.dto.entity';
-import { Account } from '@/domain/accounts/entities/account.entity';
+import type { CounterfactualSafe } from '@/domain/accounts/counterfactual-safes/entities/counterfactual-safe.entity';
+import type { CreateCounterfactualSafeDto } from '@/domain/accounts/counterfactual-safes/entities/create-counterfactual-safe.dto.entity';
+import type { Account } from '@/domain/accounts/entities/account.entity';
 
 export const ICounterfactualSafesDatasource = Symbol(
   'ICounterfactualSafesDatasource',
@@ -20,7 +20,7 @@ export interface ICounterfactualSafesDatasource {
 
   getCounterfactualSafesForAddress(
     address: `0x${string}`,
-  ): Promise<CounterfactualSafe[]>;
+  ): Promise<Array<CounterfactualSafe>>;
 
   deleteCounterfactualSafe(args: {
     account: Account;

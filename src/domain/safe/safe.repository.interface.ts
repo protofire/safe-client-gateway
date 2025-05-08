@@ -12,6 +12,8 @@ import { Module } from '@nestjs/common';
 import { SafeRepository } from '@/domain/safe/safe.repository';
 import { ChainsRepositoryModule } from '@/domain/chains/chains.repository.interface';
 import { TransactionApiManagerModule } from '@/domain/interfaces/transaction-api.manager.interface';
+import { TransactionVerifierHelper } from '@/routes/transactions/helpers/transaction-verifier.helper';
+import { DelegatesV2RepositoryModule } from '@/domain/delegate/v2/delegates.v2.repository.interface';
 
 export const ISafeRepository = Symbol('ISafeRepository');
 
@@ -37,16 +39,19 @@ export interface ISafeRepository {
     offset?: number;
   }): Promise<Page<Transfer>>;
 
-  clearTransfers(args: { chainId: string; safeAddress: string }): Promise<void>;
+  clearTransfers(args: {
+    chainId: string;
+    safeAddress: `0x${string}`;
+  }): Promise<void>;
 
   getIncomingTransfers(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
     executionDateGte?: string;
     executionDateLte?: string;
-    to?: string;
+    to?: `0x${string}`;
     value?: string;
-    tokenAddress?: string;
+    tokenAddress?: `0x${string}`;
     txHash?: string;
     limit?: number;
     offset?: number;
@@ -54,7 +59,7 @@ export interface ISafeRepository {
 
   clearIncomingTransfers(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
   }): Promise<void>;
 
   addConfirmation(args: {
@@ -137,7 +142,7 @@ export interface ISafeRepository {
 
   clearMultisigTransactions(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
   }): Promise<void>;
 
   getMultisigTransactions(args: {
@@ -172,9 +177,13 @@ export interface ISafeRepository {
     ownerAddress: `0x${string}`;
   }): Promise<SafeList>;
 
-  getAllSafesByOwner(args: {
+  deprecated__getAllSafesByOwner(args: {
     ownerAddress: `0x${string}`;
   }): Promise<{ [chainId: string]: Array<string> }>;
+
+  getAllSafesByOwner(args: {
+    ownerAddress: `0x${string}`;
+  }): Promise<{ [chainId: string]: Array<string> | null }>;
 
   getLastTransactionSortedByNonce(args: {
     chainId: string;
@@ -183,7 +192,7 @@ export interface ISafeRepository {
 
   proposeTransaction(args: {
     chainId: string;
-    safeAddress: string;
+    safeAddress: `0x${string}`;
     proposeTransactionDto: ProposeTransactionDto;
   }): Promise<unknown>;
 
@@ -204,17 +213,22 @@ export interface ISafeRepository {
 
   getSafesByModule(args: {
     chainId: string;
-    moduleAddress: string;
+    moduleAddress: `0x${string}`;
   }): Promise<SafeList>;
 }
 
 @Module({
-  imports: [ChainsRepositoryModule, TransactionApiManagerModule],
+  imports: [
+    ChainsRepositoryModule,
+    TransactionApiManagerModule,
+    DelegatesV2RepositoryModule,
+  ],
   providers: [
     {
       provide: ISafeRepository,
       useClass: SafeRepository,
     },
+    TransactionVerifierHelper,
   ],
   exports: [ISafeRepository],
 })

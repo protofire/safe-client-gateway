@@ -15,8 +15,12 @@ export class Campaign implements DomainCampaign {
   endDate!: Date;
   @ApiPropertyOptional({ type: String, nullable: true })
   lastUpdated!: Date | null;
-  @ApiPropertyOptional({ type: [ActivityMetadata], nullable: true })
-  activitiesMetadata!: ActivityMetadata[] | null;
+  @ApiPropertyOptional({
+    type: ActivityMetadata,
+    isArray: true,
+    nullable: true,
+  })
+  activitiesMetadata!: Array<ActivityMetadata> | null;
   @ApiPropertyOptional({ type: String, nullable: true })
   rewardValue!: string | null;
   @ApiPropertyOptional({ type: String, nullable: true })

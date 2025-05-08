@@ -29,9 +29,11 @@ export class Message {
   @ApiProperty()
   proposedBy: AddressInfo;
   @ApiProperty()
-  confirmations: MessageConfirmation[];
+  confirmations: Array<MessageConfirmation>;
   @ApiPropertyOptional({ type: String, nullable: true })
   preparedSignature: `0x${string}` | null;
+  @ApiPropertyOptional({ type: String, nullable: true })
+  origin: string | null;
 
   constructor(
     messageHash: `0x${string}`,
@@ -44,8 +46,9 @@ export class Message {
     confirmationsSubmitted: number,
     confirmationsRequired: number,
     proposedBy: AddressInfo,
-    confirmations: MessageConfirmation[],
+    confirmations: Array<MessageConfirmation>,
     preparedSignature: `0x${string}` | null,
+    origin: string | null,
   ) {
     this.messageHash = messageHash;
     this.status = status;
@@ -59,5 +62,6 @@ export class Message {
     this.proposedBy = proposedBy;
     this.confirmations = confirmations;
     this.preparedSignature = preparedSignature;
+    this.origin = origin;
   }
 }

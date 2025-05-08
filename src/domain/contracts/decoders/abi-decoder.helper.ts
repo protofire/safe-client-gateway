@@ -1,10 +1,12 @@
-import {
+import type {
   Abi,
   ContractEventName,
   ContractFunctionName,
   DecodeEventLogParameters,
   DecodeFunctionDataParameters,
   Hex,
+} from 'viem';
+import {
   decodeEventLog as _decodeEventLog,
   decodeFunctionData as _decodeFunctionData,
   toFunctionSelector,
@@ -53,7 +55,7 @@ export abstract class AbiDecoder<TAbi extends Abi> {
   decodeEventLog<
     const abi extends TAbi,
     eventName extends ContractEventName<abi> | undefined = undefined,
-    topics extends Hex[] = Hex[],
+    topics extends Array<Hex> = Array<Hex>,
     data extends Hex | undefined = undefined,
     strict extends boolean = true,
   >(

@@ -1,13 +1,13 @@
 import { erc20TransferBuilder } from '@/domain/safe/entities/__tests__/erc20-transfer.builder';
 import { orderBuilder } from '@/domain/swaps/entities/__tests__/order.builder';
 import { OrdersSchema } from '@/domain/swaps/entities/order.entity';
-import { ISwapsRepository } from '@/domain/swaps/swaps.repository';
+import type { ISwapsRepository } from '@/domain/swaps/swaps.repository';
 import { tokenBuilder } from '@/domain/tokens/__tests__/token.builder';
 import { addressInfoBuilder } from '@/routes/common/__tests__/entities/address-info.builder';
 import { TransferDirection } from '@/routes/transactions/entities/transfer-transaction-info.entity';
 import { Erc20Transfer } from '@/routes/transactions/entities/transfers/erc20-transfer.entity';
-import { SwapAppsHelper } from '@/routes/transactions/helpers/swap-apps.helper';
-import { SwapOrderHelper } from '@/routes/transactions/helpers/swap-order.helper';
+import type { SwapAppsHelper } from '@/routes/transactions/helpers/swap-apps.helper';
+import type { SwapOrderHelper } from '@/routes/transactions/helpers/swap-order.helper';
 import { getTransferDirection } from '@/routes/transactions/mappers/common/transfer-direction.helper';
 import { SwapTransferInfoMapper } from '@/routes/transactions/mappers/transfers/swap-transfer-info.mapper';
 import { faker } from '@faker-js/faker';
@@ -142,7 +142,8 @@ describe('SwapTransferInfoMapper', () => {
       direction: 'UNKNOWN',
       executedBuyAmount: order.executedBuyAmount.toString(),
       executedSellAmount: order.executedSellAmount.toString(),
-      executedSurplusFee: order.executedSurplusFee?.toString() ?? null,
+      executedFee: order.executedFee.toString(),
+      executedFeeToken: token,
       explorerUrl,
       fullAppData: order.fullAppData,
       humanDescription: null,
@@ -151,7 +152,6 @@ describe('SwapTransferInfoMapper', () => {
       owner: safeAddress,
       receiver: order.receiver,
       recipient,
-      richDecodedInfo: null,
       sellAmount: order.sellAmount.toString(),
       sellToken: token,
       sender,
@@ -224,7 +224,8 @@ describe('SwapTransferInfoMapper', () => {
       direction: 'UNKNOWN',
       executedBuyAmount: order.executedBuyAmount.toString(),
       executedSellAmount: order.executedSellAmount.toString(),
-      executedSurplusFee: order.executedSurplusFee?.toString() ?? null,
+      executedFee: order.executedFee.toString(),
+      executedFeeToken: token,
       explorerUrl,
       fullAppData: order.fullAppData,
       humanDescription: null,
@@ -233,7 +234,6 @@ describe('SwapTransferInfoMapper', () => {
       owner: safeAddress,
       receiver: order.receiver,
       recipient,
-      richDecodedInfo: null,
       sellAmount: order.sellAmount.toString(),
       sellToken: token,
       sender,
@@ -259,13 +259,12 @@ describe('SwapTransferInfoMapper', () => {
         executedSellAmount: '5555000000',
         executedSellAmountBeforeFees: '5555000000',
         executedFeeAmount: '0',
-        executedSurplusFee: '5012654',
+        executedFee: '5012654',
+        executedFeeToken: '0xdac17f958d2ee523a2206206994597c13d831ec7',
         invalidated: false,
         status: 'fulfilled',
         class: 'limit',
         settlementContract: '0x9008d19f58aabd9ed0d60971565aa8510560ab41',
-        fullFeeAmount: '0',
-        solverFee: '0',
         isLiquidityOrder: false,
         fullAppData:
           '{"appCode":"CoW Swap","environment":"production","metadata":{"orderClass":{"orderClass":"market"},"quote":{"slippageBips":50},"utm":{"utmContent":"header-cta-button","utmMedium":"web","utmSource":"cow.fi"}},"version":"1.1.0"}',
@@ -296,13 +295,12 @@ describe('SwapTransferInfoMapper', () => {
         executedSellAmount: '3000000000',
         executedSellAmountBeforeFees: '3000000000',
         executedFeeAmount: '0',
-        executedSurplusFee: '4290918',
+        executedFee: '4290918',
+        executedFeeToken: '0xdac17f958d2ee523a2206206994597c13d831ec7',
         invalidated: false,
         status: 'fulfilled',
         class: 'limit',
         settlementContract: '0x9008d19f58aabd9ed0d60971565aa8510560ab41',
-        fullFeeAmount: '0',
-        solverFee: '0',
         isLiquidityOrder: false,
         fullAppData:
           '{"appCode":"CoW Swap","environment":"production","metadata":{"orderClass":{"orderClass":"market"},"quote":{"slippageBips":50},"utm":{"utmContent":"header-cta-button","utmMedium":"web","utmSource":"cow.fi"}},"version":"1.1.0"}',
@@ -385,7 +383,8 @@ describe('SwapTransferInfoMapper', () => {
       direction: 'OUTGOING',
       executedBuyAmount: orders[0].executedBuyAmount.toString(),
       executedSellAmount: orders[0].executedSellAmount.toString(),
-      executedSurplusFee: orders[0].executedSurplusFee?.toString() ?? null,
+      executedFee: orders[0].executedFee.toString(),
+      executedFeeToken: token,
       explorerUrl,
       fullAppData: orders[0].fullAppData,
       humanDescription: null,
@@ -394,7 +393,6 @@ describe('SwapTransferInfoMapper', () => {
       owner: orders[0].owner,
       receiver: orders[0].receiver,
       recipient,
-      richDecodedInfo: null,
       sellAmount: orders[0].sellAmount.toString(),
       sellToken: token,
       sender,
@@ -420,13 +418,12 @@ describe('SwapTransferInfoMapper', () => {
         executedSellAmount: '5555000000',
         executedSellAmountBeforeFees: '5555000000',
         executedFeeAmount: '0',
-        executedSurplusFee: '5012654',
+        executedFee: '5012654',
+        executedFeeToken: '0xdac17f958d2ee523a2206206994597c13d831ec7',
         invalidated: false,
         status: 'fulfilled',
         class: 'limit',
         settlementContract: '0x9008d19f58aabd9ed0d60971565aa8510560ab41',
-        fullFeeAmount: '0',
-        solverFee: '0',
         isLiquidityOrder: false,
         fullAppData:
           '{"appCode":"CoW Swap","environment":"production","metadata":{"orderClass":{"orderClass":"market"},"quote":{"slippageBips":50},"utm":{"utmContent":"header-cta-button","utmMedium":"web","utmSource":"cow.fi"}},"version":"1.1.0"}',
@@ -457,13 +454,12 @@ describe('SwapTransferInfoMapper', () => {
         executedSellAmount: '3000000000',
         executedSellAmountBeforeFees: '3000000000',
         executedFeeAmount: '0',
-        executedSurplusFee: '4290918',
+        executedFee: '4290918',
+        executedFeeToken: '0xdac17f958d2ee523a2206206994597c13d831ec7',
         invalidated: false,
         status: 'fulfilled',
         class: 'limit',
         settlementContract: '0x9008d19f58aabd9ed0d60971565aa8510560ab41',
-        fullFeeAmount: '0',
-        solverFee: '0',
         isLiquidityOrder: false,
         fullAppData:
           '{"appCode":"CoW Swap","environment":"production","metadata":{"orderClass":{"orderClass":"market"},"quote":{"slippageBips":50},"utm":{"utmContent":"header-cta-button","utmMedium":"web","utmSource":"cow.fi"}},"version":"1.1.0"}',

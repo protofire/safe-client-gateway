@@ -6,6 +6,7 @@ import {
   RequestMethod,
 } from '@nestjs/common';
 import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ClsMiddleware, ClsModule } from 'nestjs-cls';
 import { join } from 'path';
 import { ChainsModule } from '@/routes/chains/chains.module';
@@ -45,22 +46,30 @@ import { RelayControllerModule } from '@/routes/relay/relay.controller.module';
 import { ZodErrorFilter } from '@/routes/common/filters/zod-error.filter';
 import { CacheControlInterceptor } from '@/routes/common/interceptors/cache-control.interceptor';
 import { AuthModule } from '@/routes/auth/auth.module';
-import { TransactionsViewControllerModule } from '@/routes/transactions/transactions-view.controller';
 import { DelegatesV2Module } from '@/routes/delegates/v2/delegates.v2.module';
 import { AccountsModule } from '@/routes/accounts/accounts.module';
 import { NotificationsModuleV2 } from '@/routes/notifications/v2/notifications.module';
+import { TargetedMessagingModule } from '@/routes/targeted-messaging/targeted-messaging.module';
+import { PostgresDatabaseModule } from '@/datasources/db/v1/postgres-database.module';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { postgresConfig } from '@/config/entities/postgres.config';
+import {
+  LoggingService,
+  type ILoggingService,
+} from '@/logging/logging.interface';
+import { UsersModule } from '@/routes/users/users.module';
+import { OrganizationsModule } from '@/routes/organizations/organizations.module';
+import { UserOrganizationsModule } from '@/routes/organizations/user-organizations.module';
 
 @Module({})
 export class AppModule implements NestModule {
-  // Important: values read via the config factory do not take the .env file
-  // into account. The .env file loading is done by the ConfigurationModule
-  // which is not available at this stage.
   static register(configFactory = configuration): DynamicModule {
     const {
       auth: isAuthFeatureEnabled,
       accounts: isAccountsFeatureEnabled,
+      users: isUsersFeatureEnabled,
       email: isEmailFeatureEnabled,
-      confirmationView: isConfirmationViewEnabled,
       delegatesV2: isDelegatesV2Enabled,
       pushNotifications: isPushNotificationsEnabled,
     } = configFactory()['features'];
@@ -68,6 +77,7 @@ export class AppModule implements NestModule {
     return {
       module: AppModule,
       imports: [
+        PostgresDatabaseModule,
         // features
         AboutModule,
         ...(isAccountsFeatureEnabled ? [AccountsModule] : []),
@@ -92,15 +102,16 @@ export class AppModule implements NestModule {
           : [HooksModule]),
         MessagesModule,
         NotificationsModule,
+        ...(isUsersFeatureEnabled
+          ? [UsersModule, OrganizationsModule, UserOrganizationsModule]
+          : []),
         OwnersModule,
         RelayControllerModule,
         RootModule,
         SafeAppsModule,
         SafesModule,
+        TargetedMessagingModule,
         TransactionsModule,
-        ...(isConfirmationViewEnabled
-          ? [TransactionsViewControllerModule]
-          : []),
         // common
         CacheModule,
         // Module for storing and reading from the async local storage
@@ -114,12 +125,32 @@ export class AppModule implements NestModule {
         ConfigurationModule.register(configFactory),
         NetworkModule,
         RequestScopedLoggingModule,
+        ScheduleModule.forRoot(),
         ServeStaticModule.forRoot({
           rootPath: join(__dirname, '..', 'assets'),
           // Excludes the paths under '/' (base url) from being served as static content
           // If we do not exclude these paths, the service will try to find the file and
           // return 500 for files that do not exist instead of a 404
-          exclude: ['/(.*)'],
+          exclude: ['{*any}'],
+        }),
+        TypeOrmModule.forRootAsync({
+          imports: [ConfigModule],
+          useFactory: (
+            configService: ConfigService,
+            loggingService: ILoggingService,
+          ) => {
+            const typeormConfig = configService.getOrThrow('db.orm');
+            const postgresConfigObject = postgresConfig(
+              configService.getOrThrow('db.connection.postgres'),
+              loggingService,
+            );
+
+            return {
+              ...typeormConfig,
+              ...postgresConfigObject,
+            };
+          },
+          inject: [ConfigService, LoggingService],
         }),
       ],
       providers: [
@@ -152,6 +183,6 @@ export class AppModule implements NestModule {
       // The ClsMiddleware needs to be applied before the LoggerMiddleware
       // in order to generate the request ids that will be logged afterward
       .apply(ClsMiddleware, NotFoundLoggerMiddleware)
-      .forRoutes({ path: '*', method: RequestMethod.ALL });
+      .forRoutes({ path: '{*any}', method: RequestMethod.ALL });
   }
 }

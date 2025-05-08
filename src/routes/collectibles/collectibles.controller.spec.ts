@@ -1,6 +1,7 @@
 import { faker } from '@faker-js/faker';
-import { INestApplication } from '@nestjs/common';
-import { Test, TestingModule } from '@nestjs/testing';
+import type { INestApplication } from '@nestjs/common';
+import type { TestingModule } from '@nestjs/testing';
+import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { TestAppProvider } from '@/__tests__/test-app.provider';
 import { AppModule } from '@/app.module';
@@ -14,13 +15,11 @@ import {
   NetworkResponseError,
 } from '@/datasources/network/entities/network.error.entity';
 import { NetworkModule } from '@/datasources/network/network.module';
-import {
-  INetworkService,
-  NetworkService,
-} from '@/datasources/network/network.service.interface';
+import type { INetworkService } from '@/datasources/network/network.service.interface';
+import { NetworkService } from '@/datasources/network/network.service.interface';
 import { chainBuilder } from '@/domain/chains/entities/__tests__/chain.builder';
 import { collectibleBuilder } from '@/domain/collectibles/entities/__tests__/collectible.builder';
-import { Collectible } from '@/domain/collectibles/entities/collectible.entity';
+import type { Collectible } from '@/domain/collectibles/entities/collectible.entity';
 import {
   limitAndOffsetUrlFactory,
   pageBuilder,
@@ -30,9 +29,16 @@ import { RequestScopedLoggingModule } from '@/logging/logging.module';
 import { PaginationData } from '@/routes/common/pagination/pagination.data';
 import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
 import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
-import { Server } from 'net';
+import type { Server } from 'net';
 import { getAddress } from 'viem';
 import { safeBuilder } from '@/domain/safe/entities/__tests__/safe.builder';
+import { TestPostgresDatabaseModule } from '@/datasources/db/__tests__/test.postgres-database.module';
+import { PostgresDatabaseModule } from '@/datasources/db/v1/postgres-database.module';
+import { PostgresDatabaseModuleV2 } from '@/datasources/db/v2/postgres-database.module';
+import { TestPostgresDatabaseModuleV2 } from '@/datasources/db/v2/test.postgres-database.module';
+import { TestTargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/__tests__/test.targeted-messaging.datasource.module';
+import { TargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/targeted-messaging.datasource.module';
+import { rawify } from '@/validation/entities/raw.entity';
 
 describe('Collectibles Controller (Unit)', () => {
   let app: INestApplication<Server>;
@@ -54,6 +60,10 @@ describe('Collectibles Controller (Unit)', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(testConfiguration)],
     })
+      .overrideModule(PostgresDatabaseModule)
+      .useModule(TestPostgresDatabaseModule)
+      .overrideModule(TargetedMessagingDatasourceModule)
+      .useModule(TestTargetedMessagingDatasourceModule)
       .overrideModule(CacheModule)
       .useModule(TestCacheModule)
       .overrideModule(RequestScopedLoggingModule)
@@ -62,6 +72,8 @@ describe('Collectibles Controller (Unit)', () => {
       .useModule(TestNetworkModule)
       .overrideModule(QueuesApiModule)
       .useModule(TestQueuesApiModule)
+      .overrideModule(PostgresDatabaseModuleV2)
+      .useModule(TestPostgresDatabaseModuleV2)
       .compile();
 
     const configurationService = moduleFixture.get<IConfigurationService>(
@@ -98,11 +110,17 @@ describe('Collectibles Controller (Unit)', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chainId}`:
-            return Promise.resolve({ data: chainResponse, status: 200 });
+            return Promise.resolve({
+              data: rawify(chainResponse),
+              status: 200,
+            });
           case `${chainResponse.transactionService}/api/v1/safes/${safeAddress}`:
-            return Promise.resolve({ data: safeResponse, status: 200 });
+            return Promise.resolve({ data: rawify(safeResponse), status: 200 });
           case `${chainResponse.transactionService}/api/v2/safes/${safeAddress}/collectibles/`:
-            return Promise.resolve({ data: collectiblesResponse, status: 200 });
+            return Promise.resolve({
+              data: rawify(collectiblesResponse),
+              status: 200,
+            });
           default:
             return Promise.reject(new Error(`Could not match ${url}`));
         }
@@ -143,11 +161,17 @@ describe('Collectibles Controller (Unit)', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chainId}`:
-            return Promise.resolve({ data: chainResponse, status: 200 });
+            return Promise.resolve({
+              data: rawify(chainResponse),
+              status: 200,
+            });
           case `${chainResponse.transactionService}/api/v1/safes/${safeAddress}`:
-            return Promise.resolve({ data: safeResponse, status: 200 });
+            return Promise.resolve({ data: rawify(safeResponse), status: 200 });
           case `${chainResponse.transactionService}/api/v2/safes/${safeAddress}/collectibles/`:
-            return Promise.resolve({ data: collectiblesResponse, status: 200 });
+            return Promise.resolve({
+              data: rawify(collectiblesResponse),
+              status: 200,
+            });
           default:
             return Promise.reject(new Error(`Could not match ${url}`));
         }
@@ -189,11 +213,17 @@ describe('Collectibles Controller (Unit)', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chainId}`:
-            return Promise.resolve({ data: chainResponse, status: 200 });
+            return Promise.resolve({
+              data: rawify(chainResponse),
+              status: 200,
+            });
           case `${chainResponse.transactionService}/api/v1/safes/${safeAddress}`:
-            return Promise.resolve({ data: safeResponse, status: 200 });
+            return Promise.resolve({ data: rawify(safeResponse), status: 200 });
           case `${chainResponse.transactionService}/api/v2/safes/${safeAddress}/collectibles/`:
-            return Promise.resolve({ data: collectiblesResponse, status: 200 });
+            return Promise.resolve({
+              data: rawify(collectiblesResponse),
+              status: 200,
+            });
           default:
             return Promise.reject(new Error(`Could not match ${url}`));
         }
@@ -231,9 +261,12 @@ describe('Collectibles Controller (Unit)', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chainId}`:
-            return Promise.resolve({ data: chainResponse, status: 200 });
+            return Promise.resolve({
+              data: rawify(chainResponse),
+              status: 200,
+            });
           case `${chainResponse.transactionService}/api/v1/safes/${safeAddress}`:
-            return Promise.resolve({ data: safeResponse, status: 200 });
+            return Promise.resolve({ data: rawify(safeResponse), status: 200 });
           case transactionServiceUrl:
             return Promise.reject(transactionServiceError);
           default:
@@ -263,9 +296,12 @@ describe('Collectibles Controller (Unit)', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chainId}`:
-            return Promise.resolve({ data: chainResponse, status: 200 });
+            return Promise.resolve({
+              data: rawify(chainResponse),
+              status: 200,
+            });
           case `${chainResponse.transactionService}/api/v1/safes/${safeAddress}`:
-            return Promise.resolve({ data: safeResponse, status: 200 });
+            return Promise.resolve({ data: rawify(safeResponse), status: 200 });
           case transactionServiceUrl:
             return Promise.reject(transactionServiceError);
           default:

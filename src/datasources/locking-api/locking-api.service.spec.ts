@@ -1,7 +1,7 @@
 import { faker } from '@faker-js/faker';
 import { FakeConfigurationService } from '@/config/__tests__/fake.configuration.service';
 import { HttpErrorFactory } from '@/datasources/errors/http-error-factory';
-import { INetworkService } from '@/datasources/network/network.service.interface';
+import type { INetworkService } from '@/datasources/network/network.service.interface';
 import { DataSourceError } from '@/domain/errors/data-source.error';
 import { NetworkResponseError } from '@/datasources/network/entities/network.error.entity';
 import { LockingApi } from '@/datasources/locking-api/locking-api.service';
@@ -15,8 +15,9 @@ import { getAddress } from 'viem';
 import { lockingRankBuilder } from '@/domain/community/entities/__tests__/locking-rank.builder';
 import { campaignBuilder } from '@/domain/community/entities/__tests__/campaign.builder';
 import { campaignRankBuilder } from '@/domain/community/entities/__tests__/campaign-rank.builder';
-import { CampaignRank } from '@/domain/community/entities/campaign-rank.entity';
+import type { CampaignRank } from '@/domain/community/entities/campaign-rank.entity';
 import { campaignActivityBuilder } from '@/domain/community/entities/__tests__/campaign-activity.builder';
+import { rawify } from '@/validation/entities/raw.entity';
 
 const networkService = {
   get: jest.fn(),
@@ -52,7 +53,7 @@ describe('LockingApi', () => {
       const campaign = campaignBuilder().build();
 
       mockNetworkService.get.mockResolvedValueOnce({
-        data: campaign,
+        data: rawify(campaign),
         status: 200,
       });
 
@@ -93,7 +94,7 @@ describe('LockingApi', () => {
         .build();
 
       mockNetworkService.get.mockResolvedValueOnce({
-        data: campaignsPage,
+        data: rawify(campaignsPage),
         status: 200,
       });
 
@@ -119,7 +120,7 @@ describe('LockingApi', () => {
         .build();
 
       mockNetworkService.get.mockResolvedValueOnce({
-        data: campaignsPage,
+        data: rawify(campaignsPage),
         status: 200,
       });
 
@@ -169,7 +170,7 @@ describe('LockingApi', () => {
         .build();
 
       mockNetworkService.get.mockResolvedValueOnce({
-        data: campaignActivityPage,
+        data: rawify(campaignActivityPage),
         status: 200,
       });
 
@@ -202,7 +203,7 @@ describe('LockingApi', () => {
         .build();
 
       mockNetworkService.get.mockResolvedValueOnce({
-        data: campaignActivityPage,
+        data: rawify(campaignActivityPage),
         status: 200,
       });
 
@@ -237,7 +238,7 @@ describe('LockingApi', () => {
         .build();
 
       mockNetworkService.get.mockResolvedValueOnce({
-        data: campaignActivityPage,
+        data: rawify(campaignActivityPage),
         status: 200,
       });
 
@@ -294,7 +295,7 @@ describe('LockingApi', () => {
       const safeAddress = getAddress(faker.finance.ethereumAddress());
       const campaignRank = campaignRankBuilder().build();
       mockNetworkService.get.mockResolvedValueOnce({
-        data: campaignRank,
+        data: rawify(campaignRank),
         status: 200,
       });
 
@@ -336,7 +337,7 @@ describe('LockingApi', () => {
       const safeAddress = getAddress(faker.finance.ethereumAddress());
       const lockingRank = lockingRankBuilder().build();
       mockNetworkService.get.mockResolvedValueOnce({
-        data: lockingRank,
+        data: rawify(lockingRank),
         status: 200,
       });
 
@@ -376,7 +377,7 @@ describe('LockingApi', () => {
         .with('results', [lockingRankBuilder().build()])
         .build();
       mockNetworkService.get.mockResolvedValueOnce({
-        data: leaderboardPage,
+        data: rawify(leaderboardPage),
         status: 200,
       });
 
@@ -401,7 +402,7 @@ describe('LockingApi', () => {
         .with('results', [lockingRankBuilder().build()])
         .build();
       mockNetworkService.get.mockResolvedValueOnce({
-        data: leaderboardPage,
+        data: rawify(leaderboardPage),
         status: 200,
       });
 
@@ -449,7 +450,7 @@ describe('LockingApi', () => {
         ])
         .build();
       mockNetworkService.get.mockResolvedValueOnce({
-        data: campaignRankPage,
+        data: rawify(campaignRankPage),
         status: 200,
       });
 
@@ -478,7 +479,7 @@ describe('LockingApi', () => {
         ])
         .build();
       mockNetworkService.get.mockResolvedValueOnce({
-        data: campaignRankPage,
+        data: rawify(campaignRankPage),
         status: 200,
       });
 
@@ -528,7 +529,7 @@ describe('LockingApi', () => {
         ])
         .build();
       mockNetworkService.get.mockResolvedValueOnce({
-        data: lockingHistoryPage,
+        data: rawify(lockingHistoryPage),
         status: 200,
       });
 
@@ -557,7 +558,7 @@ describe('LockingApi', () => {
         ])
         .build();
       mockNetworkService.get.mockResolvedValueOnce({
-        data: lockingHistoryPage,
+        data: rawify(lockingHistoryPage),
         status: 200,
       });
 

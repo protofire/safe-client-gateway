@@ -1,6 +1,7 @@
 import { faker } from '@faker-js/faker';
-import { Builder, IBuilder } from '@/__tests__/builder';
-import { Safe } from '@/domain/safe/entities/safe.entity';
+import type { IBuilder } from '@/__tests__/builder';
+import { Builder } from '@/__tests__/builder';
+import type { Safe } from '@/domain/safe/entities/safe.entity';
 import { getAddress } from 'viem';
 
 export function safeBuilder(): IBuilder<Safe> {
@@ -13,5 +14,15 @@ export function safeBuilder(): IBuilder<Safe> {
     .with('modules', null)
     .with('fallbackHandler', getAddress(faker.finance.ethereumAddress()))
     .with('guard', getAddress(faker.finance.ethereumAddress()))
-    .with('version', faker.system.semver());
+    .with(
+      'version',
+      faker.helpers.arrayElement([
+        '1.0.0',
+        '1.1.1',
+        '1.2.0',
+        '1.3.0',
+        '1.4.0',
+        '1.4.1',
+      ]),
+    );
 }

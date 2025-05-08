@@ -10,24 +10,26 @@ export class SafeApp {
   url: string;
   @ApiProperty()
   name: string;
-  @ApiProperty()
+  @ApiPropertyOptional({ type: String, nullable: true })
   iconUrl: string | null;
   @ApiProperty()
   description: string;
   @ApiProperty()
-  chainIds: string[];
+  chainIds: Array<string>;
   @ApiPropertyOptional({ type: SafeAppProvider, nullable: true })
   provider: SafeAppProvider | null;
   @ApiProperty()
   accessControl: SafeAppAccessControl;
   @ApiProperty()
-  tags: string[];
-  @ApiProperty()
-  features: string[];
+  tags: Array<string>;
+  @ApiProperty({ type: String, isArray: true })
+  features: Array<string>;
   @ApiPropertyOptional({ type: String, nullable: true })
   developerWebsite: string | null;
-  @ApiProperty({ type: SafeAppSocialProfile })
-  socialProfiles: SafeAppSocialProfile[];
+  @ApiProperty({ type: SafeAppSocialProfile, isArray: true })
+  socialProfiles: Array<SafeAppSocialProfile>;
+  @ApiProperty()
+  featured: boolean;
 
   constructor(
     id: number,
@@ -35,13 +37,14 @@ export class SafeApp {
     name: string,
     iconUrl: string | null,
     description: string,
-    chainIds: string[],
+    chainIds: Array<string>,
     provider: SafeAppProvider | null,
     accessControl: SafeAppAccessControl,
-    tags: string[],
-    features: string[],
+    tags: Array<string>,
+    features: Array<string>,
     developerWebsite: string | null,
-    socialProfiles: SafeAppSocialProfile[],
+    socialProfiles: Array<SafeAppSocialProfile>,
+    featured: boolean,
   ) {
     this.id = id;
     this.url = url;
@@ -55,5 +58,6 @@ export class SafeApp {
     this.features = features;
     this.developerWebsite = developerWebsite;
     this.socialProfiles = socialProfiles;
+    this.featured = featured;
   }
 }
