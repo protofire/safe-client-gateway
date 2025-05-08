@@ -6,7 +6,12 @@ export const DeploymentProductTypes = ['defi', 'pooling', 'dedicated'] as const;
 
 export const DeploymentChains = ['eth', 'arb', 'bsc', 'matic', 'op'] as const;
 
-export const DeploymentStatuses = ['active', 'pending', 'disabled'] as const;
+export const DeploymentStatuses = [
+  'active',
+  'deposit_paused',
+  'pending',
+  'disabled',
+] as const;
 
 export const DeploymentSchema = z.object({
   id: z.string().uuid(),
@@ -21,5 +26,7 @@ export const DeploymentSchema = z.object({
   status: z.enum([...DeploymentStatuses, 'unknown']).catch('unknown'),
   product_fee: NumericStringSchema.nullish().default(null),
 });
+
+export const DeploymentsSchema = z.array(DeploymentSchema);
 
 export type Deployment = z.infer<typeof DeploymentSchema>;

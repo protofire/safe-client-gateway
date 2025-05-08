@@ -13,10 +13,7 @@ import {
 } from '@/routes/hooks/entities/event-type.entity';
 import { LoggingService, ILoggingService } from '@/logging/logging.interface';
 import { Event } from '@/routes/hooks/entities/event.entity';
-import {
-  INotificationsRepositoryV2,
-  NotificationsRepositoryV2Module,
-} from '@/domain/notifications/v2/notifications.repository.interface';
+import { INotificationsRepositoryV2 } from '@/domain/notifications/v2/notifications.repository.interface';
 import { DeletedMultisigTransactionEvent } from '@/routes/hooks/entities/schemas/deleted-multisig-transaction.schema';
 import { ExecutedTransactionEvent } from '@/routes/hooks/entities/schemas/executed-transaction.schema';
 import { IncomingEtherEvent } from '@/routes/hooks/entities/schemas/incoming-ether.schema';
@@ -37,6 +34,10 @@ import {
   IDelegatesV2Repository,
 } from '@/domain/delegate/v2/delegates.v2.repository.interface';
 import { UUID } from 'crypto';
+import { NotificationsRepositoryV2Module } from '@/domain/notifications/v2/notifications.repository.module';
+import uniqBy from 'lodash/uniqBy';
+import { Confirmation } from '@/domain/safe/entities/multisig-transaction.entity';
+import { MessageConfirmation } from '@/domain/messages/entities/message-confirmation.entity';
 
 type EventToNotify =
   | DeletedMultisigTransactionEvent
@@ -112,6 +113,7 @@ export class EventNotificationsHelper {
    * @param event - {@link Event} to check
    */
   private isEventToNotify(event: Event): event is EventToNotify {
+    // TODO: Simplify this by inverting the logic and/or refactor mapEventNotification to explicitly handle types
     return (
       // Don't notify about Config events
       event.type !== ConfigEventType.CHAIN_UPDATE &&
@@ -124,7 +126,13 @@ export class EventNotificationsHelper {
       // We only notify required confirmations on required - see MESSAGE_CREATED
       event.type !== TransactionEventType.MESSAGE_CONFIRMATION &&
       // You cannot subscribe to Safes-to-be-created
-      event.type !== TransactionEventType.SAFE_CREATED
+      event.type !== TransactionEventType.SAFE_CREATED &&
+      // We don't notify about reorgs
+      event.type !== TransactionEventType.REORG_DETECTED &&
+      // We don't notify about delegate events
+      event.type !== TransactionEventType.NEW_DELEGATE &&
+      event.type !== TransactionEventType.UPDATED_DELEGATE &&
+      event.type !== TransactionEventType.DELETED_DELEGATE
     );
   }
 
@@ -158,11 +166,14 @@ export class EventNotificationsHelper {
       cloudMessagingToken: string;
     }>
   > {
-    const subscriptions =
+    // If two or more owner keys are registered for the same device we shouldn't send the notification multiple times and therefore we need to group by their cloudMessagingToken
+    const subscriptions = uniqBy(
       await this.notificationsRepository.getSubscribersBySafe({
         chainId: event.chainId,
         safeAddress: event.address,
-      });
+      }),
+      'cloudMessagingToken',
+    );
 
     if (!this.isOwnerOrDelegateOnlyEventToNotify(event)) {
       return subscriptions;
@@ -222,12 +233,14 @@ export class EventNotificationsHelper {
       return true;
     }
 
-    const delegates = await this.delegatesRepository.getDelegates(args);
-    return !!delegates?.results.some((delegate) => {
-      return (
-        delegate.safe === args.safeAddress &&
-        delegate.delegate === args.subscriber
-      );
+    // Unfortunately, the delegate endpoint does not return any results when querying for the delegators of a safe. Instead, you need to query for the delegators of a delegate key.
+    const delegates = await this.delegatesRepository.getDelegates({
+      chainId: args.chainId,
+      delegate: args.subscriber,
+    });
+
+    return delegates?.results.some((delegate) => {
+      return safe.owners.includes(delegate.delegator);
     });
   }
 
@@ -331,10 +344,13 @@ export class EventNotificationsHelper {
     });
 
     // Subscriber has already signed - do not notify
-    const hasSubscriberSigned = transaction.confirmations?.some(
-      (confirmation) => {
-        return confirmation.owner === subscriber;
-      },
+    if (!transaction?.confirmations) {
+      return null;
+    }
+    const hasSubscriberSigned = await this.hasSubscriberSigned(
+      event.chainId,
+      subscriber,
+      transaction.confirmations,
     );
     if (hasSubscriberSigned) {
       return null;
@@ -342,10 +358,32 @@ export class EventNotificationsHelper {
 
     return {
       type: NotificationType.CONFIRMATION_REQUEST,
+      to: event.to,
       chainId: event.chainId,
       address: event.address,
       safeTxHash: event.safeTxHash,
     };
+  }
+
+  private async hasSubscriberSigned(
+    chainId: string,
+    subscriber: `0x${string}`,
+    confirmations: Array<Confirmation | MessageConfirmation>,
+  ): Promise<boolean | undefined> {
+    // The owner can be a delegate key so we need to check whether the owner or the delegate key has signed the message.
+    const delegates = await this.delegatesRepository.getDelegates({
+      chainId: chainId,
+      delegate: subscriber,
+    });
+    const delegators = delegates?.results.map(
+      (delegate) => delegate?.delegator,
+    );
+    return confirmations?.some((confirmation) => {
+      return (
+        confirmation.owner === subscriber ||
+        delegators.includes(confirmation.owner)
+      );
+    });
   }
 
   /**
@@ -379,9 +417,14 @@ export class EventNotificationsHelper {
     });
 
     // Subscriber has already signed - do not notify
-    const hasSubscriberSigned = message.confirmations.some((confirmation) => {
-      return confirmation.owner === subscriber;
-    });
+    if (!message?.confirmations) {
+      return null;
+    }
+    const hasSubscriberSigned = await this.hasSubscriberSigned(
+      event.chainId,
+      subscriber,
+      message.confirmations,
+    );
     if (hasSubscriberSigned) {
       return null;
     }

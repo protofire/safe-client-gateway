@@ -6,6 +6,7 @@ import {
 } from '@/datasources/cache/cache.service.interface';
 import { Chain as DomainChain } from '@/domain/chains/entities/chain.entity';
 import { RpcUriAuthentication } from '@/domain/chains/entities/rpc-uri-authentication.entity';
+import { ChainSchema } from '@/domain/chains/entities/schemas/chain.schema';
 import { IBlockchainApiManager } from '@/domain/interfaces/blockchain-api.manager.interface';
 import { IConfigApi } from '@/domain/interfaces/config-api.interface';
 import { Inject, Injectable } from '@nestjs/common';
@@ -46,7 +47,9 @@ export class BlockchainApiManager implements IBlockchainApiManager {
       return blockchainApi;
     }
 
-    const chain = await this.configApi.getChain(chainId);
+    const chain = await this.configApi
+      .getChain(chainId)
+      .then(ChainSchema.parse);
     this.blockchainApiMap[chainId] = this._createCachedRpcClient(chain);
 
     return this.blockchainApiMap[chainId];
@@ -90,21 +93,17 @@ export class BlockchainApiManager implements IBlockchainApiManager {
         })(),
       });
 
-      const cache = await this.cacheService.get(cacheDir);
+      const cache = await this.cacheService.hGet(cacheDir);
 
       if (cache != null) {
-        return cache;
+        return JSON.parse(cache);
       }
 
       const { error, result } = await rpcClient.request({
         body,
       });
 
-      if (
-        error ||
-        // Result will always be a string, but we need to check for the type
-        typeof result !== 'string'
-      ) {
+      if (error) {
         throw new RpcRequestError({
           body,
           error,
@@ -112,9 +111,9 @@ export class BlockchainApiManager implements IBlockchainApiManager {
         });
       }
 
-      await this.cacheService.set(
+      await this.cacheService.hSet(
         cacheDir,
-        result,
+        JSON.stringify(result),
         this.rpcExpirationTimeInSeconds,
       );
 

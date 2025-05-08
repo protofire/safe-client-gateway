@@ -13,6 +13,10 @@ import {
   BlockExplorerUriTemplate as ApiBlockExplorerUriTemplate,
 } from '@/routes/chains/entities/block-explorer-uri-template.entity';
 import {
+  BeaconChainExplorerUriTemplate,
+  BeaconChainExplorerUriTemplate as ApiBeaconChainExplorerUriTemplate,
+} from '@/domain/chains/entities/beacon-chain-explorer-uri-template.entity';
+import {
   GasPriceOracle,
   GasPriceOracle as ApiGasPriceOracle,
 } from '@/routes/chains/entities/gas-price-oracle.entity';
@@ -56,7 +60,9 @@ export class Chain {
   @ApiProperty()
   blockExplorerUriTemplate: ApiBlockExplorerUriTemplate;
   @ApiProperty()
-  disabledWallets: string[];
+  beaconChainExplorerUriTemplate: ApiBeaconChainExplorerUriTemplate;
+  @ApiProperty()
+  disabledWallets: Array<string>;
   @ApiPropertyOptional({ type: String, nullable: true })
   ensRegistryAddress: `0x${string}` | null;
   @ApiProperty()
@@ -64,7 +70,7 @@ export class Chain {
   @ApiProperty()
   contractAddresses: ContractAddresses;
   @ApiProperty()
-  features: string[];
+  features: Array<string>;
   @ApiProperty({
     type: 'array',
     items: {
@@ -88,6 +94,8 @@ export class Chain {
   shortName: string;
   @ApiProperty()
   theme: ApiTheme;
+  @ApiPropertyOptional({ type: String, nullable: true })
+  recommendedMasterCopyVersion: string | null;
 
   constructor(args: {
     chainId: string;
@@ -97,8 +105,9 @@ export class Chain {
     nativeCurrency: NativeCurrency;
     transactionService: string;
     blockExplorerUriTemplate: BlockExplorerUriTemplate;
-    disabledWallets: string[];
-    features: string[];
+    beaconChainExplorerUriTemplate: BeaconChainExplorerUriTemplate;
+    disabledWallets: Array<string>;
+    features: Array<string>;
     gasPrice: Array<GasPriceOracle | GasPriceFixed | GasPriceFixedEIP1559>;
     publicRpcUri: RpcUri;
     rpcUri: RpcUri;
@@ -110,6 +119,7 @@ export class Chain {
     chainLogoUri: string | null;
     balancesProvider: BalancesProvider;
     contractAddresses: ContractAddresses;
+    recommendedMasterCopyVersion: string | null;
   }) {
     this.chainId = args.chainId;
     this.chainName = args.chainName;
@@ -120,6 +130,7 @@ export class Chain {
     this.nativeCurrency = args.nativeCurrency;
     this.transactionService = args.transactionService;
     this.blockExplorerUriTemplate = args.blockExplorerUriTemplate;
+    this.beaconChainExplorerUriTemplate = args.beaconChainExplorerUriTemplate;
     this.disabledWallets = args.disabledWallets;
     this.ensRegistryAddress = args.ensRegistryAddress;
     this.features = args.features;
@@ -131,5 +142,6 @@ export class Chain {
     this.theme = args.theme;
     this.balancesProvider = args.balancesProvider;
     this.contractAddresses = args.contractAddresses;
+    this.recommendedMasterCopyVersion = args.recommendedMasterCopyVersion;
   }
 }

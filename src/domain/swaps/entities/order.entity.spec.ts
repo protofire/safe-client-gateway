@@ -1,7 +1,8 @@
 import { orderBuilder } from '@/domain/swaps/entities/__tests__/order.builder';
 import { faker } from '@faker-js/faker';
 import { getAddress } from 'viem';
-import { Order, OrderSchema } from '@/domain/swaps/entities/order.entity';
+import type { Order } from '@/domain/swaps/entities/order.entity';
+import { OrderSchema } from '@/domain/swaps/entities/order.entity';
 
 describe('OrderSchema', () => {
   it('should validate a valid order', () => {
@@ -77,6 +78,7 @@ describe('OrderSchema', () => {
     'from',
     'owner',
     'onchainUser',
+    'executedFeeToken',
   ])('%s should be checksummed', (key) => {
     const order = {
       ...orderBuilder().build(),
@@ -98,7 +100,6 @@ describe('OrderSchema', () => {
     'ethflowData',
     'onchainUser',
     'onchainOrderData',
-    'executedSurplusFee',
     'fullAppData',
   ])('%s should default to null if value not present', (key) => {
     const order = orderBuilder().build();

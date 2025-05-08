@@ -11,6 +11,7 @@ import { Page } from '@/domain/entities/page.entity';
 import { IConfigApi } from '@/domain/interfaces/config-api.interface';
 import { SafeApp } from '@/domain/safe-apps/entities/safe-app.entity';
 import { ILoggingService, LoggingService } from '@/logging/logging.interface';
+import { Raw } from '@/validation/entities/raw.entity';
 import { Inject, Injectable } from '@nestjs/common';
 
 @Injectable()
@@ -47,12 +48,12 @@ export class ConfigApi implements IConfigApi {
   async getChains(args: {
     limit?: number;
     offset?: number;
-  }): Promise<Page<Chain>> {
+  }): Promise<Raw<Page<Chain>>> {
     try {
       const url = `${this.baseUri}/api/v1/chains`;
       const params = { limit: args.limit, offset: args.offset };
       const cacheDir = CacheRouter.getChainsCacheDir(args);
-      return await this.dataSource.get({
+      return await this.dataSource.get<Chain>({
         cacheDir,
         url,
         notFoundExpireTimeSeconds: this.defaultNotFoundExpirationTimeSeconds,
@@ -64,11 +65,11 @@ export class ConfigApi implements IConfigApi {
     }
   }
 
-  async getChain(chainId: string): Promise<Chain> {
+  async getChain(chainId: string): Promise<Raw<Chain>> {
     try {
       const url = `${this.baseUri}/api/v1/chains/${chainId}`;
       const cacheDir = CacheRouter.getChainCacheDir(chainId);
-      return await this.dataSource.get({
+      return await this.dataSource.get<Chain>({
         cacheDir,
         url,
         notFoundExpireTimeSeconds: this.defaultNotFoundExpirationTimeSeconds,
@@ -98,7 +99,7 @@ export class ConfigApi implements IConfigApi {
     clientUrl?: string;
     onlyListed?: boolean;
     url?: string;
-  }): Promise<SafeApp[]> {
+  }): Promise<Raw<Array<SafeApp>>> {
     try {
       const providerUrl = `${this.baseUri}/api/v1/safe-apps/`;
       const params = {

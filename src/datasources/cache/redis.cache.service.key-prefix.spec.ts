@@ -1,13 +1,14 @@
 import { faker } from '@faker-js/faker';
-import { ILoggingService } from '@/logging/logging.interface';
+import type { ILoggingService } from '@/logging/logging.interface';
 import { CacheDir } from '@/datasources/cache/entities/cache-dir.entity';
 import { RedisCacheService } from '@/datasources/cache/redis.cache.service';
-import { RedisClientType } from 'redis';
+import type { RedisClientType } from 'redis';
 import { fakeJson } from '@/__tests__/faker';
-import { IConfigurationService } from '@/config/configuration.service.interface';
+import type { IConfigurationService } from '@/config/configuration.service.interface';
 import clearAllMocks = jest.clearAllMocks;
 
 const redisClientType = {
+  isReady: true,
   hGet: jest.fn(),
   hSet: jest.fn(),
   hDel: jest.fn(),
@@ -37,10 +38,12 @@ describe('RedisCacheService with a Key Prefix', () => {
 
   beforeEach(() => {
     clearAllMocks();
-    defaultExpirationTimeInSeconds = faker.number.int();
+    defaultExpirationTimeInSeconds = faker.number.int({ min: 1, max: 3600 });
     mockConfigurationService.getOrThrow.mockImplementation((key) => {
       if (key === 'expirationTimeInSeconds.default') {
         return defaultExpirationTimeInSeconds;
+      } else if (key === 'redis.timeout') {
+        return defaultExpirationTimeInSeconds * 1_000;
       }
       throw Error(`Unexpected key: ${key}`);
     });
@@ -61,7 +64,7 @@ describe('RedisCacheService with a Key Prefix', () => {
     const value = fakeJson();
     const expireTime = faker.number.int();
 
-    await redisCacheService.set(cacheDir, value, expireTime);
+    await redisCacheService.hSet(cacheDir, value, expireTime);
 
     expect(redisClientTypeMock.hSet).toHaveBeenCalledWith(
       `${keyPrefix}-${cacheDir.key}`,
@@ -80,7 +83,7 @@ describe('RedisCacheService with a Key Prefix', () => {
       faker.string.alphanumeric(),
       faker.string.sample(),
     );
-    await redisCacheService.get(cacheDir);
+    await redisCacheService.hGet(cacheDir);
 
     expect(redisClientTypeMock.hGet).toHaveBeenCalledWith(
       `${keyPrefix}-${cacheDir.key}`,

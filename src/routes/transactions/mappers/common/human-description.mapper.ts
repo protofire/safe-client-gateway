@@ -25,6 +25,7 @@ import {
 } from '@/routes/transactions/entities/human-description.entity';
 import { SafeAppInfoMapper } from '@/routes/transactions/mappers/common/safe-app-info.mapper';
 import { asError } from '@/logging/utils';
+import { truncateAddress } from '@/domain/common/utils/utils';
 
 @Injectable()
 export class HumanDescriptionMapper {
@@ -38,7 +39,36 @@ export class HumanDescriptionMapper {
     private readonly safeAppInfoMapper: SafeAppInfoMapper,
   ) {}
 
-  async mapRichDecodedInfo(
+  public async mapHumanDescription(
+    transaction: MultisigTransaction | ModuleTransaction,
+    chainId: string,
+  ): Promise<string | null> {
+    const richDecodedInfo = await this.mapRichDecodedInfo(transaction, chainId);
+
+    if (!richDecodedInfo?.fragments) return null;
+
+    return richDecodedInfo.fragments
+      .map((fragment) => {
+        if (fragment instanceof RichTokenValueFragment) {
+          return fragment.symbol
+            ? `${fragment.value} ${fragment.symbol}`
+            : fragment.value;
+        }
+
+        if (fragment instanceof RichAddressFragment) {
+          if (!isAddress(fragment.value)) {
+            throw Error('Invalid address');
+          }
+
+          return truncateAddress(fragment.value);
+        }
+
+        return fragment.value;
+      })
+      .join(' ');
+  }
+
+  private async mapRichDecodedInfo(
     transaction: MultisigTransaction | ModuleTransaction,
     chainId: string,
   ): Promise<RichDecodedInfo | null> {
@@ -79,31 +109,11 @@ export class HumanDescriptionMapper {
     }
   }
 
-  mapHumanDescription(richDecodedInfo: RichDecodedInfo | null): string | null {
-    if (!richDecodedInfo?.fragments) return null;
-
-    return richDecodedInfo.fragments
-      .map((fragment) => {
-        if (fragment instanceof RichTokenValueFragment) {
-          return fragment.symbol
-            ? `${fragment.value} ${fragment.symbol}`
-            : fragment.value;
-        }
-
-        if (fragment instanceof RichAddressFragment) {
-          return this.shortenAddress(fragment.value);
-        }
-
-        return fragment.value;
-      })
-      .join(' ');
-  }
-
   private async enrichFragments(
-    fragments: HumanDescriptionFragment[],
+    fragments: Array<HumanDescriptionFragment>,
     transaction: MultisigTransaction | ModuleTransaction,
     chainId: string,
-  ): Promise<RichDecodedInfoFragment[]> {
+  ): Promise<Array<RichDecodedInfoFragment>> {
     return Promise.all(
       fragments.map(async (fragment) => {
         switch (fragment.type) {
@@ -148,11 +158,11 @@ export class HumanDescriptionMapper {
     );
   }
 
-  async enrichSafeAppInfo(
-    fragments: RichDecodedInfoFragment[],
+  private async enrichSafeAppInfo(
+    fragments: Array<RichDecodedInfoFragment>,
     transaction: MultisigTransaction | ModuleTransaction,
     chainId: string,
-  ): Promise<RichDecodedInfoFragment[]> {
+  ): Promise<Array<RichDecodedInfoFragment>> {
     const safeAppInfo = isMultisigTransaction(transaction)
       ? await this.safeAppInfoMapper.mapSafeAppInfo(chainId, transaction)
       : null;
@@ -166,20 +176,6 @@ export class HumanDescriptionMapper {
     }
 
     return fragments;
-  }
-
-  private shortenAddress(address: string, length = 4): string {
-    if (!isAddress(address)) {
-      throw Error('Invalid address');
-    }
-
-    const visibleCharactersLength = length * 2 + 2;
-
-    if (address.length < visibleCharactersLength) {
-      return address;
-    }
-
-    return `${address.slice(0, length + 2)}...${address.slice(-length)}`;
   }
 
   private getSigHash(data: Hex): Hex | null {

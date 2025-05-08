@@ -1,19 +1,19 @@
 import { fakeJson } from '@/__tests__/faker';
 import { FakeConfigurationService } from '@/config/__tests__/fake.configuration.service';
-import { IConfigurationService } from '@/config/configuration.service.interface';
-import { IChainsRepository } from '@/domain/chains/chains.repository.interface';
+import type { IConfigurationService } from '@/config/configuration.service.interface';
+import type { IChainsRepository } from '@/domain/chains/chains.repository.interface';
 import { MultiSendDecoder } from '@/domain/contracts/decoders/multi-send-decoder.helper';
 import { ComposableCowDecoder } from '@/domain/swaps/contracts/decoders/composable-cow-decoder.helper';
 import { GPv2Decoder } from '@/domain/swaps/contracts/decoders/gp-v2-decoder.helper';
-import { Order } from '@/domain/swaps/entities/order.entity';
-import { ISwapsRepository } from '@/domain/swaps/swaps.repository';
+import type { Order } from '@/domain/swaps/entities/order.entity';
+import type { ISwapsRepository } from '@/domain/swaps/swaps.repository';
 import { tokenBuilder } from '@/domain/tokens/__tests__/token.builder';
-import { ITokenRepository } from '@/domain/tokens/token.repository.interface';
+import type { ITokenRepository } from '@/domain/tokens/token.repository.interface';
 import { GPv2OrderHelper } from '@/routes/transactions/helpers/gp-v2-order.helper';
 import { SwapOrderHelper } from '@/routes/transactions/helpers/swap-order.helper';
 import { TwapOrderHelper } from '@/routes/transactions/helpers/twap-order.helper';
 import { TwapOrderMapper } from '@/routes/transactions/mappers/common/twap-order.mapper';
-import { ILoggingService } from '@/logging/logging.interface';
+import type { ILoggingService } from '@/logging/logging.interface';
 import { getAddress } from 'viem';
 import { fullAppDataBuilder } from '@/domain/swaps/entities/__tests__/full-app-data.builder';
 import { TransactionFinder } from '@/routes/transactions/helpers/transaction-finder.helper';
@@ -45,7 +45,7 @@ const mockChainsRepository = {
 
 describe('TwapOrderMapper', () => {
   const configurationService = new FakeConfigurationService();
-  const multiSendDecoder = new MultiSendDecoder();
+  const multiSendDecoder = new MultiSendDecoder(loggingService);
   const transactionFinder = new TransactionFinder(multiSendDecoder);
   const gpv2Decoder = new GPv2Decoder(mockLoggingService);
   const allowedApps = new Set<string>();
@@ -148,7 +148,15 @@ describe('TwapOrderMapper', () => {
       },
       executedBuyAmount: '0',
       executedSellAmount: '0',
-      executedSurplusFee: '0',
+      executedFee: '0',
+      executedFeeToken: {
+        address: sellToken.address,
+        decimals: sellToken.decimals,
+        logoUri: sellToken.logoUri,
+        name: sellToken.name,
+        symbol: sellToken.symbol,
+        trusted: sellToken.trusted,
+      },
       fullAppData,
       humanDescription: null,
       kind: 'sell',
@@ -158,7 +166,6 @@ describe('TwapOrderMapper', () => {
       owner: '0x31eaC7F0141837B266De30f4dc9aF15629Bd5381',
       partSellAmount: '500000000000000000',
       receiver: '0x31eaC7F0141837B266De30f4dc9aF15629Bd5381',
-      richDecodedInfo: null,
       sellAmount: '1000000000000000000',
       sellToken: {
         address: sellToken.address,
@@ -213,13 +220,12 @@ describe('TwapOrderMapper', () => {
       executedSellAmount: '213586875483862141750',
       executedSellAmountBeforeFees: '213586875483862141750',
       executedFeeAmount: '0',
-      executedSurplusFee: '111111111',
+      executedFee: '111111111',
+      executedFeeToken: '0xbe72e441bf55620febc26715db68d3494213d8cb',
       invalidated: false,
       status: 'fulfilled',
       class: 'limit',
       settlementContract: '0x9008d19f58aabd9ed0d60971565aa8510560ab41',
-      fullFeeAmount: '0',
-      solverFee: '0',
       isLiquidityOrder: false,
       fullAppData:
         '{"appCode":"Safe Wallet Swaps","metadata":{"orderClass":{"orderClass":"twap"},"quote":{"slippageBips":1000},"widget":{"appCode":"CoW Swap-SafeApp","environment":"production"}},"version":"1.1.0"}',
@@ -253,13 +259,12 @@ describe('TwapOrderMapper', () => {
       executedSellAmount: '213586875483862141750',
       executedSellAmountBeforeFees: '213586875483862141750',
       executedFeeAmount: '0',
-      executedSurplusFee: '111111111',
+      executedFee: '111111111',
+      executedFeeToken: '0xbe72e441bf55620febc26715db68d3494213d8cb',
       invalidated: false,
       status: 'fulfilled',
       class: 'limit',
       settlementContract: '0x9008d19f58aabd9ed0d60971565aa8510560ab41',
-      fullFeeAmount: '0',
-      solverFee: '0',
       isLiquidityOrder: false,
       fullAppData:
         '{"appCode":"Safe Wallet Swaps","metadata":{"orderClass":{"orderClass":"twap"},"quote":{"slippageBips":1000},"widget":{"appCode":"CoW Swap-SafeApp","environment":"production"}},"version":"1.1.0"}',
@@ -331,7 +336,15 @@ describe('TwapOrderMapper', () => {
       },
       executedBuyAmount: '1379444631694674612',
       executedSellAmount: '427173750967724283500',
-      executedSurplusFee: '222222222',
+      executedFee: '222222222',
+      executedFeeToken: {
+        address: sellToken.address,
+        decimals: sellToken.decimals,
+        logoUri: sellToken.logoUri,
+        name: sellToken.name,
+        symbol: sellToken.symbol,
+        trusted: sellToken.trusted,
+      },
       fullAppData,
       humanDescription: null,
       kind: 'sell',
@@ -341,7 +354,6 @@ describe('TwapOrderMapper', () => {
       owner: '0x31eaC7F0141837B266De30f4dc9aF15629Bd5381',
       partSellAmount: '213586875483862141750',
       receiver: '0x31eaC7F0141837B266De30f4dc9aF15629Bd5381',
-      richDecodedInfo: null,
       sellAmount: '427173750967724283500',
       sellToken: {
         address: sellToken.address,
@@ -393,13 +405,12 @@ describe('TwapOrderMapper', () => {
       executedSellAmount: '213586875483862141750',
       executedSellAmountBeforeFees: '213586875483862141750',
       executedFeeAmount: '0',
-      executedSurplusFee: '2135868754838621123',
+      executedFee: '2135868754838621123',
+      executedFeeToken: '0xbe72e441bf55620febc26715db68d3494213d8cb',
       invalidated: false,
       status: 'fulfilled',
       class: 'limit',
       settlementContract: '0x9008d19f58aabd9ed0d60971565aa8510560ab41',
-      fullFeeAmount: '0',
-      solverFee: '0',
       isLiquidityOrder: false,
       fullAppData:
         '{"appCode":"Safe Wallet Swaps","metadata":{"orderClass":{"orderClass":"twap"},"quote":{"slippageBips":1000},"widget":{"appCode":"CoW Swap-SafeApp","environment":"production"}},"version":"1.1.0"}',
@@ -476,7 +487,15 @@ describe('TwapOrderMapper', () => {
       },
       executedBuyAmount: null,
       executedSellAmount: null,
-      executedSurplusFee: null,
+      executedFee: null,
+      executedFeeToken: {
+        address: sellToken.address,
+        decimals: sellToken.decimals,
+        logoUri: sellToken.logoUri,
+        name: sellToken.name,
+        symbol: sellToken.symbol,
+        trusted: sellToken.trusted,
+      },
       fullAppData,
       humanDescription: null,
       kind: 'sell',
@@ -486,7 +505,6 @@ describe('TwapOrderMapper', () => {
       owner: '0x31eaC7F0141837B266De30f4dc9aF15629Bd5381',
       partSellAmount: '213586875483862141750',
       receiver: '0x31eaC7F0141837B266De30f4dc9aF15629Bd5381',
-      richDecodedInfo: null,
       sellAmount: '427173750967724283500',
       sellToken: {
         address: sellToken.address,
@@ -627,13 +645,12 @@ describe('TwapOrderMapper', () => {
       executedSellAmount: '213586875483862141750',
       executedSellAmountBeforeFees: '213586875483862141750',
       executedFeeAmount: '0',
-      executedSurplusFee: '111111111',
+      executedFee: '111111111',
+      executedFeeToken: '0xbe72e441bf55620febc26715db68d3494213d8cb',
       invalidated: false,
       status: 'fulfilled',
       class: 'limit',
       settlementContract: '0x9008d19f58aabd9ed0d60971565aa8510560ab41',
-      fullFeeAmount: '0',
-      solverFee: '0',
       isLiquidityOrder: false,
       fullAppData: JSON.parse(
         '{"appCode":"Safe Wallet Swaps","metadata":{"orderClass":{"orderClass":"twap"},"quote":{"slippageBips":1000},"widget":{"appCode":"CoW Swap-SafeApp","environment":"production"}},"version":"1.1.0"}',
@@ -727,13 +744,12 @@ describe('TwapOrderMapper', () => {
       executedSellAmount: '213586875483862141750',
       executedSellAmountBeforeFees: '213586875483862141750',
       executedFeeAmount: '0',
-      executedSurplusFee: '111111111',
+      executedFee: '111111111',
+      executedFeeToken: '0xbe72e441bf55620febc26715db68d3494213d8cb',
       invalidated: false,
       status: 'fulfilled',
       class: 'limit',
       settlementContract: '0x9008d19f58aabd9ed0d60971565aa8510560ab41',
-      fullFeeAmount: '0',
-      solverFee: '0',
       isLiquidityOrder: false,
       fullAppData: JSON.parse(
         '{"appCode":"Safe Wallet Swaps","metadata":{"orderClass":{"orderClass":"twap"},"quote":{"slippageBips":1000},"widget":{"appCode":"CoW Swap-SafeApp","environment":"production"}},"version":"1.1.0"}',
@@ -876,7 +892,15 @@ describe('TwapOrderMapper', () => {
       },
       executedBuyAmount: '0',
       executedSellAmount: '0',
-      executedSurplusFee: '0',
+      executedFee: '0',
+      executedFeeToken: {
+        address: sellToken.address,
+        decimals: sellToken.decimals,
+        logoUri: sellToken.logoUri,
+        name: sellToken.name,
+        symbol: sellToken.symbol,
+        trusted: sellToken.trusted,
+      },
       fullAppData,
       humanDescription: null,
       kind: 'sell',
@@ -886,7 +910,6 @@ describe('TwapOrderMapper', () => {
       owner: '0x31eaC7F0141837B266De30f4dc9aF15629Bd5381',
       partSellAmount: '500000000000000000',
       receiver: '0x31eaC7F0141837B266De30f4dc9aF15629Bd5381',
-      richDecodedInfo: null,
       sellAmount: '1000000000000000000',
       sellToken: {
         address: sellToken.address,
@@ -933,14 +956,13 @@ describe('TwapOrderMapper', () => {
           executedSellAmount: '388694804521426831',
           executedSellAmountBeforeFees: '388694804521426831',
           executedFeeAmount: '0',
-          executedSurplusFee: '3713410339758625',
+          executedFee: '3713410339758625',
+          executedFeeToken: '0xfff9976782d46cc05630d1f6ebab18b2324d6b14',
           invalidated: false,
           // Note: status modified from 'fulfilled' for the sake of this test
           status: 'open',
           class: 'limit',
           settlementContract: '0x9008d19f58aabd9ed0d60971565aa8510560ab41',
-          fullFeeAmount: '0',
-          solverFee: '0',
           isLiquidityOrder: false,
           fullAppData:
             '{"appCode":"Safe Wallet Swaps","metadata":{"orderClass":{"orderClass":"twap"},"partnerFee":{"bps":35,"recipient":"0x63695Eee2c3141BDE314C5a6f89B98E62808d716"},"quote":{"slippageBips":1000},"widget":{"appCode":"CoW Swap-SafeApp","environment":"production"}},"version":"1.1.0"}',
@@ -1053,13 +1075,12 @@ describe('TwapOrderMapper', () => {
           executedSellAmount: '388694804521426831',
           executedSellAmountBeforeFees: '388694804521426831',
           executedFeeAmount: '0',
-          executedSurplusFee: '3713410339758625',
+          executedFee: '3713410339758625',
+          executedFeeToken: '0xfff9976782d46cc05630d1f6ebab18b2324d6b14',
           invalidated: false,
           status: 'fulfilled',
           class: 'limit',
           settlementContract: '0x9008d19f58aabd9ed0d60971565aa8510560ab41',
-          fullFeeAmount: '0',
-          solverFee: '0',
           isLiquidityOrder: false,
           fullAppData:
             '{"appCode":"Safe Wallet Swaps","metadata":{"orderClass":{"orderClass":"twap"},"partnerFee":{"bps":35,"recipient":"0x63695Eee2c3141BDE314C5a6f89B98E62808d716"},"quote":{"slippageBips":1000},"widget":{"appCode":"CoW Swap-SafeApp","environment":"production"}},"version":"1.1.0"}',
@@ -1172,13 +1193,12 @@ describe('TwapOrderMapper', () => {
           executedSellAmount: '388694804521426831',
           executedSellAmountBeforeFees: '388694804521426831',
           executedFeeAmount: '0',
-          executedSurplusFee: '3713410339758625',
+          executedFee: '3713410339758625',
+          executedFeeToken: '0xfff9976782d46cc05630d1f6ebab18b2324d6b14',
           invalidated: false,
           status: 'fulfilled',
           class: 'limit',
           settlementContract: '0x9008d19f58aabd9ed0d60971565aa8510560ab41',
-          fullFeeAmount: '0',
-          solverFee: '0',
           isLiquidityOrder: false,
           fullAppData:
             '{"appCode":"Safe Wallet Swaps","metadata":{"orderClass":{"orderClass":"twap"},"partnerFee":{"bps":35,"recipient":"0x63695Eee2c3141BDE314C5a6f89B98E62808d716"},"quote":{"slippageBips":1000},"widget":{"appCode":"CoW Swap-SafeApp","environment":"production"}},"version":"1.1.0"}',
@@ -1212,13 +1232,12 @@ describe('TwapOrderMapper', () => {
           executedSellAmount: '388694804521426831',
           executedSellAmountBeforeFees: '388694804521426831',
           executedFeeAmount: '0',
-          executedSurplusFee: '3835585092662741',
+          executedFee: '3835585092662741',
+          executedFeeToken: '0xfff9976782d46cc05630d1f6ebab18b2324d6b14',
           invalidated: false,
           status: 'fulfilled',
           class: 'limit',
           settlementContract: '0x9008d19f58aabd9ed0d60971565aa8510560ab41',
-          fullFeeAmount: '0',
-          solverFee: '0',
           isLiquidityOrder: false,
           fullAppData:
             '{"appCode":"Safe Wallet Swaps","metadata":{"orderClass":{"orderClass":"twap"},"partnerFee":{"bps":35,"recipient":"0x63695Eee2c3141BDE314C5a6f89B98E62808d716"},"quote":{"slippageBips":1000},"widget":{"appCode":"CoW Swap-SafeApp","environment":"production"}},"version":"1.1.0"}',
@@ -1334,13 +1353,12 @@ describe('TwapOrderMapper', () => {
           executedSellAmount: '388694804521426831',
           executedSellAmountBeforeFees: '388694804521426831',
           executedFeeAmount: '0',
-          executedSurplusFee: '3713410339758625',
+          executedFee: '3713410339758625',
+          executedFeeToken: '0xfff9976782d46cc05630d1f6ebab18b2324d6b14',
           invalidated: false,
           status: 'fulfilled',
           class: 'limit',
           settlementContract: '0x9008d19f58aabd9ed0d60971565aa8510560ab41',
-          fullFeeAmount: '0',
-          solverFee: '0',
           isLiquidityOrder: false,
           fullAppData:
             '{"appCode":"Safe Wallet Swaps","metadata":{"orderClass":{"orderClass":"twap"},"partnerFee":{"bps":35,"recipient":"0x63695Eee2c3141BDE314C5a6f89B98E62808d716"},"quote":{"slippageBips":1000},"widget":{"appCode":"CoW Swap-SafeApp","environment":"production"}},"version":"1.1.0"}',
@@ -1374,13 +1392,12 @@ describe('TwapOrderMapper', () => {
           executedSellAmount: '388694804521426831',
           executedSellAmountBeforeFees: '388694804521426831',
           executedFeeAmount: '0',
-          executedSurplusFee: '3835585092662741',
+          executedFee: '3835585092662741',
+          executedFeeToken: '0xfff9976782d46cc05630d1f6ebab18b2324d6b14',
           invalidated: false,
           status: 'fulfilled',
           class: 'limit',
           settlementContract: '0x9008d19f58aabd9ed0d60971565aa8510560ab41',
-          fullFeeAmount: '0',
-          solverFee: '0',
           isLiquidityOrder: false,
           fullAppData:
             '{"appCode":"Safe Wallet Swaps","metadata":{"orderClass":{"orderClass":"twap"},"partnerFee":{"bps":35,"recipient":"0x63695Eee2c3141BDE314C5a6f89B98E62808d716"},"quote":{"slippageBips":1000},"widget":{"appCode":"CoW Swap-SafeApp","environment":"production"}},"version":"1.1.0"}',
@@ -1414,14 +1431,13 @@ describe('TwapOrderMapper', () => {
           executedSellAmount: '0',
           executedSellAmountBeforeFees: '0',
           executedFeeAmount: '0',
-          executedSurplusFee: '0',
+          executedFee: '0',
+          executedFeeToken: '0xfff9976782d46cc05630d1f6ebab18b2324d6b14',
           invalidated: false,
           // Note: changed from expired to open for testing purposes
           status: 'open',
           class: 'limit',
           settlementContract: '0x9008d19f58aabd9ed0d60971565aa8510560ab41',
-          fullFeeAmount: '0',
-          solverFee: '0',
           isLiquidityOrder: false,
           fullAppData:
             '{"appCode":"Safe Wallet Swaps","metadata":{"orderClass":{"orderClass":"twap"},"partnerFee":{"bps":35,"recipient":"0x63695Eee2c3141BDE314C5a6f89B98E62808d716"},"quote":{"slippageBips":1000},"widget":{"appCode":"CoW Swap-SafeApp","environment":"production"}},"version":"1.1.0"}',
@@ -1478,7 +1494,6 @@ describe('TwapOrderMapper', () => {
           if (order) {
             return Promise.resolve(order);
           }
-          console.log('Order not found', orderUid);
           return Promise.reject(new NotFoundException());
         },
       );
@@ -1535,13 +1550,12 @@ describe('TwapOrderMapper', () => {
           executedSellAmount: '388694804521426831',
           executedSellAmountBeforeFees: '388694804521426831',
           executedFeeAmount: '0',
-          executedSurplusFee: '3713410339758625',
+          executedFee: '3713410339758625',
+          executedFeeToken: '0xfff9976782d46cc05630d1f6ebab18b2324d6b14',
           invalidated: false,
           status: 'fulfilled',
           class: 'limit',
           settlementContract: '0x9008d19f58aabd9ed0d60971565aa8510560ab41',
-          fullFeeAmount: '0',
-          solverFee: '0',
           isLiquidityOrder: false,
           fullAppData:
             '{"appCode":"Safe Wallet Swaps","metadata":{"orderClass":{"orderClass":"twap"},"partnerFee":{"bps":35,"recipient":"0x63695Eee2c3141BDE314C5a6f89B98E62808d716"},"quote":{"slippageBips":1000},"widget":{"appCode":"CoW Swap-SafeApp","environment":"production"}},"version":"1.1.0"}',
@@ -1575,13 +1589,12 @@ describe('TwapOrderMapper', () => {
           executedSellAmount: '388694804521426831',
           executedSellAmountBeforeFees: '388694804521426831',
           executedFeeAmount: '0',
-          executedSurplusFee: '3835585092662741',
+          executedFee: '3835585092662741',
+          executedFeeToken: '0xfff9976782d46cc05630d1f6ebab18b2324d6b14',
           invalidated: false,
           status: 'fulfilled',
           class: 'limit',
           settlementContract: '0x9008d19f58aabd9ed0d60971565aa8510560ab41',
-          fullFeeAmount: '0',
-          solverFee: '0',
           isLiquidityOrder: false,
           fullAppData:
             '{"appCode":"Safe Wallet Swaps","metadata":{"orderClass":{"orderClass":"twap"},"partnerFee":{"bps":35,"recipient":"0x63695Eee2c3141BDE314C5a6f89B98E62808d716"},"quote":{"slippageBips":1000},"widget":{"appCode":"CoW Swap-SafeApp","environment":"production"}},"version":"1.1.0"}',
@@ -1615,13 +1628,12 @@ describe('TwapOrderMapper', () => {
           executedSellAmount: '0',
           executedSellAmountBeforeFees: '0',
           executedFeeAmount: '0',
-          executedSurplusFee: '0',
+          executedFee: '0',
+          executedFeeToken: '0xfff9976782d46cc05630d1f6ebab18b2324d6b14',
           invalidated: false,
           status: 'expired',
           class: 'limit',
           settlementContract: '0x9008d19f58aabd9ed0d60971565aa8510560ab41',
-          fullFeeAmount: '0',
-          solverFee: '0',
           isLiquidityOrder: false,
           fullAppData:
             '{"appCode":"Safe Wallet Swaps","metadata":{"orderClass":{"orderClass":"twap"},"partnerFee":{"bps":35,"recipient":"0x63695Eee2c3141BDE314C5a6f89B98E62808d716"},"quote":{"slippageBips":1000},"widget":{"appCode":"CoW Swap-SafeApp","environment":"production"}},"version":"1.1.0"}',

@@ -4,15 +4,19 @@ import { IConfigurationService } from '@/config/configuration.service.interface'
 import configuration from '@/config/entities/__tests__/configuration';
 import { TestCacheModule } from '@/datasources/cache/__tests__/test.cache.module';
 import { CacheModule } from '@/datasources/cache/cache.module';
+import { TestPostgresDatabaseModule } from '@/datasources/db/__tests__/test.postgres-database.module';
+import { PostgresDatabaseModule } from '@/datasources/db/v1/postgres-database.module';
+import { PostgresDatabaseModuleV2 } from '@/datasources/db/v2/postgres-database.module';
+import { TestPostgresDatabaseModuleV2 } from '@/datasources/db/v2/test.postgres-database.module';
 import { TestNetworkModule } from '@/datasources/network/__tests__/test.network.module';
 import { NetworkResponseError } from '@/datasources/network/entities/network.error.entity';
 import { NetworkModule } from '@/datasources/network/network.module';
-import {
-  INetworkService,
-  NetworkService,
-} from '@/datasources/network/network.service.interface';
+import type { INetworkService } from '@/datasources/network/network.service.interface';
+import { NetworkService } from '@/datasources/network/network.service.interface';
 import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
 import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
+import { TestTargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/__tests__/test.targeted-messaging.datasource.module';
+import { TargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/targeted-messaging.datasource.module';
 import { balanceBuilder } from '@/domain/balances/entities/__tests__/balance.builder';
 import { balanceTokenBuilder } from '@/domain/balances/entities/__tests__/balance.token.builder';
 import { chainBuilder } from '@/domain/chains/entities/__tests__/chain.builder';
@@ -21,10 +25,12 @@ import { safeBuilder } from '@/domain/safe/entities/__tests__/safe.builder';
 import { TestLoggingModule } from '@/logging/__tests__/test.logging.module';
 import { RequestScopedLoggingModule } from '@/logging/logging.module';
 import { NULL_ADDRESS } from '@/routes/common/constants';
+import { rawify } from '@/validation/entities/raw.entity';
 import { faker } from '@faker-js/faker';
-import { INestApplication } from '@nestjs/common';
-import { Test, TestingModule } from '@nestjs/testing';
-import { Server } from 'net';
+import type { INestApplication } from '@nestjs/common';
+import type { TestingModule } from '@nestjs/testing';
+import { Test } from '@nestjs/testing';
+import type { Server } from 'net';
 import request from 'supertest';
 import { getAddress } from 'viem';
 
@@ -49,6 +55,10 @@ describe('Balances Controller (Unit)', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(testConfiguration)],
     })
+      .overrideModule(PostgresDatabaseModule)
+      .useModule(TestPostgresDatabaseModule)
+      .overrideModule(TargetedMessagingDatasourceModule)
+      .useModule(TestTargetedMessagingDatasourceModule)
       .overrideModule(CacheModule)
       .useModule(TestCacheModule)
       .overrideModule(RequestScopedLoggingModule)
@@ -57,6 +67,8 @@ describe('Balances Controller (Unit)', () => {
       .useModule(TestNetworkModule)
       .overrideModule(QueuesApiModule)
       .useModule(TestQueuesApiModule)
+      .overrideModule(PostgresDatabaseModuleV2)
+      .useModule(TestPostgresDatabaseModuleV2)
       .compile();
 
     const configurationService = moduleFixture.get<IConfigurationService>(
@@ -115,25 +127,25 @@ describe('Balances Controller (Unit)', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
-            return Promise.resolve({ data: chain, status: 200 });
+            return Promise.resolve({ data: rawify(chain), status: 200 });
           case `${chain.transactionService}/api/v1/safes/${safeAddress}`:
             return Promise.resolve({
-              data: safeBuilder().build(),
+              data: rawify(safeBuilder().build()),
               status: 200,
             });
           case `${chain.transactionService}/api/v1/safes/${safeAddress}/balances/`:
             return Promise.resolve({
-              data: transactionApiBalancesResponse,
+              data: rawify(transactionApiBalancesResponse),
               status: 200,
             });
           case `${pricesProviderUrl}/simple/price`:
             return Promise.resolve({
-              data: nativeCoinPriceProviderResponse,
+              data: rawify(nativeCoinPriceProviderResponse),
               status: 200,
             });
           case `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`:
             return Promise.resolve({
-              data: tokenPriceProviderResponse,
+              data: rawify(tokenPriceProviderResponse),
               status: 200,
             });
           default:
@@ -257,20 +269,20 @@ describe('Balances Controller (Unit)', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
-            return Promise.resolve({ data: chain, status: 200 });
+            return Promise.resolve({ data: rawify(chain), status: 200 });
           case `${chain.transactionService}/api/v1/safes/${safeAddress}`:
             return Promise.resolve({
-              data: safeBuilder().build(),
+              data: rawify(safeBuilder().build()),
               status: 200,
             });
           case `${chain.transactionService}/api/v1/safes/${safeAddress}/balances/`:
             return Promise.resolve({
-              data: transactionApiBalancesResponse,
+              data: rawify(transactionApiBalancesResponse),
               status: 200,
             });
           case `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`:
             return Promise.resolve({
-              data: tokenPriceProviderResponse,
+              data: rawify(tokenPriceProviderResponse),
               status: 200,
             });
           default:
@@ -312,20 +324,20 @@ describe('Balances Controller (Unit)', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
-            return Promise.resolve({ data: chain, status: 200 });
+            return Promise.resolve({ data: rawify(chain), status: 200 });
           case `${chain.transactionService}/api/v1/safes/${safeAddress}`:
             return Promise.resolve({
-              data: safeBuilder().build(),
+              data: rawify(safeBuilder().build()),
               status: 200,
             });
           case `${chain.transactionService}/api/v1/safes/${safeAddress}/balances/`:
             return Promise.resolve({
-              data: transactionApiBalancesResponse,
+              data: rawify(transactionApiBalancesResponse),
               status: 200,
             });
           case `${pricesProviderUrl}/simple/price`:
             return Promise.resolve({
-              data: nativeCoinPriceProviderResponse,
+              data: rawify(nativeCoinPriceProviderResponse),
               status: 200,
             });
           default:
@@ -380,15 +392,15 @@ describe('Balances Controller (Unit)', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
-            return Promise.resolve({ data: chain, status: 200 });
+            return Promise.resolve({ data: rawify(chain), status: 200 });
           case `${chain.transactionService}/api/v1/safes/${safeAddress}`:
             return Promise.resolve({
-              data: safeBuilder().build(),
+              data: rawify(safeBuilder().build()),
               status: 200,
             });
           case `${chain.transactionService}/api/v1/safes/${safeAddress}/balances/`:
             return Promise.resolve({
-              data: transactionApiBalancesResponse,
+              data: rawify(transactionApiBalancesResponse),
               status: 200,
             });
           default:
@@ -448,15 +460,15 @@ describe('Balances Controller (Unit)', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
-            return Promise.resolve({ data: chain, status: 200 });
+            return Promise.resolve({ data: rawify(chain), status: 200 });
           case `${chain.transactionService}/api/v1/safes/${safeAddress}`:
             return Promise.resolve({
-              data: safeBuilder().build(),
+              data: rawify(safeBuilder().build()),
               status: 200,
             });
           case `${chain.transactionService}/api/v1/safes/${safeAddress}/balances/`:
             return Promise.resolve({
-              data: transactionApiBalancesResponse,
+              data: rawify(transactionApiBalancesResponse),
               status: 200,
             });
           default:
@@ -526,20 +538,20 @@ describe('Balances Controller (Unit)', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
-            return Promise.resolve({ data: chain, status: 200 });
+            return Promise.resolve({ data: rawify(chain), status: 200 });
           case `${chain.transactionService}/api/v1/safes/${safeAddress}`:
             return Promise.resolve({
-              data: safeBuilder().build(),
+              data: rawify(safeBuilder().build()),
               status: 200,
             });
           case `${chain.transactionService}/api/v1/safes/${safeAddress}/balances/`:
             return Promise.resolve({
-              data: transactionApiBalancesResponse,
+              data: rawify(transactionApiBalancesResponse),
               status: 200,
             });
           case `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`:
             return Promise.resolve({
-              data: tokenPriceProviderResponse,
+              data: rawify(tokenPriceProviderResponse),
               status: 200,
             });
           default:
@@ -634,15 +646,15 @@ describe('Balances Controller (Unit)', () => {
         networkService.get.mockImplementation(({ url }) => {
           switch (url) {
             case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
-              return Promise.resolve({ data: chain, status: 200 });
+              return Promise.resolve({ data: rawify(chain), status: 200 });
             case `${chain.transactionService}/api/v1/safes/${safeAddress}`:
               return Promise.resolve({
-                data: safeBuilder().build(),
+                data: rawify(safeBuilder().build()),
                 status: 200,
               });
             case `${chain.transactionService}/api/v1/safes/${safeAddress}/balances/`:
               return Promise.resolve({
-                data: transactionApiBalancesResponse,
+                data: rawify(transactionApiBalancesResponse),
                 status: 200,
               });
             case `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`:
@@ -698,20 +710,20 @@ describe('Balances Controller (Unit)', () => {
         networkService.get.mockImplementation(({ url }) => {
           switch (url) {
             case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
-              return Promise.resolve({ data: chain, status: 200 });
+              return Promise.resolve({ data: rawify(chain), status: 200 });
             case `${chain.transactionService}/api/v1/safes/${safeAddress}`:
               return Promise.resolve({
-                data: safeBuilder().build(),
+                data: rawify(safeBuilder().build()),
                 status: 200,
               });
             case `${chain.transactionService}/api/v1/safes/${safeAddress}/balances/`:
               return Promise.resolve({
-                data: transactionApiBalancesResponse,
+                data: rawify(transactionApiBalancesResponse),
                 status: 200,
               });
             case `${pricesProviderUrl}/simple/token_price/${chain.pricesProvider.chainName}`:
               return Promise.resolve({
-                data: tokenPriceProviderResponse,
+                data: rawify(tokenPriceProviderResponse),
                 status: 200,
               });
             default:
@@ -759,13 +771,16 @@ describe('Balances Controller (Unit)', () => {
         const transactionServiceUrl = `${chainResponse.transactionService}/api/v1/safes/${safeAddress}/balances/`;
         networkService.get.mockImplementation(({ url }) => {
           if (url == `${safeConfigUrl}/api/v1/chains/${chainId}`) {
-            return Promise.resolve({ data: chainResponse, status: 200 });
+            return Promise.resolve({
+              data: rawify(chainResponse),
+              status: 200,
+            });
           } else if (
             url ==
             `${chainResponse.transactionService}/api/v1/safes/${safeAddress}`
           ) {
             return Promise.resolve({
-              data: safeBuilder().build(),
+              data: rawify(safeBuilder().build()),
               status: 200,
             });
           } else if (url == transactionServiceUrl) {
@@ -793,19 +808,19 @@ describe('Balances Controller (Unit)', () => {
       });
     });
 
-    it(`500 error if validation fails`, async () => {
+    it(`502 error if validation fails`, async () => {
       const chainId = '1';
       const safeAddress = getAddress(faker.finance.ethereumAddress());
       const chainResponse = chainBuilder().with('chainId', chainId).build();
       networkService.get.mockImplementation(({ url }) => {
         if (url == `${safeConfigUrl}/api/v1/chains/${chainId}`) {
-          return Promise.resolve({ data: chainResponse, status: 200 });
+          return Promise.resolve({ data: rawify(chainResponse), status: 200 });
         } else if (
           url ==
           `${chainResponse.transactionService}/api/v1/safes/${safeAddress}/balances/`
         ) {
           return Promise.resolve({
-            data: [{ invalid: 'data' }],
+            data: rawify([{ invalid: 'data' }]),
             status: 200,
           });
         } else if (
@@ -813,7 +828,7 @@ describe('Balances Controller (Unit)', () => {
           `${chainResponse.transactionService}/api/v1/safes/${safeAddress}`
         ) {
           return Promise.resolve({
-            data: safeBuilder().build(),
+            data: rawify(safeBuilder().build()),
             status: 200,
           });
         } else {
@@ -823,13 +838,13 @@ describe('Balances Controller (Unit)', () => {
 
       await request(app.getHttpServer())
         .get(`/v1/chains/${chainId}/safes/${safeAddress}/balances/usd`)
-        .expect(500)
+        .expect(502)
         .expect({
-          statusCode: 500,
-          message: 'Internal server error',
+          statusCode: 502,
+          message: 'Bad gateway',
         });
 
-      expect(networkService.get.mock.calls.length).toBe(4);
+      expect(networkService.get.mock.calls.length).toBe(3);
     });
   });
 
@@ -841,10 +856,10 @@ describe('Balances Controller (Unit)', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/1`:
-            return Promise.resolve({ data: chain, status: 200 });
+            return Promise.resolve({ data: rawify(chain), status: 200 });
           case `${pricesProviderUrl}/simple/supported_vs_currencies`:
             return Promise.resolve({
-              data: pricesProviderFiatCodes,
+              data: rawify(pricesProviderFiatCodes),
               status: 200,
             });
           default:
@@ -865,10 +880,10 @@ describe('Balances Controller (Unit)', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/1`:
-            return Promise.resolve({ data: chain, status: 200 });
+            return Promise.resolve({ data: rawify(chain), status: 200 });
           case `${pricesProviderUrl}/simple/supported_vs_currencies`:
             return Promise.resolve({
-              data: pricesProviderFiatCodes,
+              data: rawify(pricesProviderFiatCodes),
               status: 200,
             });
           default:
@@ -887,7 +902,7 @@ describe('Balances Controller (Unit)', () => {
       networkService.get.mockImplementation(({ url }) => {
         switch (url) {
           case `${safeConfigUrl}/api/v1/chains/1`:
-            return Promise.resolve({ data: chain, status: 200 });
+            return Promise.resolve({ data: rawify(chain), status: 200 });
           case `${pricesProviderUrl}/simple/supported_vs_currencies`:
             return Promise.reject(new Error());
           default:

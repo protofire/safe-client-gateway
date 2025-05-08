@@ -1,6 +1,7 @@
 import { faker } from '@faker-js/faker';
-import { INestApplication } from '@nestjs/common';
-import { Test, TestingModule } from '@nestjs/testing';
+import type { INestApplication } from '@nestjs/common';
+import type { TestingModule } from '@nestjs/testing';
+import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { TestAppProvider } from '@/__tests__/test-app.provider';
 import { AppModule } from '@/app.module';
@@ -11,34 +12,34 @@ import { CacheModule } from '@/datasources/cache/cache.module';
 import { TestNetworkModule } from '@/datasources/network/__tests__/test.network.module';
 import { NetworkResponseError } from '@/datasources/network/entities/network.error.entity';
 import { NetworkModule } from '@/datasources/network/network.module';
-import {
-  INetworkService,
-  NetworkService,
-} from '@/datasources/network/network.service.interface';
+import type { INetworkService } from '@/datasources/network/network.service.interface';
+import { NetworkService } from '@/datasources/network/network.service.interface';
 import { backboneBuilder } from '@/domain/backbone/entities/__tests__/backbone.builder';
-import { Backbone } from '@/domain/backbone/entities/backbone.entity';
+import type { Backbone } from '@/domain/backbone/entities/backbone.entity';
 import { chainBuilder } from '@/domain/chains/entities/__tests__/chain.builder';
 import { singletonBuilder } from '@/domain/chains/entities/__tests__/singleton.builder';
-import { Chain } from '@/domain/chains/entities/chain.entity';
-import { Singleton } from '@/domain/chains/entities/singleton.entity';
-import { MasterCopy } from '@/routes/chains/entities/master-copy.entity';
-import { Page } from '@/domain/entities/page.entity';
+import type { Chain } from '@/domain/chains/entities/chain.entity';
+import type { Singleton } from '@/domain/chains/entities/singleton.entity';
+import type { MasterCopy } from '@/routes/chains/entities/master-copy.entity';
+import type { Page } from '@/domain/entities/page.entity';
 import { TestLoggingModule } from '@/logging/__tests__/test.logging.module';
 import { RequestScopedLoggingModule } from '@/logging/logging.module';
 import { PaginationData } from '@/routes/common/pagination/pagination.data';
-import { getAddress, GetBlockReturnType, HttpRequestError } from 'viem';
+import { getAddress } from 'viem';
 import { TestQueuesApiModule } from '@/datasources/queues/__tests__/test.queues-api.module';
 import { QueuesApiModule } from '@/datasources/queues/queues-api.module';
-import { Server } from 'net';
+import type { Server } from 'net';
 import { indexingStatusBuilder } from '@/domain/chains/entities/__tests__/indexing-status.builder';
-import {
-  BlockchainApiManagerModule,
-  IBlockchainApiManager,
-} from '@/domain/interfaces/blockchain-api.manager.interface';
+import { BlockchainApiManagerModule } from '@/domain/interfaces/blockchain-api.manager.interface';
 import { TestBlockchainApiManagerModule } from '@/datasources/blockchain/__tests__/test.blockchain-api.manager';
-import { FakeBlockchainApiManager } from '@/datasources/blockchain/__tests__/fake.blockchain-api.manager';
+import { PostgresDatabaseModuleV2 } from '@/datasources/db/v2/postgres-database.module';
+import { TestPostgresDatabaseModuleV2 } from '@/datasources/db/v2/test.postgres-database.module';
+import { PostgresDatabaseModule } from '@/datasources/db/v1/postgres-database.module';
+import { TestPostgresDatabaseModule } from '@/datasources/db/__tests__/test.postgres-database.module';
+import { TestTargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/__tests__/test.targeted-messaging.datasource.module';
+import { TargetedMessagingDatasourceModule } from '@/datasources/targeted-messaging/targeted-messaging.datasource.module';
+import { rawify } from '@/validation/entities/raw.entity';
 
-const mockGetBlock = jest.fn();
 describe('Chains Controller (Unit)', () => {
   let app: INestApplication<Server>;
 
@@ -47,7 +48,6 @@ describe('Chains Controller (Unit)', () => {
   let version: string;
   let buildNumber: string;
   let networkService: jest.MockedObjectDeep<INetworkService>;
-  let blockchainApiManager: FakeBlockchainApiManager;
 
   const chainsResponse: Page<Chain> = {
     count: 2,
@@ -65,6 +65,10 @@ describe('Chains Controller (Unit)', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule.register(configuration)],
     })
+      .overrideModule(PostgresDatabaseModule)
+      .useModule(TestPostgresDatabaseModule)
+      .overrideModule(TargetedMessagingDatasourceModule)
+      .useModule(TestTargetedMessagingDatasourceModule)
       .overrideModule(CacheModule)
       .useModule(TestCacheModule)
       .overrideModule(RequestScopedLoggingModule)
@@ -75,6 +79,8 @@ describe('Chains Controller (Unit)', () => {
       .useModule(TestQueuesApiModule)
       .overrideModule(BlockchainApiManagerModule)
       .useModule(TestBlockchainApiManagerModule)
+      .overrideModule(PostgresDatabaseModuleV2)
+      .useModule(TestPostgresDatabaseModuleV2)
       .compile();
 
     const configurationService = moduleFixture.get<IConfigurationService>(
@@ -85,10 +91,6 @@ describe('Chains Controller (Unit)', () => {
     version = configurationService.getOrThrow('about.version');
     buildNumber = configurationService.getOrThrow('about.buildNumber');
     networkService = moduleFixture.get(NetworkService);
-    blockchainApiManager = moduleFixture.get(IBlockchainApiManager);
-    blockchainApiManager.getApi.mockImplementation(() => ({
-      getBlock: mockGetBlock,
-    }));
 
     app = await new TestAppProvider().provide(moduleFixture);
     await app.init();
@@ -97,7 +99,7 @@ describe('Chains Controller (Unit)', () => {
   describe('GET /chains', () => {
     it('Success', async () => {
       networkService.get.mockResolvedValueOnce({
-        data: chainsResponse,
+        data: rawify(chainsResponse),
         status: 200,
       });
 
@@ -122,6 +124,8 @@ describe('Chains Controller (Unit)', () => {
               publicRpcUri: chainsResponse.results[0].publicRpcUri,
               blockExplorerUriTemplate:
                 chainsResponse.results[0].blockExplorerUriTemplate,
+              beaconChainExplorerUriTemplate:
+                chainsResponse.results[0].beaconChainExplorerUriTemplate,
               nativeCurrency: chainsResponse.results[0].nativeCurrency,
               transactionService: chainsResponse.results[0].transactionService,
               theme: chainsResponse.results[0].theme,
@@ -133,6 +137,8 @@ describe('Chains Controller (Unit)', () => {
               features: chainsResponse.results[0].features,
               balancesProvider: chainsResponse.results[0].balancesProvider,
               contractAddresses: chainsResponse.results[0].contractAddresses,
+              recommendedMasterCopyVersion:
+                chainsResponse.results[0].recommendedMasterCopyVersion,
             },
             {
               chainId: chainsResponse.results[1].chainId,
@@ -147,6 +153,8 @@ describe('Chains Controller (Unit)', () => {
               publicRpcUri: chainsResponse.results[1].publicRpcUri,
               blockExplorerUriTemplate:
                 chainsResponse.results[1].blockExplorerUriTemplate,
+              beaconChainExplorerUriTemplate:
+                chainsResponse.results[1].beaconChainExplorerUriTemplate,
               nativeCurrency: chainsResponse.results[1].nativeCurrency,
               transactionService: chainsResponse.results[1].transactionService,
               theme: chainsResponse.results[1].theme,
@@ -158,6 +166,8 @@ describe('Chains Controller (Unit)', () => {
               features: chainsResponse.results[1].features,
               balancesProvider: chainsResponse.results[1].balancesProvider,
               contractAddresses: chainsResponse.results[1].contractAddresses,
+              recommendedMasterCopyVersion:
+                chainsResponse.results[1].recommendedMasterCopyVersion,
             },
           ],
         });
@@ -203,12 +213,10 @@ describe('Chains Controller (Unit)', () => {
     it('should exclude items not passing validation', async () => {
       const invalidChains = [{ invalid: 'item' }];
       networkService.get.mockResolvedValueOnce({
-        data: {
+        data: rawify({
           ...chainsResponse,
-          // Ensure count does not include invalid chains
-          count: chainsResponse.results.length + invalidChains.length,
           results: [...chainsResponse.results, ...invalidChains],
-        },
+        }),
         status: 200,
       });
 
@@ -233,6 +241,8 @@ describe('Chains Controller (Unit)', () => {
               publicRpcUri: chainsResponse.results[0].publicRpcUri,
               blockExplorerUriTemplate:
                 chainsResponse.results[0].blockExplorerUriTemplate,
+              beaconChainExplorerUriTemplate:
+                chainsResponse.results[0].beaconChainExplorerUriTemplate,
               nativeCurrency: chainsResponse.results[0].nativeCurrency,
               transactionService: chainsResponse.results[0].transactionService,
               theme: chainsResponse.results[0].theme,
@@ -244,6 +254,8 @@ describe('Chains Controller (Unit)', () => {
               features: chainsResponse.results[0].features,
               balancesProvider: chainsResponse.results[0].balancesProvider,
               contractAddresses: chainsResponse.results[0].contractAddresses,
+              recommendedMasterCopyVersion:
+                chainsResponse.results[0].recommendedMasterCopyVersion,
             },
             {
               chainId: chainsResponse.results[1].chainId,
@@ -258,6 +270,8 @@ describe('Chains Controller (Unit)', () => {
               publicRpcUri: chainsResponse.results[1].publicRpcUri,
               blockExplorerUriTemplate:
                 chainsResponse.results[1].blockExplorerUriTemplate,
+              beaconChainExplorerUriTemplate:
+                chainsResponse.results[1].beaconChainExplorerUriTemplate,
               nativeCurrency: chainsResponse.results[1].nativeCurrency,
               transactionService: chainsResponse.results[1].transactionService,
               theme: chainsResponse.results[1].theme,
@@ -269,6 +283,8 @@ describe('Chains Controller (Unit)', () => {
               features: chainsResponse.results[1].features,
               balancesProvider: chainsResponse.results[1].balancesProvider,
               contractAddresses: chainsResponse.results[1].contractAddresses,
+              recommendedMasterCopyVersion:
+                chainsResponse.results[1].recommendedMasterCopyVersion,
             },
           ],
         });
@@ -287,17 +303,17 @@ describe('Chains Controller (Unit)', () => {
 
     it('Failure: received data is not valid', async () => {
       networkService.get.mockResolvedValueOnce({
-        data: {
+        data: rawify({
           ...chainsResponse,
           count: chainsResponse.count?.toString(),
-        },
+        }),
         status: 200,
       });
 
-      await request(app.getHttpServer()).get('/v1/chains').expect(500).expect({
-        statusCode: 500,
-        message: 'Internal server error',
-      });
+      await request(app.getHttpServer())
+        .get('/v1/chains')
+        .expect(502)
+        .expect({ statusCode: 502, message: 'Bad gateway' });
       expect(networkService.get).toHaveBeenCalledTimes(1);
       expect(networkService.get).toHaveBeenCalledWith({
         url: `${safeConfigUrl}/api/v1/chains`,
@@ -325,6 +341,8 @@ describe('Chains Controller (Unit)', () => {
         nativeCurrency: chainDomain.nativeCurrency,
         transactionService: chainDomain.transactionService,
         blockExplorerUriTemplate: chainDomain.blockExplorerUriTemplate,
+        beaconChainExplorerUriTemplate:
+          chainDomain.beaconChainExplorerUriTemplate,
         disabledWallets: chainDomain.disabledWallets,
         features: chainDomain.features,
         gasPrice: chainDomain.gasPrice,
@@ -339,9 +357,10 @@ describe('Chains Controller (Unit)', () => {
           : chainDomain.ensRegistryAddress,
         balancesProvider: chainDomain.balancesProvider,
         contractAddresses: chainDomain.contractAddresses,
+        recommendedMasterCopyVersion: chainDomain.recommendedMasterCopyVersion,
       };
       networkService.get.mockResolvedValueOnce({
-        data: chainDomain,
+        data: rawify(chainDomain),
         status: 200,
       });
 
@@ -394,11 +413,11 @@ describe('Chains Controller (Unit)', () => {
   describe('GET /:chainId/about/backbone', () => {
     it('Success', async () => {
       networkService.get.mockResolvedValueOnce({
-        data: chainResponse,
+        data: rawify(chainResponse),
         status: 200,
       });
       networkService.get.mockResolvedValueOnce({
-        data: backboneResponse,
+        data: rawify(backboneResponse),
         status: 200,
       });
 
@@ -422,21 +441,18 @@ describe('Chains Controller (Unit)', () => {
     it('Validate the response', async () => {
       const invalidResponse = { invalid: 'value' };
       networkService.get.mockResolvedValueOnce({
-        data: chainResponse,
+        data: rawify(chainResponse),
         status: 200,
       });
       networkService.get.mockResolvedValueOnce({
-        data: invalidResponse,
+        data: rawify(invalidResponse),
         status: 200,
       });
 
       await request(app.getHttpServer())
         .get('/v1/chains/1/about/backbone')
-        .expect(500)
-        .expect({
-          statusCode: 500,
-          message: 'Internal server error',
-        });
+        .expect(502)
+        .expect({ statusCode: 502, message: 'Bad gateway' });
 
       expect(networkService.get).toHaveBeenCalledTimes(2);
       expect(networkService.get.mock.calls[0][0].url).toBe(
@@ -481,7 +497,7 @@ describe('Chains Controller (Unit)', () => {
         } as Response,
       );
       networkService.get.mockResolvedValueOnce({
-        data: chainResponse,
+        data: rawify(chainResponse),
         status: 200,
       });
       networkService.get.mockRejectedValueOnce(error);
@@ -510,15 +526,15 @@ describe('Chains Controller (Unit)', () => {
   describe('GET /:chainId/about/master-copies', () => {
     it('Success', async () => {
       networkService.get.mockResolvedValueOnce({
-        data: chainResponse,
+        data: rawify(chainResponse),
         status: 200,
       });
-      const domainSingletonsResponse: Singleton[] = [
+      const domainSingletonsResponse: Array<Singleton> = [
         singletonBuilder().build(),
         singletonBuilder().build(),
       ];
       networkService.get.mockResolvedValueOnce({
-        data: domainSingletonsResponse,
+        data: rawify(domainSingletonsResponse),
         status: 200,
       });
       const masterCopiesResponse: Array<MasterCopy> = [
@@ -580,7 +596,7 @@ describe('Chains Controller (Unit)', () => {
         } as Response,
       );
       networkService.get.mockResolvedValueOnce({
-        data: chainResponse,
+        data: rawify(chainResponse),
         status: 200,
       });
       networkService.get.mockRejectedValueOnce(error);
@@ -607,7 +623,7 @@ describe('Chains Controller (Unit)', () => {
 
     it('Should return validation error', async () => {
       networkService.get.mockResolvedValueOnce({
-        data: chainResponse,
+        data: rawify(chainResponse),
         status: 200,
       });
       const domainSingletonsResponse = [
@@ -615,47 +631,53 @@ describe('Chains Controller (Unit)', () => {
         singletonBuilder().build(),
       ];
       networkService.get.mockResolvedValueOnce({
-        data: domainSingletonsResponse,
+        data: rawify(domainSingletonsResponse),
         status: 200,
       });
 
       await request(app.getHttpServer())
         .get('/v1/chains/1/about/master-copies')
-        .expect(500)
-        .expect({
-          statusCode: 500,
-          message: 'Internal server error',
-        });
+        .expect(502)
+        .expect({ statusCode: 502, message: 'Bad gateway' });
     });
   });
 
   describe('GET /:chainId/about/indexing', () => {
     it('Success', async () => {
-      networkService.get.mockResolvedValueOnce({
-        data: chainResponse,
-        status: 200,
-      });
       const indexingStatus = indexingStatusBuilder().build();
-      networkService.get.mockResolvedValueOnce({
-        data: indexingStatus,
-        status: 200,
+      networkService.get.mockImplementation(({ url }) => {
+        if (url === `${safeConfigUrl}/api/v1/chains/${chainResponse.chainId}`) {
+          return Promise.resolve({
+            data: rawify(chainResponse),
+            status: 200,
+          });
+        }
+        if (
+          url === `${chainResponse.transactionService}/api/v1/about/indexing/`
+        ) {
+          return Promise.resolve({
+            data: rawify(indexingStatus),
+            status: 200,
+          });
+        }
+        return Promise.reject(`No matching rule for url: ${url}`);
       });
-      const block: Partial<GetBlockReturnType> = {
-        timestamp: faker.number.bigInt(),
-      };
-      mockGetBlock.mockResolvedValue(block);
 
       await request(app.getHttpServer())
-        .get('/v1/chains/1/about/indexing')
+        .get(`/v1/chains/${chainResponse.chainId}/about/indexing`)
         .expect(200)
         .expect({
-          lastSync: Number(block.timestamp),
+          lastSync:
+            indexingStatus.erc20BlockTimestamp >
+            indexingStatus.masterCopiesBlockTimestamp
+              ? indexingStatus.masterCopiesBlockTimestamp.getTime()
+              : indexingStatus.erc20BlockTimestamp.getTime(),
           synced: indexingStatus.synced,
         });
 
       expect(networkService.get).toHaveBeenCalledTimes(2);
       expect(networkService.get.mock.calls[0][0].url).toBe(
-        `${safeConfigUrl}/api/v1/chains/1`,
+        `${safeConfigUrl}/api/v1/chains/${chainResponse.chainId}`,
       );
       expect(networkService.get.mock.calls[1][0].url).toBe(
         `${chainResponse.transactionService}/api/v1/about/indexing/`,
@@ -663,16 +685,6 @@ describe('Chains Controller (Unit)', () => {
       expect(networkService.get.mock.calls[1][0].networkRequest).toBe(
         undefined,
       );
-      expect(mockGetBlock).toHaveBeenCalledTimes(1);
-      expect(mockGetBlock).toHaveBeenCalledWith({
-        blockNumber: BigInt(
-          // The oldest block number synced
-          Math.min(
-            indexingStatus.erc20BlockNumber,
-            indexingStatus.masterCopiesBlockNumber,
-          ),
-        ),
-      });
     });
 
     it('Failure getting the chain', async () => {
@@ -685,7 +697,7 @@ describe('Chains Controller (Unit)', () => {
       networkService.get.mockRejectedValueOnce(error);
 
       await request(app.getHttpServer())
-        .get('/v1/chains/1/about/indexing')
+        .get(`/v1/chains/${chainResponse.chainId}/about/indexing`)
         .expect(400)
         .expect({
           message: 'An error occurred',
@@ -694,7 +706,7 @@ describe('Chains Controller (Unit)', () => {
 
       expect(networkService.get).toHaveBeenCalledTimes(1);
       expect(networkService.get).toHaveBeenCalledWith({
-        url: `${safeConfigUrl}/api/v1/chains/1`,
+        url: `${safeConfigUrl}/api/v1/chains/${chainResponse.chainId}`,
       });
     });
 
@@ -705,18 +717,23 @@ describe('Chains Controller (Unit)', () => {
           status: 502,
         } as Response,
       );
-      networkService.get.mockResolvedValueOnce({
-        data: chainResponse,
-        status: 200,
+      networkService.get.mockImplementation(({ url }) => {
+        if (url === `${safeConfigUrl}/api/v1/chains/${chainResponse.chainId}`) {
+          return Promise.resolve({
+            data: rawify(chainResponse),
+            status: 200,
+          });
+        }
+        if (
+          url === `${chainResponse.transactionService}/api/v1/about/indexing/`
+        ) {
+          return Promise.reject(error);
+        }
+        return Promise.reject(`No matching rule for url: ${url}`);
       });
-      networkService.get.mockRejectedValueOnce(error);
-      const block: Partial<GetBlockReturnType> = {
-        timestamp: faker.number.bigInt(),
-      };
-      mockGetBlock.mockResolvedValue(block);
 
       await request(app.getHttpServer())
-        .get('/v1/chains/1/about/indexing')
+        .get(`/v1/chains/${chainResponse.chainId}/about/indexing`)
         .expect(502)
         .expect({
           message: 'An error occurred',
@@ -725,7 +742,7 @@ describe('Chains Controller (Unit)', () => {
 
       expect(networkService.get).toHaveBeenCalledTimes(2);
       expect(networkService.get.mock.calls[0][0].url).toBe(
-        `${safeConfigUrl}/api/v1/chains/1`,
+        `${safeConfigUrl}/api/v1/chains/${chainResponse.chainId}`,
       );
       expect(networkService.get.mock.calls[1][0].url).toBe(
         `${chainResponse.transactionService}/api/v1/about/indexing/`,
@@ -733,74 +750,25 @@ describe('Chains Controller (Unit)', () => {
       expect(networkService.get.mock.calls[1][0].networkRequest).toBe(
         undefined,
       );
-    });
-
-    it('Should fail getting the block', async () => {
-      networkService.get.mockResolvedValueOnce({
-        data: chainResponse,
-        status: 200,
-      });
-      const indexingStatus = indexingStatusBuilder().build();
-      networkService.get.mockResolvedValueOnce({
-        data: indexingStatus,
-        status: 200,
-      });
-      mockGetBlock.mockRejectedValue(
-        new HttpRequestError({
-          url: faker.internet.url(),
-        }),
-      );
-
-      await request(app.getHttpServer())
-        .get('/v1/chains/1/about/indexing')
-        .expect(500)
-        .expect({
-          message: 'Internal server error',
-          code: 500,
-        });
-
-      expect(networkService.get).toHaveBeenCalledTimes(2);
-      expect(networkService.get.mock.calls[0][0].url).toBe(
-        `${safeConfigUrl}/api/v1/chains/1`,
-      );
-      expect(networkService.get.mock.calls[1][0].url).toBe(
-        `${chainResponse.transactionService}/api/v1/about/indexing/`,
-      );
-      expect(networkService.get.mock.calls[1][0].networkRequest).toBe(
-        undefined,
-      );
-      expect(mockGetBlock).toHaveBeenCalledTimes(1);
-      expect(mockGetBlock).toHaveBeenCalledWith({
-        blockNumber: BigInt(
-          // The oldest block number synced
-          Math.min(
-            indexingStatus.erc20BlockNumber,
-            indexingStatus.masterCopiesBlockNumber,
-          ),
-        ),
-      });
     });
 
     it('Should return validation error', async () => {
       networkService.get.mockResolvedValueOnce({
-        data: chainResponse,
+        data: rawify(chainResponse),
         status: 200,
       });
       const indexingStatus = {
         invalid: 'indexingStatus',
       };
       networkService.get.mockResolvedValueOnce({
-        data: indexingStatus,
+        data: rawify(indexingStatus),
         status: 200,
       });
 
       await request(app.getHttpServer())
-        .get('/v1/chains/1/about/indexing')
-        .expect(500)
-        .expect({
-          statusCode: 500,
-          message: 'Internal server error',
-        });
+        .get(`/v1/chains/${chainResponse.chainId}/about/indexing`)
+        .expect(502)
+        .expect({ statusCode: 502, message: 'Bad gateway' });
     });
   });
 
@@ -814,7 +782,7 @@ describe('Chains Controller (Unit)', () => {
         buildNumber,
       };
       networkService.get.mockResolvedValueOnce({
-        data: chainDomain,
+        data: rawify(chainDomain),
         status: 200,
       });
 
