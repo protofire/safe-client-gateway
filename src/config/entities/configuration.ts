@@ -315,6 +315,18 @@ export default () => ({
       process.env.FF_HOOK_HTTP_POST_EVENT?.toLowerCase() === 'true',
     improvedAddressPoisoning:
       process.env.FF_IMPROVED_ADDRESS_POISONING?.toLowerCase() === 'true',
+    hashVerification: {
+      api: process.env.FF_HASH_VERIFICATION_API?.toLowerCase() === 'true',
+      proposal:
+        process.env.FF_HASH_VERIFICATION_PROPOSAL?.toLowerCase() === 'true',
+    },
+    signatureVerification: {
+      api: process.env.FF_SIGNATURE_VERIFICATION_API?.toLowerCase() === 'true',
+      proposal:
+        process.env.FF_SIGNATURE_VERIFICATION_PROPOSAL?.toLowerCase() ===
+        'true',
+    },
+    ethSign: process.env.FF_ETH_SIGN?.toLowerCase() === 'true',
   },
   httpClient: {
     // Timeout in milliseconds to be used for the HTTP client.
@@ -501,5 +513,8 @@ export default () => ({
           'assets/targeted-messaging',
       },
     },
+  },
+  users: {
+    maxInvites: 50,
   },
 });
