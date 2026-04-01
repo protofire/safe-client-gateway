@@ -8,7 +8,7 @@ export class JobQueueService implements IJobQueueService {
   constructor(private readonly queue: Queue) {}
 
   public async getJob(jobId: string): Promise<Job | null> {
-    return await this.queue.getJob(jobId);
+    return (await this.queue.getJob(jobId)) ?? null;
   }
 
   public async addJob<T extends JobData>(
