@@ -2,3 +2,5 @@ Dockerfile
 .dockerignore
 node_modules
 dist
+data
+docker-compose.override.yml

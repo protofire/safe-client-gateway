@@ -9,6 +9,7 @@ import {
   Erc20Token,
   Erc721Token,
   NativeToken,
+  Src20Token,
 } from '@/modules/balances/routes/entities/token.entity';
 import {
   ExecutionDetails,
@@ -34,7 +35,7 @@ export class MultisigConfirmationDetails {
   }
 }
 
-@ApiExtraModels(NativeToken, Erc20Token, Erc721Token)
+@ApiExtraModels(NativeToken, Erc20Token, Erc721Token, Src20Token)
 export class MultisigExecutionDetails extends ExecutionDetails {
   @ApiProperty({ enum: [ExecutionDetailsType.Multisig] })
   override type = ExecutionDetailsType.Multisig;
@@ -69,10 +70,11 @@ export class MultisigExecutionDetails extends ExecutionDetails {
       { $ref: getSchemaPath(NativeToken) },
       { $ref: getSchemaPath(Erc20Token) },
       { $ref: getSchemaPath(Erc721Token) },
+      { $ref: getSchemaPath(Src20Token) },
     ],
     nullable: true,
   })
-  gasTokenInfo: NativeToken | Erc20Token | Erc721Token | null;
+  gasTokenInfo: NativeToken | Erc20Token | Erc721Token | Src20Token | null;
   @ApiProperty()
   trusted: boolean;
   @ApiPropertyOptional({ type: AddressInfo, nullable: true })
@@ -94,7 +96,7 @@ export class MultisigExecutionDetails extends ExecutionDetails {
     confirmationsRequired: number,
     confirmations: Array<MultisigConfirmationDetails>,
     rejectors: Array<AddressInfo>,
-    gasTokenInfo: NativeToken | Erc20Token | Erc721Token | null,
+    gasTokenInfo: NativeToken | Erc20Token | Erc721Token | Src20Token | null,
     trusted: boolean,
     proposer: AddressInfo | null,
     proposedByDelegate: AddressInfo | null,

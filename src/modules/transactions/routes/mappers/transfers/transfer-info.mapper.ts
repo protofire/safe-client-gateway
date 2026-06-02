@@ -12,6 +12,7 @@ import {
 import { Erc20Transfer } from '@/modules/transactions/routes/entities/transfers/erc20-transfer.entity';
 import { Erc721Transfer } from '@/modules/transactions/routes/entities/transfers/erc721-transfer.entity';
 import { NativeCoinTransfer } from '@/modules/transactions/routes/entities/transfers/native-coin-transfer.entity';
+import { Src20Transfer } from '@/modules/transactions/routes/entities/transfers/src20-transfer.entity';
 import { getTransferDirection } from '@/modules/transactions/routes/mappers/common/transfer-direction.helper';
 import { Transfer } from '@/modules/transactions/routes/entities/transfers/transfer.entity';
 import { SwapTransferInfoMapper } from '@/modules/transactions/routes/mappers/transfers/swap-transfer-info.mapper';
@@ -128,6 +129,22 @@ export class TransferInfoMapper {
         token?.symbol,
         token?.logoUri,
         token?.trusted,
+      );
+    } else if (domainTransfer.type === 'SRC20_TRANSFER') {
+      const { tokenAddress } = domainTransfer;
+      const token = await this.getToken(chainId, tokenAddress).catch(
+        () => null,
+      );
+      // Only surface metadata from a genuine SRC20 token; ignore a misclassified address.
+      const src20Token = token?.type === 'SRC20' ? token : null;
+      // The amount is encrypted on-chain; Src20Transfer always reports value "0".
+      return new Src20Transfer(
+        tokenAddress,
+        src20Token?.name,
+        src20Token?.symbol,
+        src20Token?.logoUri,
+        src20Token?.decimals,
+        src20Token?.trusted,
       );
     } else if (domainTransfer.type === 'ETHER_TRANSFER') {
       return new NativeCoinTransfer(domainTransfer.value);

@@ -23,6 +23,7 @@ import { CustomTransactionMapper } from '@/modules/transactions/routes/mappers/c
 import { DataDecodedParamHelper } from '@/modules/transactions/routes/mappers/common/data-decoded-param.helper';
 import { Erc20TransferMapper } from '@/modules/transactions/routes/mappers/common/erc20-transfer.mapper';
 import { Erc721TransferMapper } from '@/modules/transactions/routes/mappers/common/erc721-transfer.mapper';
+import { Src20TransferMapper } from '@/modules/transactions/routes/mappers/common/src20-transfer.mapper';
 import { HumanDescriptionMapper } from '@/modules/transactions/routes/mappers/common/human-description.mapper';
 import { NativeCoinTransferMapper } from '@/modules/transactions/routes/mappers/common/native-coin-transfer.mapper';
 import { NativeStakingMapper } from '@/modules/transactions/routes/mappers/common/native-staking.mapper';
@@ -96,6 +97,7 @@ import { BridgeModule } from '@/modules/bridge/bridge.module';
     DataDecodedParamHelper,
     Erc20TransferMapper,
     Erc721TransferMapper,
+    Src20TransferMapper,
     GPv2OrderHelper,
     HumanDescriptionMapper,
     ModuleTransactionDetailsMapper,

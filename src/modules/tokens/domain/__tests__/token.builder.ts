@@ -5,6 +5,7 @@ import type {
   Erc20Token,
   Erc721Token,
   NativeToken,
+  Src20Token,
   Token,
 } from '@/modules/tokens/domain/entities/token.entity';
 import { getAddress } from 'viem';
@@ -43,10 +44,22 @@ export function erc721TokenBuilder(): IBuilder<Erc721Token> {
     .with('trusted', faker.datatype.boolean());
 }
 
+export function src20TokenBuilder(): IBuilder<Src20Token> {
+  return new Builder<Src20Token>()
+    .with('type', 'SRC20')
+    .with('decimals', faker.number.int({ min: 0, max: 18 }))
+    .with('address', getAddress(faker.finance.ethereumAddress()))
+    .with('logoUri', faker.internet.url({ appendSlash: false }))
+    .with('name', faker.word.sample())
+    .with('symbol', faker.finance.currencySymbol())
+    .with('trusted', faker.datatype.boolean());
+}
+
 export function tokenBuilder(): IBuilder<Token> {
   return faker.helpers.arrayElement([
     nativeTokenBuilder,
     erc20TokenBuilder,
     erc721TokenBuilder,
+    src20TokenBuilder,
   ])();
 }

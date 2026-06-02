@@ -25,6 +25,7 @@ import {
   Erc20Token,
   Erc721Token,
   NativeToken,
+  Src20Token,
 } from '@/modules/tokens/domain/entities/token.entity';
 import { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
 import { ITokenRepository } from '@/modules/tokens/domain/token.repository.interface';
@@ -143,7 +144,9 @@ export class TransactionDataMapper {
     chainId: string;
     safeAddress: Address;
     dataDecoded: BaseDataDecoded | null;
-  }): Promise<Record<Address, Erc20Token | Erc721Token | NativeToken>> {
+  }): Promise<
+    Record<Address, Erc20Token | Erc721Token | NativeToken | Src20Token>
+  > {
     if (
       !args.dataDecoded?.parameters ||
       args.dataDecoded.method !== MULTI_SEND_METHOD_NAME
@@ -223,7 +226,7 @@ export class TransactionDataMapper {
   private async _getTokenInfos(args: {
     tokenAddresses: Array<Address>;
     chainId: string;
-  }): Promise<Array<Erc20Token | Erc721Token | NativeToken>> {
+  }): Promise<Array<Erc20Token | Erc721Token | NativeToken | Src20Token>> {
     const tokenAddresses = args.tokenAddresses.slice(
       0,
       this.maxTokenInfoIndexSize,
