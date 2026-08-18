@@ -11,10 +11,18 @@ import {
   Erc20Token,
   Erc721Token,
   NativeToken,
+  Src20Token,
 } from '@/modules/balances/routes/entities/token.entity';
 import type { Address } from 'viem';
 
-@ApiExtraModels(AddressInfo, DataDecoded, Erc20Token, Erc721Token, NativeToken)
+@ApiExtraModels(
+  AddressInfo,
+  DataDecoded,
+  Erc20Token,
+  Erc721Token,
+  NativeToken,
+  Src20Token,
+)
 export class TransactionData {
   @ApiPropertyOptional({ type: String, nullable: true })
   hexData: string | null;
@@ -47,13 +55,14 @@ export class TransactionData {
         { $ref: getSchemaPath(NativeToken) },
         { $ref: getSchemaPath(Erc20Token) },
         { $ref: getSchemaPath(Erc721Token) },
+        { $ref: getSchemaPath(Src20Token) },
       ],
     },
     nullable: true,
   })
   tokenInfoIndex: Record<
     Address,
-    Erc20Token | Erc721Token | NativeToken
+    Erc20Token | Erc721Token | NativeToken | Src20Token
   > | null;
 
   constructor(
@@ -66,7 +75,7 @@ export class TransactionData {
     addressInfoIndex: Record<string, AddressInfo> | null,
     tokenInfoIndex: Record<
       Address,
-      Erc20Token | Erc721Token | NativeToken
+      Erc20Token | Erc721Token | NativeToken | Src20Token
     > | null,
   ) {
     this.hexData = hexData;

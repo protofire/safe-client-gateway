@@ -4,6 +4,7 @@ export enum TransferType {
   NativeCoin = 'NATIVE_COIN',
   Erc20 = 'ERC20',
   Erc721 = 'ERC721',
+  Src20 = 'SRC20',
 }
 
 export abstract class Transfer {

@@ -8,6 +8,7 @@ import { Transfer } from '@/modules/transactions/routes/entities/transfers/trans
 import { Erc20Transfer } from '@/modules/transactions/routes/entities/transfers/erc20-transfer.entity';
 import { Erc721Transfer } from '@/modules/transactions/routes/entities/transfers/erc721-transfer.entity';
 import { NativeCoinTransfer } from '@/modules/transactions/routes/entities/transfers/native-coin-transfer.entity';
+import { Src20Transfer } from '@/modules/transactions/routes/entities/transfers/src20-transfer.entity';
 
 export enum TransferDirection {
   Incoming = 'INCOMING',
@@ -15,7 +16,12 @@ export enum TransferDirection {
   Unknown = 'UNKNOWN',
 }
 
-@ApiExtraModels(Erc20Transfer, Erc721Transfer, NativeCoinTransfer)
+@ApiExtraModels(
+  Erc20Transfer,
+  Erc721Transfer,
+  NativeCoinTransfer,
+  Src20Transfer,
+)
 export class TransferTransactionInfo extends TransactionInfo {
   @ApiProperty({ enum: [TransactionInfoType.Transfer] })
   override type = TransactionInfoType.Transfer;
@@ -30,6 +36,7 @@ export class TransferTransactionInfo extends TransactionInfo {
       { $ref: getSchemaPath(Erc20Transfer) },
       { $ref: getSchemaPath(Erc721Transfer) },
       { $ref: getSchemaPath(NativeCoinTransfer) },
+      { $ref: getSchemaPath(Src20Transfer) },
     ],
   })
   transferInfo: Transfer;

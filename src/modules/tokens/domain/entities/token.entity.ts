@@ -13,6 +13,10 @@ const DEFAULT_ERC20_DECIMALS = 0;
  * @see https://eips.ethereum.org/EIPS/eip-721#backwards-compatibility
  */
 const DEFAULT_ERC721_DECIMALS = 0;
+/**
+ * SRC20 amounts are encrypted, so decimals are not meaningful
+ */
+const DEFAULT_SRC20_DECIMALS = 0;
 
 const BaseTokenSchema = TokenMetadataSchema.extend({
   address: AddressSchema,
@@ -35,10 +39,16 @@ const Erc721TokenSchema = BaseTokenSchema.extend({
   decimals: z.number().catch(DEFAULT_ERC721_DECIMALS),
 });
 
+const Src20TokenSchema = BaseTokenSchema.extend({
+  type: z.literal('SRC20'),
+  decimals: z.number().catch(DEFAULT_SRC20_DECIMALS),
+});
+
 export const TokenSchema = z.discriminatedUnion('type', [
   NativeTokenSchema,
   Erc20TokenSchema,
   Erc721TokenSchema,
+  Src20TokenSchema,
 ]);
 
 export const TokenPageSchema = buildPageSchema(TokenSchema);
@@ -48,5 +58,7 @@ export type NativeToken = z.infer<typeof NativeTokenSchema>;
 export type Erc20Token = z.infer<typeof Erc20TokenSchema>;
 
 export type Erc721Token = z.infer<typeof Erc721TokenSchema>;
+
+export type Src20Token = z.infer<typeof Src20TokenSchema>;
 
 export type Token = z.infer<typeof TokenSchema>;

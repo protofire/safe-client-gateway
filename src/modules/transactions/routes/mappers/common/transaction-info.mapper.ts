@@ -10,6 +10,7 @@ import { CustomTransactionMapper } from '@/modules/transactions/routes/mappers/c
 import { DataDecodedParamHelper } from '@/modules/transactions/routes/mappers/common/data-decoded-param.helper';
 import { Erc20TransferMapper } from '@/modules/transactions/routes/mappers/common/erc20-transfer.mapper';
 import { Erc721TransferMapper } from '@/modules/transactions/routes/mappers/common/erc721-transfer.mapper';
+import { Src20TransferMapper } from '@/modules/transactions/routes/mappers/common/src20-transfer.mapper';
 import { HumanDescriptionMapper } from '@/modules/transactions/routes/mappers/common/human-description.mapper';
 import { NativeCoinTransferMapper } from '@/modules/transactions/routes/mappers/common/native-coin-transfer.mapper';
 import { SettingsChangeMapper } from '@/modules/transactions/routes/mappers/common/settings-change.mapper';
@@ -63,6 +64,13 @@ export class MultisigTransactionInfoMapper {
     this.SAFE_TRANSFER_FROM_METHOD,
   ];
 
+  // Selector for the SRC20 `transfer(address,suint256)` call: the recipient is a plaintext
+  // address, but the amount (`suint256`) is a shielded type the Transaction Service cannot
+  // decode (`dataDecoded` is null). SRC20 outgoing transfers are therefore detected by this
+  // selector + the destination token type instead of via decoded data.
+  // toFunctionSelector('transfer(address,suint256)') === '0xb10c99b5'
+  private readonly SRC20_TRANSFER_SELECTOR = '0xb10c99b5';
+
   constructor(
     @Inject(ITokenRepository) private readonly tokenRepository: TokenRepository,
     @Inject(LoggingService) private readonly loggingService: ILoggingService,
@@ -76,6 +84,7 @@ export class MultisigTransactionInfoMapper {
     private readonly nativeCoinTransferMapper: NativeCoinTransferMapper,
     private readonly erc20TransferMapper: Erc20TransferMapper,
     private readonly erc721TransferMapper: Erc721TransferMapper,
+    private readonly src20TransferMapper: Src20TransferMapper,
     private readonly humanDescriptionMapper: HumanDescriptionMapper,
     private readonly swapOrderMapper: SwapOrderMapper,
     private readonly swapOrderHelper: SwapOrderHelper,
@@ -232,28 +241,60 @@ export class MultisigTransactionInfoMapper {
       );
     }
 
-    if (this.isValidTokenTransfer(transaction.safe, dataDecoded)) {
+    const isTokenTransfer = this.isValidTokenTransfer(
+      transaction.safe,
+      dataDecoded,
+    );
+    // SRC20 confidential transfers use a custom `transfer(address,suint256)` selector the
+    // Transaction Service cannot decode (dataDecoded is null), so they are detected by the
+    // selector rather than the decoded method. Hex is lower-cased first, as the selector
+    // match would otherwise be case-sensitive.
+    const isSrc20Transfer =
+      transaction.data
+        ?.toLowerCase()
+        .startsWith(this.SRC20_TRANSFER_SELECTOR) ?? false;
+
+    if (isTokenTransfer || isSrc20Transfer) {
+      // Resolve the destination token once and dispatch on its type.
       const token = await this.tokenRepository
         .getToken({ chainId, address: transaction.to })
         .catch(() => null);
 
       switch (token?.type) {
         case 'ERC20':
-          return this.erc20TransferMapper.mapErc20Transfer(
-            token,
-            chainId,
-            transaction,
-            humanDescription,
-            dataDecoded,
-          );
+          if (isTokenTransfer) {
+            return this.erc20TransferMapper.mapErc20Transfer(
+              token,
+              chainId,
+              transaction,
+              humanDescription,
+              dataDecoded,
+            );
+          }
+          break;
         case 'ERC721':
-          return this.erc721TransferMapper.mapErc721Transfer(
-            token,
-            chainId,
-            transaction,
-            humanDescription,
-            dataDecoded,
-          );
+          if (isTokenTransfer) {
+            return this.erc721TransferMapper.mapErc721Transfer(
+              token,
+              chainId,
+              transaction,
+              humanDescription,
+              dataDecoded,
+            );
+          }
+          break;
+        case 'SRC20':
+          // Only the custom SRC20 selector yields an SRC20 transfer; a decoded ERC-style
+          // transfer on an SRC20 token falls through to the custom mapper.
+          if (isSrc20Transfer) {
+            return this.src20TransferMapper.mapSrc20Transfer(
+              token,
+              chainId,
+              transaction,
+              humanDescription,
+            );
+          }
+          break;
       }
     }
 

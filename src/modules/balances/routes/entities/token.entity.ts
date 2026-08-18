@@ -3,6 +3,7 @@ import {
   NativeToken as DomainNativeToken,
   Erc20Token as DomainErc20Token,
   Erc721Token as DomainErc721Token,
+  Src20Token as DomainSrc20Token,
 } from '@/modules/tokens/domain/entities/token.entity';
 import type { Address } from 'viem';
 
@@ -41,4 +42,12 @@ export class Erc721Token
 {
   @ApiProperty({ enum: ['ERC721'] })
   type!: 'ERC721';
+}
+
+export class Src20Token
+  extends BaseToken
+  implements Omit<DomainSrc20Token, 'trusted'>
+{
+  @ApiProperty({ enum: ['SRC20'] })
+  type!: 'SRC20';
 }
