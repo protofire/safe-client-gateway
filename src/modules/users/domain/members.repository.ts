@@ -103,14 +103,10 @@ export class MembersRepository implements IMembersRepository {
     const space = await this.spacesRepository.findOneOrFail({
       where: { id: args.spaceId },
     });
-    const membersRepository =
-      await this.postgresDatabaseService.getRepository(DbMember);
-    const activeAdmin = await membersRepository.findOne({
-      where: { user: { id: admin.id }, status: 'ACTIVE', role: 'ADMIN' },
+    await this.assertActiveSpaceAdmin({
+      userId: admin.id,
+      spaceId: space.id,
     });
-    if (!activeAdmin) {
-      throw new UnauthorizedException('Signer is not an active admin.');
-    }
 
     const invitedAddresses = args.users.map((user) => user.address);
     const invitedWallets = await this.walletsRepository.find({
@@ -391,6 +387,31 @@ export class MembersRepository implements IMembersRepository {
   ): asserts authPayload is AuthPayload & { signer_address: Address } {
     if (!authPayload.signer_address) {
       throw new UnauthorizedException('Signer address not provided.');
+    }
+  }
+
+  /**
+   * Ensures that the given user holds administrative rights *within the
+   * given space*. Membership is scoped per space, so admin rights in one
+   * space grant no authority in another.
+   */
+  private async assertActiveSpaceAdmin(args: {
+    userId: User['id'];
+    spaceId: Space['id'];
+  }): Promise<void> {
+    const membersRepository =
+      await this.postgresDatabaseService.getRepository(DbMember);
+    const hasAdminRights = await membersRepository.exists({
+      where: {
+        user: { id: args.userId },
+        space: { id: args.spaceId },
+        role: 'ADMIN',
+        status: 'ACTIVE',
+      },
+    });
+
+    if (!hasAdminRights) {
+      throw new UnauthorizedException('Signer is not an active admin.');
     }
   }
 
