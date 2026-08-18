@@ -79,7 +79,7 @@
     "@nestjs/testing": "11.1.12",
     "@smithy/util-stream": "4.5.5",
     "@types/amqplib": "0",
-    "@types/cookie-parser": "1.4.8",
+    "@types/cookie-parser": "1.4.10",
     "@types/express": "5.0.6",
     "@types/jest": "29.5.14",
     "@types/jsonwebtoken": "9",
