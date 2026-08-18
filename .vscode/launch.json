@@ -1,0 +1,77 @@
+{
+  // Use IntelliSense to learn about possible attributes.
+  // Hover to view descriptions of existing attributes.
+  // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Launch Program",
+      "skipFiles": ["<node_internals>/**"],
+      "program": "${workspaceFolder}/src/main.ts",
+      "outFiles": ["${workspaceFolder}/dist/**/*.js"],
+      "console": "integratedTerminal",
+      "outputCapture": "std",
+      "env": {
+        "FF_AUTH": "true",
+        "FF_COUNTERFACTUAL_BALANCES": "true",
+        "FF_DELEGATES_V2": "true",
+        "FF_EMAIL": "true",
+        "FF_ETH_SIGN": "true",
+        "FF_HASH_VERIFICATION_API": "true",
+        "FF_HASH_VERIFICATION_PROPOSAL": "true",
+        "FF_MESSAGE_VERIFICATION": "true",
+        "FF_SIGNATURE_VERIFICATION_API": "true",
+        "FF_SIGNATURE_VERIFICATION_PROPOSAL": "true",
+        "FF_TRUSTED_DELEGATE_CALL": "true",
+        "FF_TRUSTED_FOR_DELEGATE_CALL_CONTRACTS_LIST": "true",
+        "FF_USERS": "true"
+      }
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Debug tests",
+      "skipFiles": ["<node_internals>/**"],
+      "runtimeArgs": [
+        "--inspect-brk",
+        "${workspaceRoot}/node_modules/.bin/jest",
+        "--runInBand",
+        "--coverage",
+        "false"
+      ],
+      "console": "integratedTerminal"
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Debug current test file",
+      "skipFiles": ["<node_internals>/**"],
+      "runtimeArgs": [
+        "--inspect-brk",
+        "${workspaceRoot}/node_modules/.bin/jest",
+        "--runInBand",
+        "--coverage",
+        "false",
+        "${relativeFile}"
+      ],
+      "console": "integratedTerminal"
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Debug current E2E test file",
+      "skipFiles": ["<node_internals>/**"],
+      "runtimeArgs": [
+        "--inspect-brk",
+        "${workspaceRoot}/node_modules/.bin/jest",
+        "--runInBand",
+        "--config=test/jest-e2e.json",
+        "false",
+        "${relativeFile}"
+      ],
+      "console": "integratedTerminal"
+    }
+  ]
+}

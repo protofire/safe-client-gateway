@@ -1,0 +1,392 @@
+import { ThreatStatus } from '@/modules/safe-shield/entities/threat-status.entity';
+import {
+  RecipientAnalysisResponseSchema,
+  ContractAnalysisResponseSchema,
+  CounterpartyAnalysisResponseSchema,
+  ThreatAnalysisResponseSchema,
+} from '../analysis-responses.entity';
+import {
+  recipientAnalysisResponseBuilder,
+  contractAnalysisResponseBuilder,
+  counterpartyAnalysisResponseBuilder,
+  threatAnalysisResponseBuilder,
+} from './builders/analysis-responses.builder';
+import {
+  contractAnalysisResultBuilder,
+  recipientAnalysisResultBuilder,
+  threatAnalysisResultBuilder,
+} from './builders/analysis-result.builder';
+import { faker } from '@faker-js/faker';
+import {
+  ContractStatusGroup,
+  RecipientStatusGroup,
+  ThreatStatusGroup,
+} from '../status-group.entity';
+import { getAddress } from 'viem';
+
+describe('Analysis Response Schemas', () => {
+  describe('Response Schemas', () => {
+    describe('RecipientAnalysisResponseSchema', () => {
+      it('should validate correct recipient analysis response', () => {
+        const validResponse = recipientAnalysisResponseBuilder().build();
+
+        const result = RecipientAnalysisResponseSchema.safeParse(validResponse);
+
+        expect(result.success && result.data).toStrictEqual(validResponse);
+      });
+
+      it('should validate response with multiple addresses', () => {
+        const responseA = recipientAnalysisResponseBuilder().build();
+        const responseB = recipientAnalysisResponseBuilder().build();
+        const multiAddressResponse = { ...responseA, ...responseB };
+
+        const result =
+          RecipientAnalysisResponseSchema.safeParse(multiAddressResponse);
+
+        expect(result.success && result.data).toStrictEqual(
+          multiAddressResponse,
+        );
+      });
+
+      it('should validate empty response', () => {
+        const result = RecipientAnalysisResponseSchema.safeParse({});
+
+        expect(result.success && result.data).toStrictEqual({});
+      });
+
+      it('should validate response with empty status groups', () => {
+        const responseWithEmptyGroups = recipientAnalysisResponseBuilder(false)
+          .with(getAddress(faker.finance.ethereumAddress()), {
+            isSafe: true,
+            [RecipientStatusGroup.RECIPIENT_INTERACTION]: [],
+          })
+          .build();
+
+        const result = RecipientAnalysisResponseSchema.safeParse(
+          responseWithEmptyGroups,
+        );
+
+        expect(result.success && result.data).toStrictEqual(
+          responseWithEmptyGroups,
+        );
+      });
+
+      it('should reject invalid address format', () => {
+        const invalidAddressResponse = {
+          'invalid-address': { isSafe: true },
+        };
+
+        const result = RecipientAnalysisResponseSchema.safeParse(
+          invalidAddressResponse,
+        );
+
+        expect(!result.success && result.error.issues).toStrictEqual([
+          {
+            code: 'invalid_key',
+            issues: [
+              {
+                code: 'custom',
+                message: 'Invalid address',
+                path: [],
+              },
+            ],
+            message: 'Invalid key in record',
+            origin: 'record',
+            path: ['invalid-address'],
+          },
+        ]);
+      });
+
+      it('should reject invalid status group', () => {
+        const invalidStatusGroupResponse = recipientAnalysisResponseBuilder(
+          false,
+        )
+          .with(getAddress(faker.finance.ethereumAddress()), {
+            isSafe: true,
+            ['INVALID_STATUS_GROUP' as RecipientStatusGroup]: [
+              recipientAnalysisResultBuilder().build(),
+            ],
+          })
+          .build();
+
+        const result = RecipientAnalysisResponseSchema.safeParse(
+          invalidStatusGroupResponse,
+        );
+
+        expect(!result.success && result.error.issues.length).toBeGreaterThan(
+          0,
+        );
+        expect(result?.error?.issues[0].code).toBe('unrecognized_keys');
+      });
+    });
+
+    describe('ContractAnalysisResponseSchema', () => {
+      it('should validate correct contract analysis response', () => {
+        const validResponse = contractAnalysisResponseBuilder().build();
+
+        const result = ContractAnalysisResponseSchema.safeParse(validResponse);
+
+        expect(result.success && result.data).toStrictEqual(validResponse);
+      });
+
+      it('should validate response with multiple addresses', () => {
+        const responseA = contractAnalysisResponseBuilder().build();
+        const responseB = contractAnalysisResponseBuilder().build();
+        const multiAddressResponse = { ...responseA, ...responseB };
+
+        const result =
+          ContractAnalysisResponseSchema.safeParse(multiAddressResponse);
+
+        expect(result.success && result.data).toStrictEqual(
+          multiAddressResponse,
+        );
+      });
+
+      it('should validate empty response', () => {
+        const result = ContractAnalysisResponseSchema.safeParse({});
+
+        expect(result.success && result.data).toStrictEqual({});
+      });
+
+      it('should validate response with empty status groups', () => {
+        const responseWithEmptyGroups = contractAnalysisResponseBuilder(false)
+          .with(getAddress(faker.finance.ethereumAddress()), {
+            logoUrl: faker.image.url(),
+            name: faker.company.name(),
+            [ContractStatusGroup.CONTRACT_VERIFICATION]: [],
+          })
+          .build();
+
+        const result = ContractAnalysisResponseSchema.safeParse(
+          responseWithEmptyGroups,
+        );
+
+        expect(result.success && result.data).toStrictEqual(
+          responseWithEmptyGroups,
+        );
+      });
+
+      it('should reject invalid address format', () => {
+        const invalidAddressResponse = { 'invalid-address': {} };
+
+        const result = ContractAnalysisResponseSchema.safeParse(
+          invalidAddressResponse,
+        );
+
+        expect(!result.success && result.error.issues).toStrictEqual([
+          {
+            code: 'invalid_key',
+            issues: [
+              {
+                code: 'custom',
+                message: 'Invalid address',
+                path: [],
+              },
+            ],
+            message: 'Invalid key in record',
+            origin: 'record',
+            path: ['invalid-address'],
+          },
+        ]);
+      });
+
+      it('should validate response without logoUrl and name', () => {
+        const responseWithoutMetadata = contractAnalysisResponseBuilder(false)
+          .with(getAddress(faker.finance.ethereumAddress()), {
+            [ContractStatusGroup.CONTRACT_VERIFICATION]: [
+              contractAnalysisResultBuilder().build(),
+            ],
+            [ContractStatusGroup.CONTRACT_INTERACTION]: [
+              contractAnalysisResultBuilder().build(),
+            ],
+          })
+          .build();
+
+        const result = ContractAnalysisResponseSchema.safeParse(
+          responseWithoutMetadata,
+        );
+
+        expect(result.success && result.data).toStrictEqual(
+          responseWithoutMetadata,
+        );
+      });
+
+      it('should reject invalid status group', () => {
+        const invalidStatusGroupResponse = contractAnalysisResponseBuilder(
+          false,
+        )
+          .with(getAddress(faker.finance.ethereumAddress()), {
+            logoUrl: faker.image.url(),
+            name: faker.company.name(),
+            ['INVALID_STATUS_GROUP' as ContractStatusGroup]: [
+              contractAnalysisResultBuilder().build(),
+            ],
+          })
+          .build();
+
+        const result = ContractAnalysisResponseSchema.safeParse(
+          invalidStatusGroupResponse,
+        );
+
+        expect(!result.success && result.error.issues.length).toBeGreaterThan(
+          0,
+        );
+        expect(result?.error?.issues[0].code).toBe('unrecognized_keys');
+      });
+    });
+
+    describe('ThreatAnalysisResponseSchema', () => {
+      it('should validate correct threat analysis response', () => {
+        const validThreatResponse = threatAnalysisResponseBuilder().build();
+
+        const result =
+          ThreatAnalysisResponseSchema.safeParse(validThreatResponse);
+
+        expect(result.success && result.data).toStrictEqual(
+          validThreatResponse,
+        );
+      });
+
+      it('should validate all threat status responses', () => {
+        const safeThreats = Object.values(ThreatStatus).map((threat) =>
+          threatAnalysisResponseBuilder(threat).build(),
+        );
+
+        safeThreats.forEach((threat) => {
+          const result = ThreatAnalysisResponseSchema.safeParse(threat);
+
+          expect(result.success && result.data).toStrictEqual(threat);
+        });
+      });
+
+      it('should validate empty THREAT and BALANCE_CHANGE arrays', () => {
+        const emptyResponse = threatAnalysisResponseBuilder()
+          .with(ThreatStatusGroup.THREAT, [])
+          .with(ThreatStatusGroup.BALANCE_CHANGE, [])
+          .build();
+
+        const result = ThreatAnalysisResponseSchema.safeParse(emptyResponse);
+
+        expect(result.success && result.data).toStrictEqual(emptyResponse);
+      });
+
+      it('should validate response with balance changes', () => {
+        const responseWithBalanceChanges = threatAnalysisResponseBuilder()
+          .with(ThreatStatusGroup.BALANCE_CHANGE, [
+            {
+              asset: {
+                type: 'ERC20',
+                symbol: 'USDC',
+                address: getAddress(faker.finance.ethereumAddress()),
+              },
+              in: [{ value: faker.finance.amount() }],
+              out: [],
+            },
+          ])
+          .build();
+
+        const result = ThreatAnalysisResponseSchema.safeParse(
+          responseWithBalanceChanges,
+        );
+
+        expect(result.success && result.data).toStrictEqual(
+          responseWithBalanceChanges,
+        );
+      });
+
+      it('should reject invalid status group', () => {
+        const invalidStatusGroupResponse = {
+          ...threatAnalysisResponseBuilder().build(),
+          INVALID_STATUS_GROUP: [threatAnalysisResultBuilder().build()],
+        };
+
+        const result = ThreatAnalysisResponseSchema.safeParse(
+          invalidStatusGroupResponse,
+        );
+
+        expect(!result.success && result.error.issues.length).toBeGreaterThan(
+          0,
+        );
+        expect(result?.error?.issues[0].code).toBe('unrecognized_keys');
+      });
+    });
+
+    describe('CounterpartyAnalysisResponseSchema', () => {
+      it('should validate counterparty analysis response', () => {
+        const response = counterpartyAnalysisResponseBuilder().build();
+
+        const result = CounterpartyAnalysisResponseSchema.safeParse(response);
+
+        expect(result.success && result.data).toStrictEqual(response);
+      });
+
+      it('should reject invalid recipient analysis structure', () => {
+        const response = {
+          ...counterpartyAnalysisResponseBuilder().build(),
+          recipient: { invalid: {} },
+        } as unknown;
+
+        const result = CounterpartyAnalysisResponseSchema.safeParse(response);
+
+        expect(!result.success && result.error.issues.length).toBeGreaterThan(
+          0,
+        );
+        expect(result?.error?.issues[0].code).toBe('invalid_key');
+      });
+
+      it('should reject invalid contract analysis structure', () => {
+        const response = {
+          ...counterpartyAnalysisResponseBuilder().build(),
+          contract: { invalid: {} },
+        } as unknown;
+
+        const result = CounterpartyAnalysisResponseSchema.safeParse(response);
+        expect(!result.success && result.error?.issues).toStrictEqual([
+          {
+            code: 'invalid_key',
+            issues: [
+              {
+                code: 'custom',
+                message: 'Invalid address',
+                path: [],
+              },
+            ],
+            message: 'Invalid key in record',
+            origin: 'record',
+            path: ['contract', 'invalid'],
+          },
+        ]);
+      });
+    });
+  });
+
+  describe('integration scenarios', () => {
+    it('should handle multi-send transaction analysis', () => {
+      const multiSendResponse = {
+        recipient: recipientAnalysisResponseBuilder().build(),
+        contract: contractAnalysisResponseBuilder().build(),
+        threat: threatAnalysisResponseBuilder().build(),
+      };
+
+      const recipientResult = RecipientAnalysisResponseSchema.safeParse(
+        multiSendResponse.recipient,
+      );
+      const contractResult = ContractAnalysisResponseSchema.safeParse(
+        multiSendResponse.contract,
+      );
+      const threatResult = ThreatAnalysisResponseSchema.safeParse(
+        multiSendResponse.threat,
+      );
+
+      expect(recipientResult.success && recipientResult.data).toStrictEqual(
+        multiSendResponse.recipient,
+      );
+      expect(contractResult.success && contractResult.data).toStrictEqual(
+        multiSendResponse.contract,
+      );
+      expect(threatResult.success && threatResult.data).toStrictEqual(
+        multiSendResponse.threat,
+      );
+    });
+  });
+});

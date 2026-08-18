@@ -1,0 +1,109 @@
+services:
+  redis:
+    image: redis/redis-stack:7.2.0-v10
+    ports:
+      - ${REDIS_PORT-6379}:${REDIS_PORT-6379}
+      - 8001:8001
+
+  db:
+    image: postgres:14.8-alpine
+    volumes:
+      - ./data/db:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-safe-client-gateway}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+
+  db-test:
+    image: postgres:14.8-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_TEST_DB:-test-db}
+      POSTGRES_USER: ${POSTGRES_TEST_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_TEST_PASSWORD:-postgres}
+    ports:
+      - '${POSTGRES_TEST_PORT:-5433}:5432'
+    volumes:
+      - ./db_config/test/server.crt:/var/lib/postgresql/server.crt:ro
+      - ./db_config/test/server.key:/var/lib/postgresql/server.key:ro
+      - ./db_config/test/pg_hba.conf:/etc/pg_hba.conf
+    command: >
+      -c ssl=on
+      -c ssl_cert_file=/var/lib/postgresql/server.crt
+      -c ssl_key_file=/var/lib/postgresql/server.key
+      -c hba_file=/etc/pg_hba.conf
+
+  rabbitmq:
+    image: rabbitmq:management-alpine
+    ports:
+      - '5672:5672'
+      - '15672:15672'
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 15s
+      timeout: 30s
+      retries: 3
+      start_period: 15s
+
+  web:
+    build: .
+    tty: true
+    environment:
+      REDIS_HOST: redis
+      PRICES_PROVIDER_API_KEY: ${PRICES_PROVIDER_API_KEY-example_api_key}
+      APPLICATION_PORT: ${APPLICATION_PORT-3000}
+      AUTH_TOKEN: ${AUTH_TOKEN-example_auth_token}
+      BLOCKLIST_ENCRYPTED_DATA: ${BLOCKLIST_ENCRYPTED_DATA-fake-encrypted-data}
+      BLOCKLIST_SECRET_KEY: ${BLOCKLIST_SECRET_KEY-fake-secret-key}
+      BLOCKLIST_SECRET_SALT: ${BLOCKLIST_SECRET_SALT-fake-secret-salt}
+      EMAIL_API_APPLICATION_CODE: ${EMAIL_API_APPLICATION_CODE-example_application_code}
+      EMAIL_API_FROM_EMAIL: ${EMAIL_API_FROM_EMAIL-changeme@example.com}
+      EMAIL_API_KEY: ${EMAIL_API_KEY-example_api_key}
+      EMAIL_TEMPLATE_UNKNOWN_RECOVERY_TX: ${EMAIL_TEMPLATE_UNKNOWN_RECOVERY_TX-example_template_unknown_recovery_tx}
+      EMAIL_TEMPLATE_RECOVERY_TX: ${EMAIL_TEMPLATE_RECOVERY_TX-example_template_recovery_tx}
+      EMAIL_TEMPLATE_VERIFICATION_CODE: ${EMAIL_TEMPLATE_VERIFICATION_CODE-example_template_verification_code}
+      INFURA_API_KEY: ${INFURA_API_KEY-example_api_key}
+      JWT_ISSUER: ${JWT_ISSUER-example_issuer}
+      JWT_TOKEN: ${JWT_TOKEN-example_token}
+      RELAY_PROVIDER_API_KEY_OPTIMISM: ${RELAY_PROVIDER_API_KEY_OPTIMISM-example_api_key}
+      RELAY_PROVIDER_API_KEY_BSC: ${RELAY_PROVIDER_API_KEY_BSC-example_api_key}
+      RELAY_PROVIDER_API_KEY_GNOSIS_CHAIN: ${RELAY_PROVIDER_API_KEY_GNOSIS_CHAIN-example_api_key}
+      RELAY_PROVIDER_API_KEY_POLYGON: ${RELAY_PROVIDER_API_KEY_POLYGON-example_api_key}
+      RELAY_PROVIDER_API_KEY_POLYGON_ZKEVM: ${RELAY_PROVIDER_API_KEY_POLYGON_ZKEVM-example_api_key}
+      RELAY_PROVIDER_API_KEY_BASE: ${RELAY_PROVIDER_API_KEY_BASE-example_api_key}
+      RELAY_PROVIDER_API_KEY_ARBITRUM_ONE: ${RELAY_PROVIDER_API_KEY_ARBITRUM_ONE-example_api_key}
+      RELAY_PROVIDER_API_KEY_AVALANCHE: ${RELAY_PROVIDER_API_KEY_AVALANCHE-example_api_key}
+      RELAY_PROVIDER_API_KEY_LINEA: ${RELAY_PROVIDER_API_KEY_LINEA-example_api_key}
+      RELAY_PROVIDER_API_KEY_BLAST: ${RELAY_PROVIDER_API_KEY_BLAST-example_api_key}
+      RELAY_PROVIDER_API_KEY_UNICHAIN: ${RELAY_PROVIDER_API_KEY_UNICHAIN-example_api_key}
+      RELAY_PROVIDER_API_KEY_SEPOLIA: ${RELAY_PROVIDER_API_KEY_SEPOLIA-example_api_key}
+    depends_on:
+      - redis
+      - db
+
+  pgadmin:
+    image: dpage/pgadmin4
+    restart: always
+    ports:
+      - '8888:80'
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${POSTGRES_ADMIN_USER:-admin@test.dev}
+      PGADMIN_DEFAULT_PASSWORD: ${POSTGRES_ADMIN_PASS:-admin}
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+
+  nginx:
+    image: nginx:1.25-alpine
+    ports:
+      - ${NGINX_HOST_PORT:-8080}:80
+    volumes:
+      - ./nginx/templates:/etc/nginx/templates
+    environment:
+      NGINX_ENVSUBST_OUTPUT_DIR: /etc/nginx/
+      APPLICATION_PORT: ${APPLICATION_PORT-3000}
+    depends_on:
+      - web
+
+volumes:
+  pgadmin-data:

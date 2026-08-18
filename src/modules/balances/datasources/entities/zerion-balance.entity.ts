@@ -1,0 +1,117 @@
+/**
+ * These interfaces map Zerion responses for the list of wallet's fungible positions.
+ * Reference documentation: https://developers.zerion.io/reference/listwalletpositions
+ */
+
+import { getAddress, isAddress } from 'viem';
+import { z } from 'zod';
+import {
+  PositionTypeSchema,
+  PositionType,
+} from '@/modules/positions/domain/entities/position-type.entity';
+import {
+  NullableNumberSchema,
+  NullableStringSchema,
+} from '@/validation/entities/schemas/nullable.schema';
+import type { ApplicationMetadataSchema } from '@/modules/positions/domain/entities/position.entity';
+import { PositionAttributeSchema } from '@/modules/positions/domain/entities/position.entity';
+
+export type ZerionFungibleInfo = z.infer<typeof ZerionFungibleInfoSchema>;
+
+export type ZerionImplementation = z.infer<typeof ZerionImplementationSchema>;
+
+export type ZerionQuantity = z.infer<typeof ZerionQuantitySchema>;
+
+export type ZerionFlags = z.infer<typeof ZerionFlagsSchema>;
+
+export type ZerionAttributes = z.infer<typeof ZerionAttributesSchema>;
+
+export type ZerionApplicationMetadata = z.infer<
+  typeof ApplicationMetadataSchema
+>;
+
+export type ZerionChanges = z.infer<typeof ZerionBalanceChangeSchema>;
+
+export type ZerionBalance = z.infer<typeof ZerionBalanceSchema>;
+
+export type ZerionBalances = z.infer<typeof ZerionBalancesSchema>;
+
+export const ZerionImplementationSchema = z.object({
+  chain_id: z.string(),
+  // Note: AddressSchema can't be used here because this field can contain non-eth addresses.
+  address: z
+    .string()
+    .nullish()
+    .default(null)
+    .transform((value) =>
+      value !== null && isAddress(value) ? getAddress(value) : value,
+    ),
+  decimals: z.number(),
+});
+
+export const ZerionFungibleInfoSchema = z.object({
+  name: NullableStringSchema,
+  symbol: NullableStringSchema,
+  description: NullableStringSchema,
+  icon: z
+    .object({
+      url: NullableStringSchema,
+    })
+    .nullish()
+    .default(null),
+  flags: z
+    .object({
+      verified: z.boolean(),
+    })
+    .optional(),
+  implementations: z.array(ZerionImplementationSchema),
+});
+
+export const ZerionQuantitySchema = z.object({
+  int: z.string(),
+  decimals: z.number(),
+  float: z.number(),
+  numeric: z.string(),
+});
+
+export const ZerionFlagsSchema = z.object({
+  displayable: z.boolean(),
+  is_trash: z.boolean().optional(),
+});
+
+export const ZerionBalanceChangeSchema = z.object({
+  absolute_1d: z.number(),
+  percent_1d: z.number(),
+});
+
+export const ZerionAttributesSchema = PositionAttributeSchema.extend({
+  quantity: ZerionQuantitySchema,
+  value: NullableNumberSchema,
+  price: NullableNumberSchema,
+  fungible_info: ZerionFungibleInfoSchema,
+  flags: ZerionFlagsSchema,
+  changes: ZerionBalanceChangeSchema.nullish().default(null),
+  position_type: PositionTypeSchema.catch(PositionType.unknown),
+  pool_address: NullableStringSchema,
+  group_id: NullableStringSchema,
+});
+
+export const ZerionBalanceSchema = z.object({
+  type: z.enum(['positions', 'unknown']).catch('unknown'),
+  id: z.string(),
+  attributes: ZerionAttributesSchema,
+  relationships: z
+    .object({
+      chain: z.object({
+        data: z.object({
+          type: z.string(),
+          id: z.string(),
+        }),
+      }),
+    })
+    .optional(),
+});
+
+export const ZerionBalancesSchema = z.object({
+  data: z.array(ZerionBalanceSchema),
+});

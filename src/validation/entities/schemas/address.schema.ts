@@ -1,0 +1,14 @@
+import { z } from 'zod';
+import { getAddress } from 'viem';
+
+export const AddressSchema = z.string().transform((value, ctx) => {
+  try {
+    return getAddress(value);
+  } catch {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Invalid address',
+    });
+    return z.NEVER;
+  }
+});

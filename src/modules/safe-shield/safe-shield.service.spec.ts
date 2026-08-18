@@ -1,0 +1,1574 @@
+import { SafeShieldService } from './safe-shield.service';
+import type { RecipientAnalysisService } from './recipient-analysis/recipient-analysis.service';
+import type { ContractAnalysisService } from './contract-analysis/contract-analysis.service';
+import type { ThreatAnalysisService } from './threat-analysis/threat-analysis.service';
+import type { ILoggingService } from '@/logging/logging.interface';
+import {
+  ReportEvent,
+  type ReportFalseResultRequest,
+} from './entities/dtos/report-false-result.dto';
+import type { DataDecoded } from '@/modules/data-decoder/routes/entities/data-decoded.entity';
+import type { DecodedTransactionData } from '@/modules/safe-shield/entities/transaction-data.entity';
+import type {
+  RecipientAnalysisResponse,
+  SingleRecipientAnalysisResponse,
+  ThreatAnalysisResponse,
+  ContractAnalysisResponse,
+} from './entities/analysis-responses.entity';
+import type { TransactionsService } from '@/modules/transactions/routes/transactions.service';
+import type { TransactionPreview } from '@/modules/transactions/routes/entities/transaction-preview.entity';
+import {
+  TransferTransactionInfo,
+  TransferDirection,
+} from '@/modules/transactions/routes/entities/transfer-transaction-info.entity';
+import { CustomTransactionInfo } from '@/modules/transactions/routes/entities/custom-transaction.entity';
+import { NativeCoinTransfer } from '@/modules/transactions/routes/entities/transfers/native-coin-transfer.entity';
+import { TransactionData } from '@/modules/transactions/routes/entities/transaction-data.entity';
+import { AddressInfo } from '@/routes/common/entities/address-info.entity';
+import { faker } from '@faker-js/faker';
+import { getAddress, type Hex } from 'viem';
+import {
+  recipientAnalysisResponseBuilder,
+  contractAnalysisResponseBuilder,
+  threatAnalysisResponseBuilder,
+} from './entities/__tests__/builders/analysis-responses.builder';
+import { dataDecodedBuilder } from '@/modules/data-decoder/domain/v2/entities/__tests__/data-decoded.builder';
+import {
+  contractAnalysisResultBuilder,
+  recipientAnalysisResultBuilder,
+  maliciousOrModerateThreatBuilder,
+  masterCopyChangeThreatBuilder,
+  threatAnalysisResultBuilder,
+  unofficialFallbackHandlerAnalysisResultBuilder,
+} from '@/modules/safe-shield/entities/__tests__/builders/analysis-result.builder';
+import { Operation } from '@/modules/safe/domain/entities/operation.entity';
+import {
+  COMMON_DESCRIPTION_MAPPING,
+  COMMON_SEVERITY_MAPPING,
+} from './entities/common-status.constants';
+import { threatAnalysisRequestBuilder } from '@/modules/safe-shield/entities/__tests__/builders/analysis-requests.builder';
+import type { IConfigApi } from '@/domain/interfaces/config-api.interface';
+import { FF_RISK_MITIGATION } from '@/modules/safe-shield/threat-analysis/blockaid/blockaid-api.constants';
+import { chainBuilder } from '@/modules/chains/domain/entities/__tests__/chain.builder';
+import { rawify } from '@/validation/entities/raw.entity';
+import { DESCRIPTION_MAPPING } from '@/modules/safe-shield/threat-analysis/threat-analysis.constants';
+import {
+  ContractStatusGroup,
+  RecipientStatusGroup,
+  ThreatStatusGroup,
+} from '@/modules/safe-shield/entities/status-group.entity';
+import { ContractStatus } from '@/modules/safe-shield/entities/contract-status.entity';
+import { RecipientStatus } from '@/modules/safe-shield/entities/recipient-status.entity';
+import { ThreatStatus } from '@/modules/safe-shield/entities/threat-status.entity';
+import { CommonStatus } from '@/modules/safe-shield/entities/analysis-result.entity';
+
+// Utility function for generating Wei values
+const generateRandomWeiAmount = (): bigint =>
+  faker.number.bigInt({
+    min: BigInt('1000000000000000000'),
+    max: BigInt('9999999999999999999'),
+  });
+
+// Helper function to create TransactionPreview mocks
+const createTransactionPreviewMock = ({
+  txInfo,
+  hexData,
+  dataDecoded,
+  to,
+  value = '0',
+  operation = Operation.CALL,
+}: {
+  txInfo: TransferTransactionInfo | CustomTransactionInfo;
+  hexData: Hex;
+  dataDecoded: DataDecoded | null;
+  to: string;
+  value?: string;
+  operation?: Operation;
+}): TransactionPreview => ({
+  txInfo,
+  txData: new TransactionData(
+    hexData,
+    dataDecoded,
+    new AddressInfo(to),
+    value,
+    operation,
+    null,
+    null,
+    null,
+  ),
+});
+
+// Helper function to create TransferTransactionInfo
+const createTransferTransactionInfo = (
+  sender: string,
+  recipient: string,
+  value: string = '0',
+): TransferTransactionInfo =>
+  new TransferTransactionInfo(
+    new AddressInfo(sender),
+    new AddressInfo(recipient),
+    TransferDirection.Outgoing,
+    new NativeCoinTransfer(value),
+    null,
+  );
+
+// Helper function to create CustomTransactionInfo
+const createCustomTransactionInfo = (
+  to: string,
+  dataSize: string,
+  value: string = '0',
+  methodName: string = 'customMethod',
+  description: string = 'Custom transaction',
+): CustomTransactionInfo =>
+  new CustomTransactionInfo(
+    new AddressInfo(to),
+    dataSize,
+    value,
+    methodName,
+    false,
+    description,
+  );
+
+describe('SafeShieldService', () => {
+  const mockRecipientAnalysisService = {
+    analyze: jest.fn(),
+    analyzeRecipient: jest.fn(),
+  } as jest.MockedObjectDeep<RecipientAnalysisService>;
+  const mockContractAnalysisService = {
+    analyze: jest.fn(),
+  } as jest.MockedObjectDeep<ContractAnalysisService>;
+  const mockThreatAnalysisService = {
+    analyze: jest.fn(),
+    failedAnalysisResponse: jest.fn(),
+    reportTransaction: jest.fn(),
+  } as jest.MockedObjectDeep<ThreatAnalysisService>;
+  const mockTransactionsService = {
+    previewTransaction: jest.fn(),
+  } as jest.MockedObjectDeep<TransactionsService>;
+
+  const mockLoggingService = {
+    debug: jest.fn(),
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+  } as jest.MockedObjectDeep<ILoggingService>;
+
+  const mockConfigApi = {
+    getChain: jest.fn(),
+  } as jest.MockedObjectDeep<IConfigApi>;
+
+  const service = new SafeShieldService(
+    mockRecipientAnalysisService,
+    mockContractAnalysisService,
+    mockThreatAnalysisService,
+    mockLoggingService,
+    mockTransactionsService,
+    mockConfigApi,
+  );
+
+  const mockChainId = faker.number.int({ min: 1, max: 999999 }).toString();
+  const mockSafeAddress = getAddress(faker.finance.ethereumAddress());
+  const mockRecipientAddress = getAddress(faker.finance.ethereumAddress());
+  const mockContractAddress = getAddress(faker.finance.ethereumAddress());
+  const mockData = faker.string.hexadecimal({ length: 128 }) as Hex;
+
+  beforeEach(() => {
+    jest.resetAllMocks();
+  });
+
+  const mockRecipientAnalysisResponse: RecipientAnalysisResponse =
+    recipientAnalysisResponseBuilder(false)
+      .with(mockRecipientAddress, {
+        isSafe: true,
+        [RecipientStatusGroup.RECIPIENT_INTERACTION]: [
+          recipientAnalysisResultBuilder().build(),
+        ],
+        [RecipientStatusGroup.RECIPIENT_ACTIVITY]: [
+          recipientAnalysisResultBuilder()
+            .with('type', RecipientStatus.LOW_ACTIVITY)
+            .build(),
+        ],
+        [RecipientStatusGroup.BRIDGE]: [],
+      })
+      .build();
+
+  const mockContractAnalysisResponse: ContractAnalysisResponse =
+    contractAnalysisResponseBuilder(false)
+      .with(mockContractAddress, {
+        [ContractStatusGroup.CONTRACT_VERIFICATION]: [
+          contractAnalysisResultBuilder().build(),
+        ],
+        [ContractStatusGroup.CONTRACT_INTERACTION]: [
+          contractAnalysisResultBuilder()
+            .with('type', ContractStatus.KNOWN_CONTRACT)
+            .build(),
+        ],
+        [ContractStatusGroup.DELEGATECALL]: [],
+        [ContractStatusGroup.FALLBACK_HANDLER]: [],
+      })
+      .build();
+
+  describe('analyzeCounterparty', () => {
+    const mockDataDecoded: DataDecoded = dataDecodedBuilder()
+      .with('method', 'transfer')
+      .with('parameters', [
+        {
+          name: 'to',
+          type: 'address',
+          value: mockRecipientAddress,
+          valueDecoded: null,
+        },
+        {
+          name: 'value',
+          type: 'uint256',
+          value: generateRandomWeiAmount().toString(),
+          valueDecoded: null,
+        },
+      ])
+      .with('accuracy', 'FULL_MATCH')
+      .build();
+
+    it('should analyze counterparty for a simple transaction', async () => {
+      const mockTxInfo = createTransferTransactionInfo(
+        mockSafeAddress,
+        mockRecipientAddress,
+      );
+      const mockTransactionPreview = createTransactionPreviewMock({
+        txInfo: mockTxInfo,
+        hexData: mockData,
+        dataDecoded: mockDataDecoded,
+        to: mockRecipientAddress,
+      });
+
+      const expectedTransactions: Array<DecodedTransactionData> = [
+        {
+          operation: Operation.CALL,
+          to: mockRecipientAddress,
+          value: '0',
+          data: mockData,
+          dataDecoded: mockDataDecoded,
+        },
+      ];
+
+      mockTransactionsService.previewTransaction.mockResolvedValue(
+        mockTransactionPreview,
+      );
+      mockRecipientAnalysisService.analyze.mockResolvedValue(
+        mockRecipientAnalysisResponse,
+      );
+      mockContractAnalysisService.analyze.mockResolvedValue({});
+
+      const result = await service.analyzeCounterparty({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        tx: {
+          to: mockRecipientAddress,
+          data: mockData,
+          value: '0',
+          operation: Operation.CALL,
+        },
+      });
+
+      expect(result.recipient[mockRecipientAddress]).toBeDefined();
+      expect(result.recipient[mockRecipientAddress]?.isSafe).toBe(true);
+      expect(
+        result.recipient[mockRecipientAddress]?.RECIPIENT_INTERACTION,
+      ).toHaveLength(1);
+      expect(
+        result.recipient[mockRecipientAddress]?.RECIPIENT_ACTIVITY,
+      ).toHaveLength(1);
+      expect(
+        result.recipient[mockRecipientAddress]?.RECIPIENT_ACTIVITY?.[0]?.type,
+      ).toBe('LOW_ACTIVITY');
+      expect(result.recipient[mockRecipientAddress]?.BRIDGE).toEqual([]);
+      expect(result.contract).toEqual({});
+
+      expect(mockTransactionsService.previewTransaction).toHaveBeenCalledWith({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        previewTransactionDto: {
+          to: mockRecipientAddress,
+          data: mockData,
+          operation: Operation.CALL,
+          value: '0',
+        },
+      });
+      expect(mockRecipientAnalysisService.analyze).toHaveBeenCalledWith({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        transactions: expectedTransactions,
+        txInfo: mockTxInfo,
+      });
+      expect(mockContractAnalysisService.analyze).toHaveBeenCalledWith({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        transactions: expectedTransactions,
+      });
+    });
+
+    it('should decode multiSend transaction into 2 separate transactions for analysis', async () => {
+      const multiSendData: Hex =
+        `0x8d80ff0a${faker.string.hexadecimal({ length: 256, casing: 'lower', prefix: '' })}` as Hex;
+
+      const multiSendDataDecoded: DataDecoded = dataDecodedBuilder()
+        .with('method', 'multiSend')
+        .with('parameters', [
+          {
+            name: 'transactions',
+            type: 'bytes',
+            value: multiSendData,
+            valueDecoded: [
+              {
+                operation: 0,
+                to: mockRecipientAddress,
+                value: generateRandomWeiAmount().toString(),
+                data: mockData,
+                dataDecoded: dataDecodedBuilder()
+                  .with('method', 'transfer')
+                  .build(),
+              },
+              {
+                operation: 0,
+                to: mockContractAddress,
+                value: '0',
+                data: mockData,
+                dataDecoded: dataDecodedBuilder()
+                  .with('method', 'approve')
+                  .build(),
+              },
+            ],
+          },
+        ])
+        .with('accuracy', 'FULL_MATCH')
+        .build();
+
+      const mockTxInfo = createCustomTransactionInfo(
+        mockRecipientAddress,
+        multiSendData.length.toString(),
+        '0',
+        'multiSend',
+        'MultiSend transaction',
+      );
+      const mockTransactionPreview = createTransactionPreviewMock({
+        txInfo: mockTxInfo,
+        hexData: multiSendData,
+        dataDecoded: multiSendDataDecoded,
+        to: mockRecipientAddress,
+      });
+
+      mockTransactionsService.previewTransaction.mockResolvedValue(
+        mockTransactionPreview,
+      );
+      mockRecipientAnalysisService.analyze.mockResolvedValue(
+        mockRecipientAnalysisResponse,
+      );
+      mockContractAnalysisService.analyze.mockResolvedValue(
+        mockContractAnalysisResponse,
+      );
+
+      const result = await service.analyzeCounterparty({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        tx: {
+          to: mockRecipientAddress,
+          data: multiSendData,
+          value: '0',
+          operation: Operation.CALL,
+        },
+      });
+
+      expect(result.recipient[mockRecipientAddress]).toBeDefined();
+      expect(result.recipient[mockRecipientAddress]?.isSafe).toBe(true);
+      expect(
+        result.recipient[mockRecipientAddress]?.RECIPIENT_INTERACTION,
+      ).toHaveLength(1);
+      expect(
+        result.recipient[mockRecipientAddress]?.RECIPIENT_ACTIVITY,
+      ).toHaveLength(1);
+
+      expect(result.contract[mockContractAddress]).toBeDefined();
+      expect(
+        result.contract[mockContractAddress]?.CONTRACT_VERIFICATION,
+      ).toHaveLength(1);
+      expect(
+        result.contract[mockContractAddress]?.CONTRACT_INTERACTION,
+      ).toHaveLength(1);
+      expect(
+        result.contract[mockContractAddress]?.CONTRACT_INTERACTION?.[0]?.type,
+      ).toBe('KNOWN_CONTRACT');
+      expect(result.contract[mockContractAddress]?.DELEGATECALL).toEqual([]);
+      expect(result.contract[mockContractAddress]?.FALLBACK_HANDLER).toEqual(
+        [],
+      );
+
+      // Verify that both services receive the 2 decoded inner transactions
+      expect(mockRecipientAnalysisService.analyze).toHaveBeenCalledWith({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        transactions: [
+          expect.objectContaining({
+            to: mockRecipientAddress,
+            data: mockData,
+            operation: 0,
+            dataDecoded: expect.objectContaining({ method: 'transfer' }),
+          }),
+          expect.objectContaining({
+            to: mockContractAddress,
+            value: '0',
+            data: mockData,
+            operation: 0,
+            dataDecoded: expect.objectContaining({ method: 'approve' }),
+          }),
+        ],
+        txInfo: mockTxInfo,
+      });
+
+      expect(mockContractAnalysisService.analyze).toHaveBeenCalledWith({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        transactions: [
+          expect.objectContaining({
+            to: mockRecipientAddress,
+            data: mockData,
+            operation: 0,
+            dataDecoded: expect.objectContaining({ method: 'transfer' }),
+          }),
+          expect.objectContaining({
+            to: mockContractAddress,
+            value: '0',
+            data: mockData,
+            operation: 0,
+            dataDecoded: expect.objectContaining({ method: 'approve' }),
+          }),
+        ],
+      });
+    });
+
+    it('should handle transaction preview failure gracefully', async () => {
+      const testData: Hex = faker.string.hexadecimal({ length: 128 }) as Hex;
+
+      mockTransactionsService.previewTransaction.mockRejectedValue(
+        new Error('Failed to decode transaction'),
+      );
+
+      const result = await service.analyzeCounterparty({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        tx: {
+          to: mockRecipientAddress,
+          data: testData,
+          value: '0',
+          operation: Operation.CALL,
+        },
+      });
+
+      expect(result).toEqual({
+        recipient: {},
+        contract: {},
+      });
+      expect(mockLoggingService.warn).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to decode transaction'),
+      );
+      expect(mockRecipientAnalysisService.analyze).not.toHaveBeenCalled();
+      expect(mockContractAnalysisService.analyze).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      {
+        description: 'empty data (0x)',
+        data: '0x' as Hex,
+        dataDecoded: null,
+        expectedDataDecoded: null,
+      },
+      {
+        description: 'valid transaction data',
+        data: faker.string.hexadecimal({ length: 128 }) as Hex,
+        dataDecoded: dataDecodedBuilder().with('method', 'transfer').build(),
+        expectedDataDecoded: expect.objectContaining({ method: 'transfer' }),
+      },
+    ])(
+      'should handle transaction with $description',
+      async ({ data, dataDecoded, expectedDataDecoded }) => {
+        const mockTxInfo = createTransferTransactionInfo(
+          mockSafeAddress,
+          mockRecipientAddress,
+        );
+        const mockTransactionPreview = createTransactionPreviewMock({
+          txInfo: mockTxInfo,
+          hexData: data,
+          dataDecoded,
+          to: mockRecipientAddress,
+        });
+
+        mockTransactionsService.previewTransaction.mockResolvedValue(
+          mockTransactionPreview,
+        );
+        mockRecipientAnalysisService.analyze.mockResolvedValue(
+          mockRecipientAnalysisResponse,
+        );
+        mockContractAnalysisService.analyze.mockResolvedValue({});
+
+        const result = await service.analyzeCounterparty({
+          chainId: mockChainId,
+          safeAddress: mockSafeAddress,
+          tx: {
+            to: mockRecipientAddress,
+            data,
+            value: '0',
+            operation: Operation.CALL,
+          },
+        });
+
+        expect(result.contract).toEqual({});
+        expect(result.recipient[mockRecipientAddress]).toBeDefined();
+        expect(result.recipient[mockRecipientAddress]?.isSafe).toBe(true);
+        expect(
+          result.recipient[mockRecipientAddress]?.RECIPIENT_INTERACTION,
+        ).toHaveLength(1);
+
+        expect(mockRecipientAnalysisService.analyze).toHaveBeenCalledWith({
+          chainId: mockChainId,
+          safeAddress: mockSafeAddress,
+          transactions: [
+            expect.objectContaining({
+              to: mockRecipientAddress,
+              data,
+              dataDecoded: expectedDataDecoded,
+            }),
+          ],
+          txInfo: mockTxInfo,
+        });
+        expect(mockContractAnalysisService.analyze).toHaveBeenCalledWith({
+          chainId: mockChainId,
+          safeAddress: mockSafeAddress,
+          transactions: [
+            expect.objectContaining({
+              to: mockRecipientAddress,
+              data,
+              dataDecoded: expectedDataDecoded,
+            }),
+          ],
+        });
+      },
+    );
+
+    it('should handle recipient analysis service failure', async () => {
+      const error = new Error('Recipient analysis failed');
+
+      const mockTxInfo = createTransferTransactionInfo(
+        mockSafeAddress,
+        mockRecipientAddress,
+      );
+      const mockTransactionPreview = createTransactionPreviewMock({
+        txInfo: mockTxInfo,
+        hexData: mockData,
+        dataDecoded: mockDataDecoded,
+        to: mockRecipientAddress,
+      });
+
+      mockTransactionsService.previewTransaction.mockResolvedValue(
+        mockTransactionPreview,
+      );
+      mockRecipientAnalysisService.analyze.mockRejectedValue(error);
+      mockContractAnalysisService.analyze.mockResolvedValue(
+        mockContractAnalysisResponse,
+      );
+
+      const result = await service.analyzeCounterparty({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        tx: {
+          to: mockRecipientAddress,
+          data: mockData,
+          value: '0',
+          operation: Operation.CALL,
+        },
+      });
+
+      expect(result.recipient).toEqual({
+        [mockRecipientAddress]: {
+          isSafe: false,
+          RECIPIENT_INTERACTION: [
+            {
+              type: 'FAILED',
+              severity: COMMON_SEVERITY_MAPPING.FAILED,
+              title: 'Recipient analysis failed',
+              description: COMMON_DESCRIPTION_MAPPING.FAILED({
+                error: 'Recipient analysis failed',
+              }),
+            },
+          ],
+        },
+      });
+      expect(result.contract[mockContractAddress]).toBeDefined();
+      expect(mockLoggingService.warn).toHaveBeenCalledWith(
+        'The counterparty analysis failed. Error: Recipient analysis failed',
+      );
+      expect(mockRecipientAnalysisService.analyze).toHaveBeenCalledWith({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        transactions: expect.arrayContaining([
+          expect.objectContaining({
+            to: mockRecipientAddress,
+            data: mockData,
+          }),
+        ]),
+        txInfo: mockTxInfo,
+      });
+      expect(mockContractAnalysisService.analyze).toHaveBeenCalledWith({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        transactions: expect.arrayContaining([
+          expect.objectContaining({
+            to: mockRecipientAddress,
+            data: mockData,
+          }),
+        ]),
+      });
+    });
+
+    it('should handle contract analysis service failure', async () => {
+      const error = new Error('Contract analysis failed');
+
+      const mockTxInfo = createTransferTransactionInfo(
+        mockSafeAddress,
+        mockRecipientAddress,
+      );
+      const mockTransactionPreview = createTransactionPreviewMock({
+        txInfo: mockTxInfo,
+        hexData: mockData,
+        dataDecoded: mockDataDecoded,
+        to: mockRecipientAddress,
+      });
+
+      mockTransactionsService.previewTransaction.mockResolvedValue(
+        mockTransactionPreview,
+      );
+      mockRecipientAnalysisService.analyze.mockResolvedValue(
+        mockRecipientAnalysisResponse,
+      );
+      mockContractAnalysisService.analyze.mockRejectedValue(error);
+
+      const result = await service.analyzeCounterparty({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        tx: {
+          to: mockRecipientAddress,
+          data: mockData,
+          value: '0',
+          operation: Operation.CALL,
+        },
+      });
+
+      expect(result.contract).toEqual({
+        [mockRecipientAddress]: {
+          CONTRACT_VERIFICATION: [
+            {
+              type: 'FAILED',
+              severity: COMMON_SEVERITY_MAPPING.FAILED,
+              title: 'Contract analysis failed',
+              description: COMMON_DESCRIPTION_MAPPING.FAILED({
+                error: 'Contract analysis failed',
+              }),
+            },
+          ],
+        },
+      });
+
+      expect(result.recipient[mockRecipientAddress]).toBeDefined();
+      expect(mockLoggingService.warn).toHaveBeenCalledWith(
+        'The counterparty analysis failed. Error: Contract analysis failed',
+      );
+
+      expect(mockRecipientAnalysisService.analyze).toHaveBeenCalledWith({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        transactions: [
+          expect.objectContaining({
+            to: mockRecipientAddress,
+            data: mockData,
+          }),
+        ],
+        txInfo: mockTxInfo,
+      });
+      expect(mockContractAnalysisService.analyze).toHaveBeenCalledWith({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        transactions: [
+          expect.objectContaining({
+            to: mockRecipientAddress,
+            data: mockData,
+          }),
+        ],
+      });
+    });
+
+    it('should handle both analysis services failing simultaneously', async () => {
+      const recipientError = new Error('Recipient analysis failed');
+      const contractError = new Error('Contract analysis failed');
+
+      const mockTxInfo = createTransferTransactionInfo(
+        mockSafeAddress,
+        mockRecipientAddress,
+      );
+      const mockTransactionPreview = createTransactionPreviewMock({
+        txInfo: mockTxInfo,
+        hexData: mockData,
+        dataDecoded: mockDataDecoded,
+        to: mockRecipientAddress,
+      });
+
+      mockTransactionsService.previewTransaction.mockResolvedValue(
+        mockTransactionPreview,
+      );
+      mockRecipientAnalysisService.analyze.mockRejectedValue(recipientError);
+      mockContractAnalysisService.analyze.mockRejectedValue(contractError);
+
+      const result = await service.analyzeCounterparty({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        tx: {
+          to: mockRecipientAddress,
+          data: mockData,
+          value: '0',
+          operation: Operation.CALL,
+        },
+      });
+
+      expect(result.recipient).toEqual({
+        [mockRecipientAddress]: {
+          isSafe: false,
+          RECIPIENT_INTERACTION: [
+            {
+              type: 'FAILED',
+              severity: COMMON_SEVERITY_MAPPING.FAILED,
+              title: 'Recipient analysis failed',
+              description: COMMON_DESCRIPTION_MAPPING.FAILED({
+                error: 'Recipient analysis failed',
+              }),
+            },
+          ],
+        },
+      });
+      expect(result.contract).toEqual({
+        [mockRecipientAddress]: {
+          CONTRACT_VERIFICATION: [
+            {
+              type: 'FAILED',
+              severity: COMMON_SEVERITY_MAPPING.FAILED,
+              title: 'Contract analysis failed',
+              description: COMMON_DESCRIPTION_MAPPING.FAILED({
+                error: 'Contract analysis failed',
+              }),
+            },
+          ],
+        },
+      });
+
+      expect(mockLoggingService.warn).toHaveBeenNthCalledWith(
+        1,
+        'The counterparty analysis failed. Error: Recipient analysis failed',
+      );
+      expect(mockLoggingService.warn).toHaveBeenNthCalledWith(
+        2,
+        'The counterparty analysis failed. Error: Contract analysis failed',
+      );
+      expect(mockLoggingService.warn).toHaveBeenCalledTimes(2);
+
+      expect(mockRecipientAnalysisService.analyze).toHaveBeenCalledWith({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        transactions: [
+          expect.objectContaining({
+            to: mockRecipientAddress,
+            data: mockData,
+          }),
+        ],
+        txInfo: mockTxInfo,
+      });
+      expect(mockContractAnalysisService.analyze).toHaveBeenCalledWith({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        transactions: [
+          expect.objectContaining({
+            to: mockRecipientAddress,
+            data: mockData,
+          }),
+        ],
+      });
+    });
+
+    it.each([
+      {
+        description: 'custom value and DELEGATE operation',
+        value: generateRandomWeiAmount(),
+        operation: Operation.DELEGATE,
+      },
+      {
+        description: 'zero value and CALL operation',
+        value: BigInt(0),
+        operation: Operation.CALL,
+      },
+      {
+        description: 'large value and CALL operation',
+        value: BigInt('999999999999999999999'),
+        operation: Operation.CALL,
+      },
+    ])(
+      'should handle transaction with $description',
+      async ({ value, operation }) => {
+        const mockTxInfo = createCustomTransactionInfo(
+          mockRecipientAddress,
+          mockData.length.toString(),
+          value.toString(),
+        );
+        const mockTransactionPreview = createTransactionPreviewMock({
+          txInfo: mockTxInfo,
+          hexData: mockData,
+          dataDecoded: mockDataDecoded,
+          to: mockRecipientAddress,
+          value: value.toString(),
+          operation,
+        });
+
+        mockTransactionsService.previewTransaction.mockResolvedValue(
+          mockTransactionPreview,
+        );
+        mockRecipientAnalysisService.analyze.mockResolvedValue(
+          mockRecipientAnalysisResponse,
+        );
+        mockContractAnalysisService.analyze.mockResolvedValue(
+          mockContractAnalysisResponse,
+        );
+
+        const result = await service.analyzeCounterparty({
+          chainId: mockChainId,
+          safeAddress: mockSafeAddress,
+          tx: {
+            to: mockRecipientAddress,
+            data: mockData,
+            value: value.toString(),
+            operation,
+          },
+        });
+
+        expect(result.recipient[mockRecipientAddress]).toBeDefined();
+        expect(result.recipient[mockRecipientAddress]?.isSafe).toBe(true);
+        expect(
+          result.recipient[mockRecipientAddress]?.RECIPIENT_INTERACTION,
+        ).toHaveLength(1);
+
+        expect(result.contract[mockContractAddress]).toBeDefined();
+        expect(
+          result.contract[mockContractAddress]?.CONTRACT_VERIFICATION,
+        ).toHaveLength(1);
+        expect(
+          result.contract[mockContractAddress]?.CONTRACT_INTERACTION,
+        ).toHaveLength(1);
+        expect(
+          result.contract[mockContractAddress]?.CONTRACT_INTERACTION?.[0]?.type,
+        ).toBe('KNOWN_CONTRACT');
+
+        expect(mockTransactionsService.previewTransaction).toHaveBeenCalledWith(
+          {
+            chainId: mockChainId,
+            safeAddress: mockSafeAddress,
+            previewTransactionDto: {
+              to: mockRecipientAddress,
+              data: mockData,
+              value: value.toString(),
+              operation,
+            },
+          },
+        );
+        expect(mockRecipientAnalysisService.analyze).toHaveBeenCalledWith({
+          chainId: mockChainId,
+          safeAddress: mockSafeAddress,
+          transactions: expect.arrayContaining([
+            expect.objectContaining({
+              to: mockRecipientAddress,
+              data: mockData,
+              dataDecoded: mockDataDecoded,
+              operation,
+            }),
+          ]),
+          txInfo: mockTxInfo,
+        });
+        expect(mockContractAnalysisService.analyze).toHaveBeenCalledWith({
+          chainId: mockChainId,
+          safeAddress: mockSafeAddress,
+          transactions: expect.arrayContaining([
+            expect.objectContaining({
+              to: mockRecipientAddress,
+              data: mockData,
+              dataDecoded: mockDataDecoded,
+              operation,
+            }),
+          ]),
+        });
+      },
+    );
+
+    it('should return undefined responses when decoded transactions array is empty', async () => {
+      mockTransactionsService.previewTransaction.mockRejectedValue(new Error());
+
+      const result = await service.analyzeCounterparty({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        tx: {
+          to: mockRecipientAddress,
+          data: '0x',
+          value: '0',
+          operation: Operation.CALL,
+        },
+      });
+
+      expect(result).toEqual({
+        recipient: {},
+        contract: {},
+      });
+
+      expect(mockRecipientAnalysisService.analyze).not.toHaveBeenCalled();
+      expect(mockContractAnalysisService.analyze).not.toHaveBeenCalled();
+    });
+
+    it('should include unofficial fallback handler warning in contract analysis', async () => {
+      const unofficialHandlerAddress = getAddress(
+        faker.finance.ethereumAddress(),
+      );
+      const setFallbackHandlerData: Hex = faker.string.hexadecimal({
+        length: 128,
+      }) as Hex;
+
+      const setFallbackHandlerDecoded: DataDecoded = dataDecodedBuilder()
+        .with('method', 'setFallbackHandler')
+        .with('parameters', [
+          {
+            name: 'handler',
+            type: 'address',
+            value: unofficialHandlerAddress,
+            valueDecoded: null,
+          },
+        ])
+        .with('accuracy', 'FULL_MATCH')
+        .build();
+
+      const mockTxInfo = createCustomTransactionInfo(
+        mockSafeAddress,
+        setFallbackHandlerData.length.toString(),
+        '0',
+        'setFallbackHandler',
+      );
+
+      const mockTransactionPreview = createTransactionPreviewMock({
+        txInfo: mockTxInfo,
+        hexData: setFallbackHandlerData,
+        dataDecoded: setFallbackHandlerDecoded,
+        to: mockSafeAddress,
+      });
+
+      const mockContractAnalysisWithFallbackHandler =
+        contractAnalysisResponseBuilder(false)
+          .with(mockSafeAddress, {
+            [ContractStatusGroup.CONTRACT_VERIFICATION]: [
+              contractAnalysisResultBuilder().build(),
+            ],
+            [ContractStatusGroup.CONTRACT_INTERACTION]: [
+              contractAnalysisResultBuilder()
+                .with('type', ContractStatus.KNOWN_CONTRACT)
+                .build(),
+            ],
+            [ContractStatusGroup.FALLBACK_HANDLER]: [
+              unofficialFallbackHandlerAnalysisResultBuilder(
+                unofficialHandlerAddress,
+              ).build(),
+            ],
+          })
+          .build();
+
+      mockTransactionsService.previewTransaction.mockResolvedValue(
+        mockTransactionPreview,
+      );
+      mockRecipientAnalysisService.analyze.mockResolvedValue({});
+      mockContractAnalysisService.analyze.mockResolvedValue(
+        mockContractAnalysisWithFallbackHandler,
+      );
+
+      const result = await service.analyzeCounterparty({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        tx: {
+          to: mockSafeAddress,
+          data: setFallbackHandlerData,
+          value: '0',
+          operation: Operation.CALL,
+        },
+      });
+
+      expect(result.recipient).toEqual({});
+      expect(result.contract[mockSafeAddress]).toBeDefined();
+      expect(result.contract[mockSafeAddress]?.FALLBACK_HANDLER).toHaveLength(
+        1,
+      );
+      expect(result.contract[mockSafeAddress]?.FALLBACK_HANDLER?.[0]).toEqual(
+        expect.objectContaining({
+          type: 'UNOFFICIAL_FALLBACK_HANDLER',
+          severity: 'WARN',
+          fallbackHandler: expect.objectContaining({
+            address: unofficialHandlerAddress,
+          }),
+        }),
+      );
+
+      expect(mockContractAnalysisService.analyze).toHaveBeenCalledWith({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        transactions: [
+          expect.objectContaining({
+            to: mockSafeAddress,
+            data: setFallbackHandlerData,
+            dataDecoded: setFallbackHandlerDecoded,
+          }),
+        ],
+      });
+    });
+  });
+
+  describe('analyzeRecipients', () => {
+    const mockDataDecoded: DataDecoded = dataDecodedBuilder()
+      .with('method', 'transfer')
+      .with('parameters', [
+        {
+          name: 'to',
+          type: 'address',
+          value: mockRecipientAddress,
+          valueDecoded: null,
+        },
+        {
+          name: 'value',
+          type: 'uint256',
+          value: generateRandomWeiAmount().toString(),
+          valueDecoded: null,
+        },
+      ])
+      .with('accuracy', 'FULL_MATCH')
+      .build();
+
+    const mockTxInfo = createTransferTransactionInfo(
+      mockSafeAddress,
+      mockRecipientAddress,
+    );
+
+    const mockTransactions: Array<DecodedTransactionData> = [
+      {
+        operation: Operation.CALL,
+        to: mockRecipientAddress,
+        value: '0',
+        data: '0x',
+        dataDecoded: mockDataDecoded,
+      },
+    ];
+
+    it('should analyze recipients and return analysis response', async () => {
+      mockRecipientAnalysisService.analyze.mockResolvedValue(
+        mockRecipientAnalysisResponse,
+      );
+
+      const result = await service.analyzeRecipients(
+        mockChainId,
+        mockSafeAddress,
+        mockTransactions,
+        mockTxInfo,
+      );
+
+      expect(result[mockRecipientAddress]).toBeDefined();
+      expect(result[mockRecipientAddress]?.isSafe).toBe(true);
+      expect(result[mockRecipientAddress]?.RECIPIENT_INTERACTION).toHaveLength(
+        1,
+      );
+      expect(result[mockRecipientAddress]?.RECIPIENT_ACTIVITY).toHaveLength(1);
+      expect(result[mockRecipientAddress]?.RECIPIENT_ACTIVITY?.[0]?.type).toBe(
+        'LOW_ACTIVITY',
+      );
+      expect(result[mockRecipientAddress]?.BRIDGE).toEqual([]);
+
+      expect(mockRecipientAnalysisService.analyze).toHaveBeenCalledWith({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        transactions: mockTransactions,
+        txInfo: mockTxInfo,
+      });
+    });
+
+    it('should handle recipient analysis service failure', async () => {
+      const error = new Error('Recipient analysis failed');
+      mockRecipientAnalysisService.analyze.mockRejectedValue(error);
+
+      await expect(
+        service.analyzeRecipients(
+          mockChainId,
+          mockSafeAddress,
+          mockTransactions,
+        ),
+      ).rejects.toThrow('Recipient analysis failed');
+
+      expect(mockRecipientAnalysisService.analyze).toHaveBeenCalledWith({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        transactions: mockTransactions,
+        txInfo: undefined,
+      });
+    });
+
+    it('should analyze recipients if transactions array is empty', async () => {
+      mockRecipientAnalysisService.analyze.mockResolvedValue(
+        mockRecipientAnalysisResponse,
+      );
+
+      const result = await service.analyzeRecipients(
+        mockChainId,
+        mockSafeAddress,
+        [],
+        mockTxInfo,
+      );
+
+      expect(result[mockRecipientAddress]).toBeDefined();
+      expect(result[mockRecipientAddress]?.isSafe).toBe(true);
+      expect(result[mockRecipientAddress]?.RECIPIENT_INTERACTION).toHaveLength(
+        1,
+      );
+      expect(result[mockRecipientAddress]?.RECIPIENT_ACTIVITY).toHaveLength(1);
+
+      expect(mockRecipientAnalysisService.analyze).toHaveBeenCalledWith({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        transactions: [],
+        txInfo: mockTxInfo,
+      });
+    });
+
+    it('should analyze recipients if txInfo is undefined', async () => {
+      mockRecipientAnalysisService.analyze.mockResolvedValue(
+        mockRecipientAnalysisResponse,
+      );
+
+      const result = await service.analyzeRecipients(
+        mockChainId,
+        mockSafeAddress,
+        mockTransactions,
+      );
+
+      expect(result[mockRecipientAddress]).toBeDefined();
+      expect(result[mockRecipientAddress]?.isSafe).toBe(true);
+      expect(result[mockRecipientAddress]?.RECIPIENT_INTERACTION).toHaveLength(
+        1,
+      );
+      expect(result[mockRecipientAddress]?.RECIPIENT_ACTIVITY).toHaveLength(1);
+
+      expect(mockRecipientAnalysisService.analyze).toHaveBeenCalledWith({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        transactions: mockTransactions,
+        txInfo: undefined,
+      });
+    });
+
+    it('should return empty response if transactions array is empty and txInfo is undefined', async () => {
+      const result = await service.analyzeRecipients(
+        mockChainId,
+        mockSafeAddress,
+        [],
+      );
+
+      expect(result).toEqual({});
+      expect(mockRecipientAnalysisService.analyze).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('analyzeContracts', () => {
+    const mockDataDecoded: DataDecoded = dataDecodedBuilder()
+      .with('method', 'approve')
+      .with('parameters', [
+        {
+          name: faker.word.sample(),
+          type: 'address',
+          value: faker.finance.ethereumAddress(),
+          valueDecoded: null,
+        },
+        {
+          name: faker.word.sample(),
+          type: 'uint256',
+          value: generateRandomWeiAmount().toString(),
+          valueDecoded: null,
+        },
+      ])
+      .with('accuracy', 'FULL_MATCH')
+      .build();
+
+    const mockTransactions: Array<DecodedTransactionData> = [
+      {
+        operation: Operation.CALL,
+        to: mockContractAddress,
+        value: '0',
+        data: mockData,
+        dataDecoded: mockDataDecoded,
+      },
+    ];
+
+    it('should analyze contracts and return analysis response', async () => {
+      mockContractAnalysisService.analyze.mockResolvedValue(
+        mockContractAnalysisResponse,
+      );
+
+      const result = await service.analyzeContracts(
+        mockChainId,
+        mockSafeAddress,
+        mockTransactions,
+      );
+
+      expect(result[mockContractAddress]).toBeDefined();
+      expect(result[mockContractAddress]?.CONTRACT_VERIFICATION).toHaveLength(
+        1,
+      );
+      expect(result[mockContractAddress]?.CONTRACT_INTERACTION).toHaveLength(1);
+      expect(result[mockContractAddress]?.CONTRACT_INTERACTION?.[0]?.type).toBe(
+        'KNOWN_CONTRACT',
+      );
+      expect(result[mockContractAddress]?.DELEGATECALL).toEqual([]);
+      expect(result[mockContractAddress]?.FALLBACK_HANDLER).toEqual([]);
+
+      expect(mockContractAnalysisService.analyze).toHaveBeenCalledWith({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        transactions: mockTransactions,
+      });
+    });
+
+    it('should handle contract analysis service failure', async () => {
+      const error = new Error('Contract analysis failed');
+      mockContractAnalysisService.analyze.mockRejectedValue(error);
+
+      await expect(
+        service.analyzeContracts(
+          mockChainId,
+          mockSafeAddress,
+          mockTransactions,
+        ),
+      ).rejects.toThrow('Contract analysis failed');
+
+      expect(mockContractAnalysisService.analyze).toHaveBeenCalledWith({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        transactions: mockTransactions,
+      });
+    });
+
+    it('should return empty response if transactions array is empty', async () => {
+      const result = await service.analyzeContracts(
+        mockChainId,
+        mockSafeAddress,
+        [],
+      );
+
+      expect(result).toEqual({});
+      expect(mockContractAnalysisService.analyze).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('analyzeRecipient', () => {
+    it('should analyze a single recipient address', async () => {
+      const mockInteractionResponse = {
+        [RecipientStatusGroup.RECIPIENT_INTERACTION]: [
+          recipientAnalysisResultBuilder().build(),
+        ],
+      } as SingleRecipientAnalysisResponse;
+
+      mockRecipientAnalysisService.analyzeRecipient.mockResolvedValue(
+        mockInteractionResponse,
+      );
+
+      const result = await service.analyzeRecipient(
+        mockChainId,
+        mockSafeAddress,
+        mockRecipientAddress,
+      );
+
+      expect(result).toEqual(mockInteractionResponse);
+      expect(result.RECIPIENT_INTERACTION).toBeDefined();
+      expect(result.RECIPIENT_INTERACTION).toHaveLength(1);
+      expect(
+        mockRecipientAnalysisService.analyzeRecipient,
+      ).toHaveBeenCalledWith(
+        mockChainId,
+        mockSafeAddress,
+        mockRecipientAddress,
+      );
+    });
+
+    it('should handle analyzeRecipient failure', async () => {
+      const error = new Error('Failed to analyze interactions');
+
+      mockRecipientAnalysisService.analyzeRecipient.mockRejectedValue(error);
+
+      await expect(
+        service.analyzeRecipient(
+          mockChainId,
+          mockSafeAddress,
+          mockRecipientAddress,
+        ),
+      ).rejects.toThrow('Failed to analyze interactions');
+
+      expect(
+        mockRecipientAnalysisService.analyzeRecipient,
+      ).toHaveBeenCalledWith(
+        mockChainId,
+        mockSafeAddress,
+        mockRecipientAddress,
+      );
+    });
+  });
+
+  describe('analyzeThreats', () => {
+    const mockThreatRequest = threatAnalysisRequestBuilder()
+      .with('walletAddress', mockRecipientAddress)
+      .build();
+
+    it('should analyze threats when Blockaid is enabled for the chain', async () => {
+      const mockThreatResponse = threatAnalysisResponseBuilder().build();
+      const mockChain = chainBuilder()
+        .with('chainId', mockChainId)
+        .with('features', [FF_RISK_MITIGATION])
+        .build();
+
+      mockConfigApi.getChain.mockResolvedValue(rawify(mockChain));
+      mockThreatAnalysisService.analyze.mockResolvedValue(mockThreatResponse);
+
+      const result = await service.analyzeThreats({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        request: mockThreatRequest,
+      });
+
+      expect(result).toEqual(mockThreatResponse);
+      expect(result.THREAT).toBeDefined();
+      expect(result.BALANCE_CHANGE).toBeDefined();
+      expect(mockConfigApi.getChain).toHaveBeenCalledWith(mockChainId);
+      expect(mockThreatAnalysisService.analyze).toHaveBeenCalledWith({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        request: mockThreatRequest,
+      });
+    });
+
+    it('should return empty response when Blockaid is disabled for the chain', async () => {
+      const mockChain = chainBuilder()
+        .with('chainId', mockChainId)
+        .with('features', ['OTHER_FEATURE'])
+        .build();
+
+      mockConfigApi.getChain.mockResolvedValue(rawify(mockChain));
+
+      const result = await service.analyzeThreats({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        request: mockThreatRequest,
+      });
+
+      expect(result).toEqual({});
+      expect(mockConfigApi.getChain).toHaveBeenCalledWith(mockChainId);
+      expect(mockThreatAnalysisService.analyze).not.toHaveBeenCalled();
+    });
+
+    it('should handle multiple threat results and balance changes', async () => {
+      const mockMultipleThreatsResponse = {
+        [ThreatStatusGroup.THREAT]: [
+          maliciousOrModerateThreatBuilder()
+            .with('type', ThreatStatus.MALICIOUS)
+            .build(),
+          masterCopyChangeThreatBuilder().build(),
+          threatAnalysisResultBuilder().build(),
+        ],
+        [ThreatStatusGroup.BALANCE_CHANGE]: [
+          {
+            asset: {
+              type: 'ERC20' as const,
+              symbol: 'USDC',
+              address: getAddress(faker.finance.ethereumAddress()),
+              logo_url: faker.internet.url(),
+            },
+            in: [{ value: faker.string.numeric(7) }],
+            out: [],
+          },
+        ],
+        request_id: faker.string.uuid(),
+      };
+      const mockChain = chainBuilder()
+        .with('chainId', mockChainId)
+        .with('features', [FF_RISK_MITIGATION])
+        .build();
+
+      mockConfigApi.getChain.mockResolvedValue(rawify(mockChain));
+      mockThreatAnalysisService.analyze.mockResolvedValue(
+        mockMultipleThreatsResponse,
+      );
+
+      const result = await service.analyzeThreats({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        request: mockThreatRequest,
+      });
+
+      expect(result).toEqual(mockMultipleThreatsResponse);
+      expect(result.THREAT).toHaveLength(3);
+      expect(result.THREAT?.[0]?.type).toBe('MALICIOUS');
+      expect(result.BALANCE_CHANGE).toHaveLength(1);
+      expect(result.BALANCE_CHANGE?.[0]?.asset?.type).toBe('ERC20');
+
+      expect(mockConfigApi.getChain).toHaveBeenCalledWith(mockChainId);
+      expect(mockThreatAnalysisService.analyze).toHaveBeenCalledWith({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        request: mockThreatRequest,
+      });
+    });
+
+    it('should handle threat analysis service failure', async () => {
+      const error = new Error('Threat analysis failed');
+      const mockChain = chainBuilder()
+        .with('chainId', mockChainId)
+        .with('features', [FF_RISK_MITIGATION])
+        .build();
+
+      const expectedResult = {
+        [ThreatStatusGroup.THREAT]: [
+          {
+            type: CommonStatus.FAILED,
+            severity: COMMON_SEVERITY_MAPPING.FAILED,
+            title: 'Threat analysis failed',
+            description: DESCRIPTION_MAPPING.FAILED(),
+          },
+        ],
+      } as ThreatAnalysisResponse;
+
+      mockConfigApi.getChain.mockResolvedValue(rawify(mockChain));
+      mockThreatAnalysisService.analyze.mockRejectedValue(error);
+      mockThreatAnalysisService.failedAnalysisResponse.mockReturnValue(
+        expectedResult,
+      );
+
+      const result = await service.analyzeThreats({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        request: mockThreatRequest,
+      });
+
+      expect(result).toEqual(expectedResult);
+      expect(result.THREAT).toHaveLength(1);
+      expect(result.THREAT?.[0]?.type).toBe('FAILED');
+      expect(result.THREAT?.[0]?.severity).toBe(COMMON_SEVERITY_MAPPING.FAILED);
+
+      expect(mockLoggingService.warn).toHaveBeenCalledWith(
+        'The threat analysis failed. Error: Threat analysis failed',
+      );
+      expect(mockConfigApi.getChain).toHaveBeenCalledWith(mockChainId);
+      expect(mockThreatAnalysisService.analyze).toHaveBeenCalledWith({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        request: mockThreatRequest,
+      });
+    });
+
+    it('should handle config API failure gracefully when checking if Blockaid is enabled', async () => {
+      const error = new Error('Failed to fetch chain config');
+      const expectedResult = {
+        [ThreatStatusGroup.THREAT]: [
+          {
+            type: CommonStatus.FAILED,
+            severity: COMMON_SEVERITY_MAPPING.FAILED,
+            title: 'Threat analysis failed',
+            description: DESCRIPTION_MAPPING.FAILED(),
+          },
+        ],
+      } as ThreatAnalysisResponse;
+
+      mockConfigApi.getChain.mockRejectedValue(error);
+      mockThreatAnalysisService.failedAnalysisResponse.mockReturnValue(
+        expectedResult,
+      );
+
+      const result = await service.analyzeThreats({
+        chainId: mockChainId,
+        safeAddress: mockSafeAddress,
+        request: mockThreatRequest,
+      });
+
+      expect(result).toEqual(expectedResult);
+      expect(result.THREAT).toHaveLength(1);
+      expect(result.THREAT?.[0]?.type).toBe('FAILED');
+
+      expect(mockLoggingService.warn).toHaveBeenCalledWith(
+        'The threat analysis failed. Error: Failed to fetch chain config',
+      );
+      expect(mockConfigApi.getChain).toHaveBeenCalledWith(mockChainId);
+      expect(mockThreatAnalysisService.analyze).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('reportFalseResult', () => {
+    const mockReportRequest: ReportFalseResultRequest = {
+      event: ReportEvent.FALSE_POSITIVE,
+      request_id: faker.string.uuid(),
+      details: 'This transaction was incorrectly flagged as malicious',
+    };
+
+    it('should successfully report a false positive using request_id', async () => {
+      mockThreatAnalysisService.reportTransaction.mockResolvedValue(undefined);
+
+      const result = await service.reportFalseResult({
+        request: mockReportRequest,
+      });
+
+      expect(result).toEqual({ success: true });
+      expect(mockThreatAnalysisService.reportTransaction).toHaveBeenCalledWith({
+        event: mockReportRequest.event,
+        details: mockReportRequest.details,
+        requestId: mockReportRequest.request_id,
+      });
+    });
+
+    it('should successfully report a false negative using request_id', async () => {
+      const falseNegativeRequest: ReportFalseResultRequest = {
+        ...mockReportRequest,
+        event: ReportEvent.FALSE_NEGATIVE,
+      };
+
+      mockThreatAnalysisService.reportTransaction.mockResolvedValue(undefined);
+
+      const result = await service.reportFalseResult({
+        request: falseNegativeRequest,
+      });
+
+      expect(result).toEqual({ success: true });
+      expect(mockThreatAnalysisService.reportTransaction).toHaveBeenCalledWith({
+        event: 'FALSE_NEGATIVE',
+        details: falseNegativeRequest.details,
+        requestId: falseNegativeRequest.request_id,
+      });
+    });
+
+    it('should return success: false and log warning when report fails', async () => {
+      mockThreatAnalysisService.reportTransaction.mockRejectedValue(
+        new Error('Blockaid API error'),
+      );
+
+      const result = await service.reportFalseResult({
+        request: mockReportRequest,
+      });
+
+      expect(result).toEqual({ success: false });
+      expect(mockLoggingService.warn).toHaveBeenCalledWith(
+        `Failed to submit report for request_id ${mockReportRequest.request_id}: Blockaid API error`,
+      );
+    });
+  });
+});
