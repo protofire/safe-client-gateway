@@ -285,7 +285,7 @@ export class SafeBalancesApi implements IBalancesApi {
         }
 
         const price = asset?.[lowerCaseFiatCode] ?? null;
-        const fiatBalance = this._getFiatBalance(price, balance);
+        const fiatBalance = this._getFiatBalance(price, balance, args.chain);
         const fiatBalance24hChange =
           asset?.[`${lowerCaseFiatCode}_24h_change`] ?? null;
         return {
@@ -303,10 +303,14 @@ export class SafeBalancesApi implements IBalancesApi {
   private _getFiatBalance(
     price: number | null,
     balance: Balance,
+    chain?: Chain,
   ): number | null {
+    const decimals =
+      balance.token?.decimals ??
+      chain?.nativeCurrency?.decimals ??
+      SafeBalancesApi.DEFAULT_DECIMALS;
     return price !== null
-      ? (price * Number(balance.balance)) /
-          10 ** (balance.token?.decimals ?? SafeBalancesApi.DEFAULT_DECIMALS)
+      ? (price * Number(balance.balance)) / 10 ** decimals
       : null;
   }
 }

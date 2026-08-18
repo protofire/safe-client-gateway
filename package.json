@@ -43,12 +43,12 @@
     "@nestjs/bullmq": "^11.0.3",
     "@nestjs/cache-manager": "3.0.1",
     "@nestjs/common": "11.1.12",
-    "@nestjs/config": "4.0.2",
+    "@nestjs/config": "^4.0.4",
     "@nestjs/core": "11.1.12",
     "@nestjs/platform-express": "11.1.12",
     "@nestjs/schedule": "6.0.0",
     "@nestjs/serve-static": "5.0.4",
-    "@nestjs/swagger": "11.2.0",
+    "@nestjs/swagger": "^11.3.2",
     "@nestjs/typeorm": "11.0.0",
     "@safe-global/safe-deployments": "1.37.51",
     "amqp-connection-manager": "5.0.0",
@@ -74,7 +74,7 @@
   },
   "devDependencies": {
     "@faker-js/faker": "10.2.0",
-    "@nestjs/cli": "11.0.14",
+    "@nestjs/cli": "11.0.17",
     "@nestjs/schematics": "11.0.5",
     "@nestjs/testing": "11.1.12",
     "@smithy/util-stream": "4.5.5",
@@ -84,7 +84,7 @@
     "@types/jest": "29.5.14",
     "@types/jsonwebtoken": "9",
     "@types/lodash": "4.17.18",
-    "@types/node": "24.10.0",
+    "@types/node": "25.3.3",
     "@types/sanitize-html": "2",
     "@types/semver": "7.7.0",
     "@types/supertest": "6.0.3",
@@ -102,6 +102,9 @@
     "tsconfig-paths": "4.2.0",
     "typescript": "5.9.3",
     "typescript-eslint": "8.31.1"
+  },
+  "resolutions": {
+    "@isaacs/brace-expansion": "^5.0.1"
   },
   "jest": {
     "moduleFileExtensions": [

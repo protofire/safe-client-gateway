@@ -13,12 +13,15 @@ import { ADDRESS_LENGTH, HEX_PREFIX_LENGTH } from '@/routes/common/constants';
 import { Cron, CronExpression } from '@nestjs/schedule';
 
 const ETH_SIGN_V_OFFSET = 4;
+const TRON_SIGN_V_OFFSET = 31;
+const TRON_CHAIN_IDS = new Set(['728126428', '2494104990', '3448148188']);
 
 export class SafeSignature {
   public signature: Hex;
   public hash: Hex;
+  private readonly chainId?: string;
 
-  constructor(args: { signature: Hex; hash: Hex }) {
+  constructor(args: { signature: Hex; hash: Hex; chainId?: string }) {
     const signatures = parseSignaturesByType(args.signature);
 
     if (signatures.length !== 1) {
@@ -31,6 +34,7 @@ export class SafeSignature {
 
     this.signature = args.signature;
     this.hash = args.hash;
+    this.chainId = args.chainId;
   }
 
   get r(): Hex {
@@ -73,7 +77,21 @@ export class SafeSignature {
             return getAddress(`0x${this.r.slice(ADDRESS_LENGTH * -1)}`);
           }
           case SignatureType.EthSign: {
-            // To differentiate signature types, eth_sign signatures have v value increased by 4
+            const isTron =
+              this.chainId !== undefined &&
+              TRON_CHAIN_IDS.has(this.chainId);
+
+            if (isTron) {
+              // Tron signatures: signed raw EIP-712 hash with v + 31 offset
+              // Recovery: use raw hash (no Ethereum prefix), subtract TRON_SIGN_V_OFFSET
+              const normalizedSignature: Hex = `${this.r}${this.s.slice(HEX_PREFIX_LENGTH)}${(this.v - TRON_SIGN_V_OFFSET).toString(16).padStart(2, '0')}`;
+              return recoverAddress({
+                hash: this.hash,
+                signature: normalizedSignature,
+              });
+            }
+
+            // Standard EthSign: hash with Ethereum prefix, subtract ETH_SIGN_V_OFFSET
             // @see https://docs.safe.global/advanced/smart-account-signatures#eth_sign-signature
             const normalizedSignature: Hex = `${this.r}${this.s.slice(HEX_PREFIX_LENGTH)}${(this.v - ETH_SIGN_V_OFFSET).toString(16)}`;
             return recoverAddress({
