@@ -477,6 +477,58 @@ describe('MembersController', () => {
         });
     });
 
+    it('should throw a 401 if the signer is an admin of a different space', async () => {
+      const outsiderAuthPayloadDto = authPayloadDtoBuilder().build();
+      const outsiderAccessToken = jwtService.sign(outsiderAuthPayloadDto);
+      const ownerAuthPayloadDto = authPayloadDtoBuilder().build();
+      const ownerAccessToken = jwtService.sign(ownerAuthPayloadDto);
+      const invitee = getAddress(faker.finance.ethereumAddress());
+      const inviteeName = faker.person.firstName();
+
+      await request(app.getHttpServer())
+        .post('/v1/users/wallet')
+        .set('Cookie', [`access_token=${outsiderAccessToken}`])
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post('/v1/users/wallet')
+        .set('Cookie', [`access_token=${ownerAccessToken}`])
+        .expect(201);
+
+      // Both signers are ACTIVE ADMINs, but each of their own space
+      await request(app.getHttpServer())
+        .post('/v1/spaces')
+        .set('Cookie', [`access_token=${outsiderAccessToken}`])
+        .send({ name: nameBuilder() })
+        .expect(201);
+
+      const targetSpaceResponse = await request(app.getHttpServer())
+        .post('/v1/spaces')
+        .set('Cookie', [`access_token=${ownerAccessToken}`])
+        .send({ name: nameBuilder() })
+        .expect(201);
+      const targetSpaceId = targetSpaceResponse.body.id;
+
+      await request(app.getHttpServer())
+        .post(`/v1/spaces/${targetSpaceId}/members/invite`)
+        .set('Cookie', [`access_token=${outsiderAccessToken}`])
+        .send({
+          users: [
+            {
+              role: 'ADMIN',
+              address: invitee,
+              name: inviteeName,
+            },
+          ],
+        })
+        .expect(401)
+        .expect({
+          message: 'Signer is not an active admin.',
+          error: 'Unauthorized',
+          statusCode: 401,
+        });
+    });
+
     it('should throw a 409 if the user is already a member of the space', async () => {
       const adminAuthPayloadDto = authPayloadDtoBuilder().build();
       const adminAccessToken = jwtService.sign(adminAuthPayloadDto);
