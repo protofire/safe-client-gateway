@@ -859,6 +859,72 @@ describe('MembersRepository', () => {
         new UnauthorizedException('Signer is not an active admin.'),
       );
     });
+
+    it('should not allow inviting users if the signer is an ADMIN of another space', async () => {
+      const authPayloadDto = authPayloadDtoBuilder().build();
+      const outsider = await dbUserRepo.insert({
+        status: 'ACTIVE',
+      });
+      await dbWalletRepo.insert({
+        user: outsider.generatedMaps[0],
+        address: authPayloadDto.signer_address,
+      });
+      const ownSpace = await dbSpacesRepository.insert({
+        name: nameBuilder(),
+        status: 'ACTIVE',
+      });
+      const targetSpace = await dbSpacesRepository.insert({
+        name: nameBuilder(),
+        status: 'ACTIVE',
+      });
+      // The signer administrates ownSpace...
+      await dbMembersRepository.insert({
+        user: outsider.generatedMaps[0],
+        space: ownSpace.generatedMaps[0],
+        name: nameBuilder(),
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        invitedBy: getAddress(faker.finance.ethereumAddress()),
+      });
+      // ...whereas targetSpace is administrated by somebody else and the
+      // signer holds no membership in it at all.
+      const targetSpaceAdmin = await dbUserRepo.insert({
+        status: 'ACTIVE',
+      });
+      await dbWalletRepo.insert({
+        user: targetSpaceAdmin.generatedMaps[0],
+        address: getAddress(faker.finance.ethereumAddress()),
+      });
+      await dbMembersRepository.insert({
+        user: targetSpaceAdmin.generatedMaps[0],
+        space: targetSpace.generatedMaps[0],
+        name: nameBuilder(),
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        invitedBy: getAddress(faker.finance.ethereumAddress()),
+      });
+      const users: Array<{
+        address: Address;
+        role: keyof typeof MemberRole;
+        name: string;
+      }> = [
+        {
+          address: getAddress(faker.finance.ethereumAddress()),
+          role: 'ADMIN',
+          name: nameBuilder(),
+        },
+      ];
+
+      await expect(
+        membersRepository.inviteUsers({
+          authPayload: new AuthPayload(authPayloadDto),
+          spaceId: targetSpace.generatedMaps[0].id,
+          users,
+        }),
+      ).rejects.toThrow(
+        new UnauthorizedException('Signer is not an active admin.'),
+      );
+    });
   });
 
   describe('acceptInvite', () => {
