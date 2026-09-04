@@ -422,6 +422,10 @@ export default () => ({
       refundReceivers: parseJsonRecord<string>(
         process.env.RELAY_GAS_TOKEN_REFUND_RECEIVERS,
       ),
+      // JSON: { "<chainId>": <usd price of the native coin> } for chains without a price feed (testnets)
+      nativeUsdPrices: parseJsonRecord<number>(
+        process.env.RELAY_GAS_TOKEN_NATIVE_USD_PRICES,
+      ),
       // JSON: { "<chainId>": [{ "address": "0x…", "decimals": 6, "usdPrice": 1 }] } (usdPrice optional)
       allowlist: parseJsonRecord<
         Array<{ address: string; decimals: number; usdPrice?: number }>
