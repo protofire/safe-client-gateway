@@ -42,6 +42,7 @@ import { TxAuthNetworkModule } from '@/datasources/network/tx-auth.network.modul
     BalancesService,
   ],
   exports: [
+    IPricesApi,
     IBalancesApiManager,
     IBalancesRepository,
     IZerionWalletPortfolioApi,
