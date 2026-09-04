@@ -10,6 +10,8 @@ export type GasTokenAllowlistEntry = {
 export type GasTokenConfiguration = {
   /** Where the Safe's token refund goes, per chain id. */
   refundReceivers: Record<string, Address>;
+  /** Fixed USD price of the native coin per chain id, for chains without a price feed (testnets). */
+  nativeUsdPrices: Record<string, number>;
   /** Tokens a Safe may pay its fee in, per chain id. */
   allowlist: Record<string, Array<GasTokenAllowlistEntry>>;
   /** Margin added on top of the native gas cost when quoting, in basis points. */

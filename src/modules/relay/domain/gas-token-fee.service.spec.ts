@@ -42,6 +42,7 @@ describe('GasTokenFeeService', () => {
   const usdc = getAddress(faker.finance.ethereumAddress());
   const configuration: GasTokenConfiguration = {
     refundReceivers: { [chainId]: refundReceiver },
+    nativeUsdPrices: {},
     allowlist: { [chainId]: [{ address: usdc, decimals: 6, usdPrice: 1 }] },
     marginBps: 2_000,
     minMarginBps: 500,
@@ -132,7 +133,7 @@ describe('GasTokenFeeService', () => {
         relayCost: { fiatCode: 'USD', fiatValue: '8.65' },
         pricingContextSnapshot: {
           phase: 2,
-          priceSource: 'coingecko+fixed-token',
+          priceSource: 'coingecko+fixed',
           priceTimestamp: expect.any(Number),
           gasPriceVolatilityBuffer: 1.2,
         },
@@ -174,6 +175,40 @@ describe('GasTokenFeeService', () => {
 
       // $0.00006 per gas at $0.5 per token = 0.00012 tokens = 1.2e14 wei-units
       expect(result.txData.gasPrice).toBe('120000000000000');
+    });
+
+    it('should use a fixed native price when configured', async () => {
+      const fakeConfigurationService = new FakeConfigurationService();
+      fakeConfigurationService.set('relay.gasToken', {
+        ...configuration,
+        nativeUsdPrices: { [chainId]: 5_000 },
+      });
+      target = new GasTokenFeeService(
+        fakeConfigurationService,
+        mockChainsRepository,
+        mockPricesApi,
+        mockBlockchainApiManager,
+        mockEstimationsRepository,
+      );
+      mockEstimationsRepository.getEstimation.mockResolvedValue({
+        safeTxGas: '0',
+      });
+
+      const result = await target.preview({
+        chainId,
+        safeAddress: getAddress(faker.finance.ethereumAddress()),
+        to: getAddress(faker.finance.ethereumAddress()),
+        value: '0',
+        data: '0x',
+        operation: Operation.CALL,
+        gasToken: usdc,
+        numberSignatures: 1,
+      });
+
+      // twice the market price of ETH → twice the token gas price
+      expect(result.txData.gasPrice).toBe('120');
+      expect(result.pricingContextSnapshot.priceSource).toBe('fixed');
+      expect(mockPricesApi.getNativeCoinPrice).not.toHaveBeenCalled();
     });
 
     it('should refuse a token that is not allowlisted', async () => {

@@ -140,8 +140,10 @@ export class GasTokenFeeService {
       },
       pricingContextSnapshot: {
         phase: GasTokenFeeService.PRICING_PHASE,
-        priceSource:
-          token.usdPrice === undefined ? 'coingecko' : 'coingecko+fixed-token',
+        priceSource: GasTokenFeeService.getPriceSource(
+          this.configuration.nativeUsdPrices[args.chainId] !== undefined,
+          token.usdPrice !== undefined,
+        ),
         priceTimestamp: Math.floor(Date.now() / 1_000),
         gasPriceVolatilityBuffer:
           1 + this.configuration.marginBps / Number(GasTokenFeeService.BPS),
@@ -236,6 +238,16 @@ export class GasTokenFeeService {
     return (Number(micro) / 1_000_000).toString();
   }
 
+  private static getPriceSource(
+    fixedNative: boolean,
+    fixedToken: boolean,
+  ): string {
+    if (fixedNative && fixedToken) {
+      return 'fixed';
+    }
+    return fixedNative || fixedToken ? 'coingecko+fixed' : 'coingecko';
+  }
+
   private static getReason(error: unknown): string {
     if (error instanceof BaseError) {
       return error.shortMessage;
@@ -251,16 +263,12 @@ export class GasTokenFeeService {
       this.chainsRepository.getChain(chainId),
       this.blockchainApiManager.getApi(chainId),
     ]);
-    const [gasPriceWei, nativePrice, tokenUsd] = await Promise.all([
+    const [gasPriceWei, nativeUsd, tokenUsd] = await Promise.all([
       client.getGasPrice(),
-      this.pricesApi.getNativeCoinPrice({
-        chain,
-        fiatCode: GasTokenFeeService.FIAT_CODE,
-      }),
+      this.configuration.nativeUsdPrices[chainId] ??
+        this.getNativeUsdPrice(chain),
       token.usdPrice ?? this.getTokenUsdPrice(chain, token.address),
     ]);
-    const nativeUsd =
-      nativePrice?.[GasTokenFeeService.FIAT_CODE.toLowerCase()] ?? null;
 
     if (nativeUsd === null || tokenUsd === null) {
       throw new GasTokenRelayError(
@@ -273,6 +281,14 @@ export class GasTokenFeeService {
       nativeUsd: GasTokenFeeService.toScaled(nativeUsd),
       tokenUsd: GasTokenFeeService.toScaled(tokenUsd),
     };
+  }
+
+  private async getNativeUsdPrice(chain: Chain): Promise<number | null> {
+    const price = await this.pricesApi.getNativeCoinPrice({
+      chain,
+      fiatCode: GasTokenFeeService.FIAT_CODE,
+    });
+    return price?.[GasTokenFeeService.FIAT_CODE.toLowerCase()] ?? null;
   }
 
   private async getTokenUsdPrice(
