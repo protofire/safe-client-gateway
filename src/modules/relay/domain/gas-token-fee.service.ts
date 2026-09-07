@@ -1,5 +1,18 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { BaseError, isAddressEqual, type Address, type Hex } from 'viem';
+import {
+  BaseError,
+  decodeAbiParameters,
+  encodeFunctionData,
+  hexToBigInt,
+  isAddressEqual,
+  isHex,
+  parseAbi,
+  size,
+  slice,
+  type Address,
+  type Hex,
+} from 'viem';
+import { getSimulateTxAccessorDeployments } from '@/domain/common/utils/deployments';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
 import { IPricesApi } from '@/modules/balances/datasources/prices-api.interface';
@@ -39,6 +52,17 @@ export class GasTokenFeeService {
   /** Any account works: with a non-zero gasToken the Safe pays refundReceiver, not msg.sender. */
   private static readonly SIMULATION_SENDER: Address =
     '0x0000000000000000000000000000000000000001';
+  /** SimulateTxAccessor versions to look for, newest first; any of them works with a Safe ≥ 1.3.0 */
+  private static readonly ACCESSOR_VERSIONS = ['1.4.1', '1.3.0'];
+  /** `simulateAndRevert` measures the inner call once; the real one runs in a different state, so pad it */
+  private static readonly SAFE_TX_GAS_MARGIN_BPS = BigInt(1_000);
+  private static readonly SAFE_TX_GAS_MARGIN_FIXED = BigInt(10_000);
+  private static readonly SAFE_ABI = parseAbi([
+    'function simulateAndRevert(address targetContract, bytes calldataPayload)',
+  ]);
+  private static readonly ACCESSOR_ABI = parseAbi([
+    'function simulate(address to, uint256 value, bytes data, uint8 operation) returns (uint256 estimate, bool success, bytes returnData)',
+  ]);
 
   private readonly configuration: GasTokenConfiguration;
 
@@ -93,19 +117,16 @@ export class GasTokenFeeService {
       );
     }
 
-    const [estimation, market] = await Promise.all([
-      this.estimationsRepository.getEstimation({
-        chainId: args.chainId,
-        address: args.safeAddress,
-        getEstimationDto: new GetEstimationDto(
-          args.to,
-          args.value,
-          args.data,
-          args.operation,
-        ),
-      }),
+    const [innerGas, market] = await Promise.all([
+      this.estimateSafeTxGas(args),
       this.getMarket(args.chainId, token),
     ]);
+    // With gasPrice > 0 the Safe gives the inner call exactly safeTxGas, so it must carry a margin
+    const safeTxGas =
+      innerGas +
+      (innerGas * GasTokenFeeService.SAFE_TX_GAS_MARGIN_BPS) /
+        GasTokenFeeService.BPS +
+      GasTokenFeeService.SAFE_TX_GAS_MARGIN_FIXED;
 
     const baseGas =
       BigInt(this.configuration.baseGas) +
@@ -116,14 +137,13 @@ export class GasTokenFeeService {
       token.decimals,
       this.configuration.marginBps,
     );
-    const nativeCostWei =
-      (BigInt(estimation.safeTxGas) + baseGas) * market.gasPriceWei;
+    const nativeCostWei = (safeTxGas + baseGas) * market.gasPriceWei;
 
     return {
       txData: {
         chainId: args.chainId,
         safeAddress: args.safeAddress,
-        safeTxGas: estimation.safeTxGas,
+        safeTxGas: safeTxGas.toString(),
         baseGas: baseGas.toString(),
         gasPrice: gasPrice.toString(),
         gasToken: token.address,
@@ -149,6 +169,64 @@ export class GasTokenFeeService {
           1 + this.configuration.marginBps / Number(GasTokenFeeService.BPS),
       },
     };
+  }
+
+  /**
+   * Gas the inner call needs, measured on chain through the Safe's `simulateAndRevert` and the
+   * official SimulateTxAccessor (CALL and DELEGATECALL, Safes ≥ 1.3.0). The transaction service's
+   * estimate is not usable here: on L2 networks it answers 0 by design, harmless when the signer
+   * pays but fatal when the Safe pays, because `execute` then gets exactly `safeTxGas` gas.
+   * Falls back to the service when the Safe has no `simulateAndRevert`.
+   * @throws GasTokenRelayError `SIMULATION_FAILED` when the inner call reverts
+   */
+  async estimateSafeTxGas(args: {
+    chainId: string;
+    safeAddress: Address;
+    to: Address;
+    value: string;
+    data: Hex | null;
+    operation: Operation;
+  }): Promise<bigint> {
+    const [accessor] = GasTokenFeeService.ACCESSOR_VERSIONS.flatMap((version) =>
+      getSimulateTxAccessorDeployments({ chainId: args.chainId, version }),
+    );
+    if (!accessor) {
+      return this.getServiceEstimate(args);
+    }
+
+    const client = await this.blockchainApiManager.getApi(args.chainId);
+    const payload = encodeFunctionData({
+      abi: GasTokenFeeService.ACCESSOR_ABI,
+      functionName: 'simulate',
+      args: [args.to, BigInt(args.value), args.data ?? '0x', args.operation],
+    });
+    const data = encodeFunctionData({
+      abi: GasTokenFeeService.SAFE_ABI,
+      functionName: 'simulateAndRevert',
+      args: [accessor, payload],
+    });
+    const revertData = await client
+      .request({
+        method: 'eth_call',
+        params: [{ to: args.safeAddress, data }, 'latest'],
+      })
+      .then(
+        () => null,
+        (error: unknown) => GasTokenFeeService.getRevertData(error),
+      );
+    const simulation = revertData
+      ? GasTokenFeeService.decodeSimulation(revertData)
+      : null;
+    if (!simulation) {
+      return this.getServiceEstimate(args);
+    }
+    if (!simulation.success) {
+      throw new GasTokenRelayError(
+        `Simulation failed: ${GasTokenFeeService.getRevertReason(simulation.returnData)}`,
+        'SIMULATION_FAILED',
+      );
+    }
+    return simulation.estimate;
   }
 
   /**
@@ -246,6 +324,85 @@ export class GasTokenFeeService {
       return 'fixed';
     }
     return fixedNative || fixedToken ? 'coingecko+fixed' : 'coingecko';
+  }
+
+  private async getServiceEstimate(args: {
+    chainId: string;
+    safeAddress: Address;
+    to: Address;
+    value: string;
+    data: Hex | null;
+    operation: Operation;
+  }): Promise<bigint> {
+    const estimation = await this.estimationsRepository.getEstimation({
+      chainId: args.chainId,
+      address: args.safeAddress,
+      getEstimationDto: new GetEstimationDto(
+        args.to,
+        args.value,
+        args.data,
+        args.operation,
+      ),
+    });
+    return BigInt(estimation.safeTxGas);
+  }
+
+  /** Revert payload of a JSON-RPC error, wherever the node or viem put it. */
+  private static getRevertData(error: unknown): Hex | null {
+    let current: unknown = error;
+    for (let depth = 0; depth < 5 && current; depth++) {
+      const { data, cause } = current as { data?: unknown; cause?: unknown };
+      if (isHex(data)) {
+        return data;
+      }
+      const nested = (data as { data?: unknown } | undefined)?.data;
+      if (isHex(nested)) {
+        return nested;
+      }
+      current = cause;
+    }
+    return null;
+  }
+
+  /**
+   * `simulateAndRevert` reverts with `success (32) | responseSize (32) | response`, the response being
+   * the accessor's `(uint256 estimate, bool success, bytes returnData)`. Null when the payload is not that.
+   */
+  private static decodeSimulation(
+    revertData: Hex,
+  ): { estimate: bigint; success: boolean; returnData: Hex } | null {
+    if (size(revertData) < 64) {
+      return null;
+    }
+    const accessorRan = hexToBigInt(slice(revertData, 0, 32)) !== BigInt(0);
+    const responseSize = Number(hexToBigInt(slice(revertData, 32, 64)));
+    if (!accessorRan || size(revertData) < 64 + responseSize) {
+      return null;
+    }
+    try {
+      const [estimate, success, returnData] = decodeAbiParameters(
+        GasTokenFeeService.ACCESSOR_ABI[0].outputs,
+        slice(revertData, 64, 64 + responseSize),
+      );
+      return { estimate, success, returnData };
+    } catch {
+      return null;
+    }
+  }
+
+  private static getRevertReason(returnData: Hex): string {
+    // Error(string)
+    if (returnData.startsWith('0x08c379a0') && size(returnData) >= 68) {
+      try {
+        return decodeAbiParameters(
+          [{ type: 'string' }],
+          slice(returnData, 4),
+        )[0];
+      } catch {
+        // fall through
+      }
+    }
+    return returnData === '0x' ? 'call reverted' : returnData;
   }
 
   private static getReason(error: unknown): string {
