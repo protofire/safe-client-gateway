@@ -16,6 +16,11 @@ import { GasTokenRelayError } from '@/modules/relay/domain/errors/gas-token-rela
 import { UnofficialMasterCopyError } from '@/modules/relay/domain/errors/unofficial-master-copy.error';
 
 export type SafePaysFee = {
+  to: Address;
+  value: bigint;
+  data: Hex;
+  operation: number;
+  safeTxGas: bigint;
   baseGas: bigint;
   gasPrice: bigint;
   gasToken: Address;
@@ -51,12 +56,31 @@ export class GasTokenRelayer implements IRelayer {
     if (!decoded || decoded.functionName !== 'execTransaction') {
       return null;
     }
-    const [, , , , , baseGas, gasPrice, gasToken, refundReceiver] =
-      decoded.args;
+    const [
+      to,
+      value,
+      innerData,
+      operation,
+      safeTxGas,
+      baseGas,
+      gasPrice,
+      gasToken,
+      refundReceiver,
+    ] = decoded.args;
     if (gasPrice === BigInt(0)) {
       return null;
     }
-    return { baseGas, gasPrice, gasToken, refundReceiver };
+    return {
+      to,
+      value,
+      data: innerData,
+      operation,
+      safeTxGas,
+      baseGas,
+      gasPrice,
+      gasToken,
+      refundReceiver,
+    };
   }
 
   canRelay(): Promise<{
@@ -119,6 +143,21 @@ export class GasTokenRelayer implements IRelayer {
     if (!token) {
       throw new GasTokenRelayError(
         `${fee.gasToken} is not an accepted fee token on chain ${args.chainId}`,
+      );
+    }
+
+    // With gasPrice > 0 the inner call gets exactly safeTxGas: too little and the Safe pays for nothing
+    const innerGas = await this.feeService.estimateSafeTxGas({
+      chainId: args.chainId,
+      safeAddress: args.to,
+      to: fee.to,
+      value: fee.value.toString(),
+      data: fee.data,
+      operation: fee.operation,
+    });
+    if (fee.safeTxGas < innerGas) {
+      throw new GasTokenRelayError(
+        `safeTxGas ${fee.safeTxGas} is below the ${innerGas} gas the call needs; the Safe would pay the fee for a failed call. Propose the transaction again to refresh the fee.`,
       );
     }
 

@@ -1,5 +1,12 @@
 import { faker } from '@faker-js/faker';
-import { getAddress, parseGwei } from 'viem';
+import {
+  concatHex,
+  encodeAbiParameters,
+  getAddress,
+  numberToHex,
+  parseGwei,
+  size,
+} from 'viem';
 import type { Address, PublicClient } from 'viem';
 import { FakeConfigurationService } from '@/config/__tests__/fake.configuration.service';
 import type { IBlockchainApiManager } from '@/domain/interfaces/blockchain-api.manager.interface';
@@ -25,7 +32,37 @@ const mockPricesApi = jest.mocked({
 const mockPublicClient = jest.mocked({
   getGasPrice: jest.fn(),
   estimateGas: jest.fn(),
+  request: jest.fn(),
 } as jest.MockedObjectDeep<PublicClient>);
+
+/** What `simulateAndRevert` reverts with: success | responseSize | accessor (estimate, success, returnData) */
+function simulateAndRevertData(args: {
+  estimate: bigint;
+  success: boolean;
+  returnData?: `0x${string}`;
+}): `0x${string}` {
+  const response = encodeAbiParameters(
+    [{ type: 'uint256' }, { type: 'bool' }, { type: 'bytes' }],
+    [args.estimate, args.success, args.returnData ?? '0x'],
+  );
+  return concatHex([
+    numberToHex(1, { size: 32 }),
+    numberToHex(size(response), { size: 32 }),
+    response,
+  ]);
+}
+
+function mockSimulation(args: {
+  estimate: bigint;
+  success: boolean;
+  returnData?: `0x${string}`;
+}): void {
+  mockPublicClient.request.mockRejectedValue(
+    Object.assign(new Error('execution reverted'), {
+      data: simulateAndRevertData(args),
+    }),
+  );
+}
 
 const mockBlockchainApiManager = jest.mocked({
   getApi: jest.fn(),
@@ -101,9 +138,7 @@ describe('GasTokenFeeService', () => {
 
   describe('preview', () => {
     it('should return the fee fields for an allowlisted token', async () => {
-      mockEstimationsRepository.getEstimation.mockResolvedValue({
-        safeTxGas: '100000',
-      });
+      mockSimulation({ estimate: BigInt(100_000), success: true });
       const to = getAddress(faker.finance.ethereumAddress());
 
       const result = await target.preview({
@@ -121,7 +156,8 @@ describe('GasTokenFeeService', () => {
         txData: {
           chainId,
           safeAddress: result.txData.safeAddress,
-          safeTxGas: '100000',
+          // 100k measured + 10 % + 10k
+          safeTxGas: '120000',
           // 70k + 2 × 1.5k
           baseGas: '73000',
           gasPrice: '60',
@@ -129,8 +165,8 @@ describe('GasTokenFeeService', () => {
           refundReceiver,
           numberSignatures: 2,
         },
-        // (100k + 73k) × 20 gwei = 0.00346 ETH × $2,500
-        relayCost: { fiatCode: 'USD', fiatValue: '8.65' },
+        // (120k + 73k) × 20 gwei = 0.00386 ETH × $2,500
+        relayCost: { fiatCode: 'USD', fiatValue: '9.65' },
         pricingContextSnapshot: {
           phase: 2,
           priceSource: 'coingecko+fixed',
@@ -139,6 +175,57 @@ describe('GasTokenFeeService', () => {
         },
       });
       expect(mockPricesApi.getTokenPrices).not.toHaveBeenCalled();
+      expect(mockEstimationsRepository.getEstimation).not.toHaveBeenCalled();
+    });
+
+    it('should fail with SIMULATION_FAILED when the inner call reverts', async () => {
+      mockSimulation({
+        estimate: BigInt(0),
+        success: false,
+        // Error("GS013")
+        returnData: `0x08c379a0${encodeAbiParameters([{ type: 'string' }], ['GS013']).slice(2)}`,
+      });
+
+      const error: unknown = await target
+        .preview({
+          chainId,
+          safeAddress: getAddress(faker.finance.ethereumAddress()),
+          to: getAddress(faker.finance.ethereumAddress()),
+          value: '0',
+          data: '0x',
+          operation: Operation.CALL,
+          gasToken: usdc,
+          numberSignatures: 1,
+        })
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(GasTokenRelayError);
+      expect((error as GasTokenRelayError).getResponse()).toMatchObject({
+        code: 'SIMULATION_FAILED',
+        message: 'Simulation failed: GS013',
+      });
+    });
+
+    it('should fall back to the transaction service when the Safe cannot simulate', async () => {
+      // an old Safe: the call returns instead of reverting
+      mockPublicClient.request.mockResolvedValue('0x');
+      mockEstimationsRepository.getEstimation.mockResolvedValue({
+        safeTxGas: '50000',
+      });
+
+      const result = await target.preview({
+        chainId,
+        safeAddress: getAddress(faker.finance.ethereumAddress()),
+        to: getAddress(faker.finance.ethereumAddress()),
+        value: '0',
+        data: '0x',
+        operation: Operation.CALL,
+        gasToken: usdc,
+        numberSignatures: 1,
+      });
+
+      // 50k + 10 % + 10k
+      expect(result.txData.safeTxGas).toBe('65000');
     });
 
     it('should price the token from the market when no fixed price is configured', async () => {
@@ -155,9 +242,7 @@ describe('GasTokenFeeService', () => {
         mockBlockchainApiManager,
         mockEstimationsRepository,
       );
-      mockEstimationsRepository.getEstimation.mockResolvedValue({
-        safeTxGas: '0',
-      });
+      mockSimulation({ estimate: BigInt(0), success: true });
       mockPricesApi.getTokenPrices.mockResolvedValue(
         rawify([{ [dai.toLowerCase()]: { usd: 0.5, usd_24h_change: null } }]),
       );
@@ -190,9 +275,7 @@ describe('GasTokenFeeService', () => {
         mockBlockchainApiManager,
         mockEstimationsRepository,
       );
-      mockEstimationsRepository.getEstimation.mockResolvedValue({
-        safeTxGas: '0',
-      });
+      mockSimulation({ estimate: BigInt(0), success: true });
 
       const result = await target.preview({
         chainId,
@@ -243,9 +326,7 @@ describe('GasTokenFeeService', () => {
 
     it('should fail when the native price is unavailable', async () => {
       mockPricesApi.getNativeCoinPrice.mockResolvedValue(null);
-      mockEstimationsRepository.getEstimation.mockResolvedValue({
-        safeTxGas: '0',
-      });
+      mockSimulation({ estimate: BigInt(0), success: true });
 
       await expect(
         target.preview({

@@ -24,6 +24,7 @@ const mockSafeRepository = jest.mocked({
 const mockFeeService = jest.mocked({
   getRefundReceiver: jest.fn(),
   getAllowlistedToken: jest.fn(),
+  estimateSafeTxGas: jest.fn(),
   simulate: jest.fn(),
   assertRefundCovers: jest.fn(),
 } as jest.MockedObjectDeep<GasTokenFeeService>);
@@ -45,6 +46,7 @@ describe('GasTokenRelayer', () => {
     ReturnType<typeof execTransactionEncoder>['encode']
   > =>
     execTransactionEncoder()
+      .with('safeTxGas', BigInt(80_000))
       .with('baseGas', BigInt(70_000))
       .with('gasPrice', BigInt(60))
       .with('gasToken', usdc)
@@ -58,6 +60,7 @@ describe('GasTokenRelayer', () => {
     mockSafeRepository.getSafe.mockResolvedValue(safeBuilder().build());
     mockFeeService.getRefundReceiver.mockReturnValue(refundReceiver);
     mockFeeService.getAllowlistedToken.mockReturnValue(token);
+    mockFeeService.estimateSafeTxGas.mockResolvedValue(BigInt(50_000));
     mockFeeService.simulate.mockResolvedValue(BigInt(150_000));
     mockFeeService.assertRefundCovers.mockResolvedValue();
 
@@ -73,7 +76,11 @@ describe('GasTokenRelayer', () => {
 
   describe('getSafePaysFee', () => {
     it('should return the fee fields of a Safe-pays execTransaction', () => {
-      expect(target.getSafePaysFee(safePaysData())).toStrictEqual({
+      expect(target.getSafePaysFee(safePaysData())).toMatchObject({
+        value: BigInt(0),
+        data: '0x',
+        operation: 0,
+        safeTxGas: BigInt(80_000),
         baseGas: BigInt(70_000),
         gasPrice: BigInt(60),
         gasToken: usdc,
@@ -107,6 +114,14 @@ describe('GasTokenRelayer', () => {
       });
 
       expect(result).toStrictEqual({ taskId });
+      expect(mockFeeService.estimateSafeTxGas).toHaveBeenCalledWith({
+        chainId,
+        safeAddress,
+        to: expect.any(String),
+        value: '0',
+        data: '0x',
+        operation: 0,
+      });
       expect(mockFeeService.simulate).toHaveBeenCalledWith({
         chainId,
         safeAddress,
@@ -189,6 +204,40 @@ describe('GasTokenRelayer', () => {
           gasLimit: null,
         }),
       ).rejects.toThrow('not an accepted fee token');
+      expect(mockRelayApi.relay).not.toHaveBeenCalled();
+    });
+
+    it('should refuse a safeTxGas below what the call needs', async () => {
+      mockFeeService.estimateSafeTxGas.mockResolvedValue(BigInt(80_001));
+
+      await expect(
+        target.relay({
+          version,
+          chainId,
+          to: safeAddress,
+          data: safePaysData(),
+          gasLimit: null,
+        }),
+      ).rejects.toThrow('safeTxGas 80000 is below the 80001 gas');
+      expect(mockRelayApi.relay).not.toHaveBeenCalled();
+    });
+
+    it('should refuse a zero safeTxGas, which starves the inner call', async () => {
+      mockFeeService.estimateSafeTxGas.mockResolvedValue(BigInt(1));
+
+      await expect(
+        target.relay({
+          version,
+          chainId,
+          to: safeAddress,
+          data: execTransactionEncoder()
+            .with('gasPrice', BigInt(60))
+            .with('gasToken', usdc)
+            .with('refundReceiver', refundReceiver)
+            .encode(),
+          gasLimit: null,
+        }),
+      ).rejects.toThrow('safeTxGas 0 is below');
       expect(mockRelayApi.relay).not.toHaveBeenCalled();
     });
 
