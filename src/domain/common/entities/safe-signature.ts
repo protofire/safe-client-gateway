@@ -78,8 +78,7 @@ export class SafeSignature {
           }
           case SignatureType.EthSign: {
             const isTron =
-              this.chainId !== undefined &&
-              TRON_CHAIN_IDS.has(this.chainId);
+              this.chainId !== undefined && TRON_CHAIN_IDS.has(this.chainId);
 
             if (isTron) {
               // Tron signatures: signed raw EIP-712 hash with v + 31 offset
