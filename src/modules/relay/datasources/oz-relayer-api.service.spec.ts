@@ -6,6 +6,7 @@ import { FakeCacheService } from '@/datasources/cache/__tests__/fake.cache.servi
 import { HttpErrorFactory } from '@/datasources/errors/http-error-factory';
 import { NetworkResponseError } from '@/datasources/network/entities/network.error.entity';
 import type { INetworkService } from '@/datasources/network/network.service.interface';
+import type { IBlockchainApiManager } from '@/domain/interfaces/blockchain-api.manager.interface';
 import { DataSourceError } from '@/domain/errors/data-source.error';
 import { OzRelayerApi } from '@/modules/relay/datasources/oz-relayer-api.service';
 import { RelayStatusCode } from '@/modules/relay/domain/entities/relay-status.entity';
@@ -15,6 +16,9 @@ const mockNetworkService = jest.mocked({
   get: jest.fn(),
   post: jest.fn(),
 } as jest.MockedObjectDeep<INetworkService>);
+const mockBlockchainApiManager = jest.mocked({
+  getApi: jest.fn(),
+} as jest.MockedObjectDeep<IBlockchainApiManager>);
 
 describe('OzRelayerApi', () => {
   let target: OzRelayerApi;
@@ -35,12 +39,16 @@ describe('OzRelayerApi', () => {
     fakeConfigurationService.set('relay.ozRelayer.relayerIds', {
       [chainId]: relayerId,
     });
+    mockBlockchainApiManager.getApi.mockResolvedValue({
+      getTransactionReceipt: jest.fn().mockResolvedValue({ status: 'success' }),
+    } as never);
 
     target = new OzRelayerApi(
       mockNetworkService,
       fakeConfigurationService,
       new HttpErrorFactory(),
       new FakeCacheService(),
+      mockBlockchainApiManager,
     );
   });
 
@@ -52,6 +60,7 @@ describe('OzRelayerApi', () => {
           new FakeConfigurationService(),
           new HttpErrorFactory(),
           new FakeCacheService(),
+          mockBlockchainApiManager,
         ),
     ).toThrow();
   });
@@ -111,6 +120,18 @@ describe('OzRelayerApi', () => {
       );
     });
 
+    it('should refuse a gas limit that cannot be represented safely', async () => {
+      await expect(
+        target.relay({
+          chainId,
+          to: getAddress(faker.finance.ethereumAddress()),
+          data: faker.string.hexadecimal() as Hex,
+          gasLimit: BigInt(Number.MAX_SAFE_INTEGER) + BigInt(1),
+        }),
+      ).rejects.toThrow('Invalid gas limit');
+      expect(mockNetworkService.post).not.toHaveBeenCalled();
+    });
+
     it('should refuse chains without a relayer id', async () => {
       await expect(
         target.relay({
@@ -165,7 +186,6 @@ describe('OzRelayerApi', () => {
       ['submitted', '0xabc', RelayStatusCode.Submitted],
       ['mined', '0xabc', RelayStatusCode.Included],
       ['confirmed', '0xabc', RelayStatusCode.Included],
-      ['failed', '0xabc', RelayStatusCode.Reverted],
       ['failed', null, RelayStatusCode.Rejected],
       ['canceled', null, RelayStatusCode.Rejected],
       ['expired', null, RelayStatusCode.Rejected],
@@ -183,12 +203,131 @@ describe('OzRelayerApi', () => {
 
       expect(result).toStrictEqual({
         status: expected,
-        ...(hash && { receipt: { transactionHash: hash } }),
+        ...(hash &&
+          ['mined', 'confirmed'].includes(status) && {
+            receipt: { transactionHash: hash },
+          }),
       });
       expect(mockNetworkService.get).toHaveBeenCalledWith({
         url: `${baseUri}/api/v1/relayers/${relayerId}/transactions/${taskId}`,
         networkRequest: { headers: { Authorization: `Bearer ${apiKey}` } },
       });
     });
+
+    it.each([
+      ['reverted', RelayStatusCode.Reverted],
+      ['success', RelayStatusCode.Included],
+    ])(
+      'uses the chain receipt status for a failed transaction (%s)',
+      async (receiptStatus, expected) => {
+        const taskId = faker.string.uuid();
+        const hash = '0xabc';
+        const getTransactionReceipt = jest
+          .fn()
+          .mockResolvedValue({ status: receiptStatus });
+        mockBlockchainApiManager.getApi.mockResolvedValueOnce({
+          getTransactionReceipt,
+        } as never);
+        mockNetworkService.get.mockResolvedValueOnce({
+          status: 200,
+          data: rawify({
+            success: true,
+            data: { id: taskId, status: 'failed', hash },
+          }),
+        });
+
+        const result = await target.getRelayStatus({ chainId, taskId });
+
+        expect(result).toStrictEqual({
+          status: expected,
+          receipt: { transactionHash: hash },
+        });
+        expect(getTransactionReceipt).toHaveBeenCalledWith({ hash });
+      },
+    );
+
+    it('keeps a failed transaction pending when its hash has no receipt', async () => {
+      const taskId = faker.string.uuid();
+      mockBlockchainApiManager.getApi.mockResolvedValueOnce({
+        getTransactionReceipt: jest.fn().mockResolvedValue(null),
+      } as never);
+      mockNetworkService.get.mockResolvedValueOnce({
+        status: 200,
+        data: rawify({
+          success: true,
+          data: { id: taskId, status: 'failed', hash: '0xabc' },
+        }),
+      });
+
+      await expect(
+        target.getRelayStatus({ chainId, taskId }),
+      ).resolves.toStrictEqual({
+        status: RelayStatusCode.Submitted,
+      });
+    });
+
+    it('keeps a failed transaction pending when receipt lookup errors', async () => {
+      const taskId = faker.string.uuid();
+      mockBlockchainApiManager.getApi.mockResolvedValueOnce({
+        getTransactionReceipt: jest
+          .fn()
+          .mockRejectedValue(new Error('temporary RPC failure')),
+      } as never);
+      mockNetworkService.get.mockResolvedValueOnce({
+        status: 200,
+        data: rawify({
+          success: true,
+          data: { id: taskId, status: 'failed', hash: '0xabc' },
+        }),
+      });
+
+      await expect(
+        target.getRelayStatus({ chainId, taskId }),
+      ).resolves.toStrictEqual({
+        status: RelayStatusCode.Submitted,
+      });
+    });
+
+    it('does not claim inclusion for a malformed receipt status', async () => {
+      const taskId = faker.string.uuid();
+      mockBlockchainApiManager.getApi.mockResolvedValueOnce({
+        getTransactionReceipt: jest
+          .fn()
+          .mockResolvedValue({ status: undefined }),
+      } as never);
+      mockNetworkService.get.mockResolvedValueOnce({
+        status: 200,
+        data: rawify({
+          success: true,
+          data: { id: taskId, status: 'failed', hash: '0xabc' },
+        }),
+      });
+
+      await expect(
+        target.getRelayStatus({ chainId, taskId }),
+      ).resolves.toStrictEqual({
+        status: RelayStatusCode.Submitted,
+      });
+    });
+
+    it.each(['mined', 'confirmed'])(
+      'does not claim inclusion without a hash (%s)',
+      async (status) => {
+        const taskId = faker.string.uuid();
+        mockNetworkService.get.mockResolvedValueOnce({
+          status: 200,
+          data: rawify({
+            success: true,
+            data: { id: taskId, status, hash: null },
+          }),
+        });
+
+        await expect(
+          target.getRelayStatus({ chainId, taskId }),
+        ).resolves.toStrictEqual({
+          status: RelayStatusCode.Submitted,
+        });
+      },
+    );
   });
 });

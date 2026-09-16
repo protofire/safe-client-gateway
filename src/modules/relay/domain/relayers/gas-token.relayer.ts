@@ -29,8 +29,8 @@ export type SafePaysFee = {
 
 /**
  * Relays transactions whose Safe refunds the executor in a token ("Safe pays").
- * No daily quota: the Safe covers the cost. Instead the calldata must name our
- * refund receiver and an allowlisted token, simulate cleanly and still cover today's gas.
+ * The calldata must name our refund receiver and an allowlisted token, simulate cleanly
+ * and cover the selected outer gas limit at current prices.
  */
 @Injectable()
 export class GasTokenRelayer implements IRelayer {
@@ -109,6 +109,11 @@ export class GasTokenRelayer implements IRelayer {
     data: Hex;
     gasLimit: bigint | null;
   }): Promise<Relay> {
+    if (!(await this.feeService.isEnabled(args.chainId))) {
+      throw new GasTokenRelayError(
+        `Paying fees from the Safe is not enabled on chain ${args.chainId}`,
+      );
+    }
     const fee = this.getSafePaysFee(args.data);
     if (!fee) {
       throw new GasTokenRelayError('Not a Safe-pays execTransaction');
@@ -161,24 +166,26 @@ export class GasTokenRelayer implements IRelayer {
       );
     }
 
-    const gasEstimate = await this.feeService.simulate({
+    const outerGasEstimate = await this.feeService.simulate({
       chainId: args.chainId,
       safeAddress: args.to,
       data: args.data,
     });
+    const simulatedLimit = outerGasEstimate + this.gasLimitBuffer;
+    const gasLimit =
+      args.gasLimit && args.gasLimit > simulatedLimit
+        ? args.gasLimit
+        : simulatedLimit;
+
     await this.feeService.assertRefundCovers({
       chainId: args.chainId,
       token,
       gasPrice: fee.gasPrice,
       baseGas: fee.baseGas,
-      gasEstimate,
+      innerGasEstimate: innerGas,
+      outerGasLimit: gasLimit,
     });
-
-    const simulatedLimit = gasEstimate + this.gasLimitBuffer;
-    const gasLimit =
-      args.gasLimit && args.gasLimit > simulatedLimit
-        ? args.gasLimit
-        : simulatedLimit;
+    await this.feeService.reserveNativeSpend(args.chainId, gasLimit);
 
     const relay = await this.relayApi
       .relay({
@@ -190,7 +197,7 @@ export class GasTokenRelayer implements IRelayer {
       .then(RelaySchema.parse);
 
     this.loggingService.info(
-      `Safe-pays relay ${relay.taskId} | chain: ${args.chainId} | safe: ${args.to} | gasToken: ${fee.gasToken} | gasEstimate: ${gasEstimate}`,
+      `Safe-pays relay ${relay.taskId} | chain: ${args.chainId} | safe: ${args.to} | gasToken: ${fee.gasToken} | gasEstimate: ${outerGasEstimate}`,
     );
 
     return relay;

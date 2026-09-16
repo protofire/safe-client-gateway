@@ -221,6 +221,16 @@ describe('RedisCacheService', () => {
     expect(ttl).toBeLessThanOrEqual(maxExpireTime);
   });
 
+  it('increments an existing counter by an explicit amount and keeps default expiry semantics', async () => {
+    const key = faker.string.alphanumeric();
+    await redisClient.set(key, 10);
+
+    await expect(
+      redisCacheService.increment(key, undefined, 0, 7),
+    ).resolves.toBe(17);
+    await expect(redisCacheService.increment(key, undefined)).resolves.toBe(18);
+  });
+
   it('sets and gets the value of a counter key', async () => {
     const key = faker.string.alphanumeric();
     const value = faker.number.int({ min: 100 });

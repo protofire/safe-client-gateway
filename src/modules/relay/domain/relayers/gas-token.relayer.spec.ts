@@ -22,6 +22,8 @@ const mockSafeRepository = jest.mocked({
 } as jest.MockedObjectDeep<ISafeRepository>);
 
 const mockFeeService = jest.mocked({
+  isEnabled: jest.fn(),
+  reserveNativeSpend: jest.fn(),
   getRefundReceiver: jest.fn(),
   getAllowlistedToken: jest.fn(),
   estimateSafeTxGas: jest.fn(),
@@ -58,6 +60,8 @@ describe('GasTokenRelayer', () => {
     const fakeConfigurationService = new FakeConfigurationService();
     fakeConfigurationService.set('relay.gasToken', { gasLimitBuffer: 50_000 });
     mockSafeRepository.getSafe.mockResolvedValue(safeBuilder().build());
+    mockFeeService.isEnabled.mockResolvedValue(true);
+    mockFeeService.reserveNativeSpend.mockResolvedValue();
     mockFeeService.getRefundReceiver.mockReturnValue(refundReceiver);
     mockFeeService.getAllowlistedToken.mockReturnValue(token);
     mockFeeService.estimateSafeTxGas.mockResolvedValue(BigInt(50_000));
@@ -100,6 +104,25 @@ describe('GasTokenRelayer', () => {
   });
 
   describe('relay', () => {
+    it('should refuse Safe-pays when GAS_TOKEN is disabled without outbound writes', async () => {
+      mockFeeService.isEnabled.mockResolvedValue(false);
+
+      await expect(
+        target.relay({
+          version,
+          chainId,
+          to: safeAddress,
+          data: safePaysData(),
+          gasLimit: null,
+        }),
+      ).rejects.toThrow('not enabled');
+
+      expect(mockSafeRepository.getSafe).not.toHaveBeenCalled();
+      expect(mockFeeService.getRefundReceiver).not.toHaveBeenCalled();
+      expect(mockFeeService.simulate).not.toHaveBeenCalled();
+      expect(mockRelayApi.relay).not.toHaveBeenCalled();
+    });
+
     it('should check, simulate and relay with a buffered gas limit', async () => {
       const taskId = faker.string.uuid();
       mockRelayApi.relay.mockResolvedValue(rawify({ taskId }));
@@ -132,7 +155,8 @@ describe('GasTokenRelayer', () => {
         token,
         gasPrice: BigInt(60),
         baseGas: BigInt(70_000),
-        gasEstimate: BigInt(150_000),
+        innerGasEstimate: BigInt(50_000),
+        outerGasLimit: BigInt(200_000),
       });
       expect(mockRelayApi.relay).toHaveBeenCalledWith({
         chainId,
@@ -157,6 +181,24 @@ describe('GasTokenRelayer', () => {
 
       expect(mockRelayApi.relay.mock.calls[0][0].gasLimit).toBe(
         BigInt(300_000),
+      );
+    });
+
+    it('keeps the reservation when the outbound provider rejects', async () => {
+      mockRelayApi.relay.mockRejectedValue(new Error('provider unavailable'));
+
+      await expect(
+        target.relay({
+          version,
+          chainId,
+          to: safeAddress,
+          data: safePaysData(),
+          gasLimit: null,
+        }),
+      ).rejects.toThrow('provider unavailable');
+      expect(mockFeeService.reserveNativeSpend).toHaveBeenCalledWith(
+        chainId,
+        BigInt(200_000),
       );
     });
 

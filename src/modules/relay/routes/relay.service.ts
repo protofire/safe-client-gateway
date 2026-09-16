@@ -63,4 +63,11 @@ export class RelayService {
     });
     return new FeePreview(preview);
   }
+
+  async getFeeConfiguration(chainId: string): Promise<{
+    gasTokens: Array<{ address: Address; decimals: number }>;
+    refundReceiver: Address | null;
+  }> {
+    return this.relayRepository.getGasTokenConfiguration(chainId);
+  }
 }
