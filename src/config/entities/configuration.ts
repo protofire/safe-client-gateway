@@ -407,6 +407,41 @@ export default () => ({
     ),
     dailyLimitRelayerChainsIds:
       process.env.RELAY_DAILY_LIMIT_CHAIN_IDS?.split(',') ?? [],
+    // Which service broadcasts relayed transactions: 'gelato' | 'oz-relayer'
+    provider: process.env.RELAY_PROVIDER ?? 'gelato',
+    // Self-hosted OpenZeppelin Relayer
+    ozRelayer: {
+      baseUri: process.env.RELAY_OZ_BASE_URI ?? 'http://localhost:8080',
+      apiKey: process.env.RELAY_OZ_API_KEY,
+      // JSON: { "<chainId>": "<relayer id>" }
+      relayerIds: parseJsonRecord<string>(process.env.RELAY_OZ_RELAYER_IDS),
+    },
+    // "Safe pays": the Safe refunds the relayer in a token via execTransaction's gasToken/refundReceiver
+    gasToken: {
+      // JSON: { "<chainId>": "<address receiving the token refund>" }
+      refundReceivers: parseJsonRecord<string>(
+        process.env.RELAY_GAS_TOKEN_REFUND_RECEIVERS,
+      ),
+      // JSON: { "<chainId>": <usd price of the native coin> } for chains without a price feed (testnets)
+      nativeUsdPrices: parseJsonRecord<number>(
+        process.env.RELAY_GAS_TOKEN_NATIVE_USD_PRICES,
+      ),
+      // JSON: { "<chainId>": [{ "address": "0x…", "decimals": 6, "usdPrice": 1 }] } (usdPrice optional)
+      allowlist: parseJsonRecord<
+        Array<{ address: string; decimals: number; usdPrice?: number }>
+      >(process.env.RELAY_GAS_TOKEN_ALLOWLIST),
+      marginBps: parseInt(process.env.RELAY_GAS_TOKEN_MARGIN_BPS ?? `${2_000}`),
+      minMarginBps: parseInt(
+        process.env.RELAY_GAS_TOKEN_MIN_MARGIN_BPS ?? `${500}`,
+      ),
+      baseGas: parseInt(process.env.RELAY_GAS_TOKEN_BASE_GAS ?? `${70_000}`),
+      baseGasPerSignature: parseInt(
+        process.env.RELAY_GAS_TOKEN_BASE_GAS_PER_SIGNATURE ?? `${1_500}`,
+      ),
+      gasLimitBuffer: parseInt(
+        process.env.RELAY_GAS_TOKEN_GAS_LIMIT_BUFFER ?? `${50_000}`,
+      ),
+    },
     apiKey: {
       // Ethereum Mainnet
       1: process.env.RELAY_PROVIDER_API_KEY_MAINNET,
@@ -668,6 +703,10 @@ export default () => ({
     ),
   },
 });
+
+// Parses a JSON object keyed by chain id from an environment variable
+const parseJsonRecord = <T>(envValue: string | undefined): Record<string, T> =>
+  envValue ? (JSON.parse(envValue) as Record<string, T>) : {};
 
 // Helper function to parse relay rules from environment variable
 const parseRelayRules = (
