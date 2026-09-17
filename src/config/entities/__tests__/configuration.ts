@@ -259,6 +259,7 @@ export default (): ReturnType<typeof configuration> => ({
     gasToken: {
       refundReceivers: {},
       nativeUsdPrices: {},
+      nativeSpendBudgets: {},
       allowlist: {},
       marginBps: 2_000,
       minMarginBps: 500,

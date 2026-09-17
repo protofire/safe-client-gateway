@@ -22,7 +22,8 @@ import {
 } from '@/modules/relay/domain/entities/relay-status.entity';
 import type { Relay } from '@/modules/relay/domain/entities/relay.entity';
 import { rawify, type Raw } from '@/validation/entities/raw.entity';
-import type { Address } from 'viem';
+import type { Address, Hash } from 'viem';
+import { IBlockchainApiManager } from '@/domain/interfaces/blockchain-api.manager.interface';
 
 /**
  * Subset of OpenZeppelin Relayer's `ApiResponse<EvmTransactionResponse>`.
@@ -73,6 +74,8 @@ export class OzRelayerApi extends RelayCountCache implements IRelayApi {
     configurationService: IConfigurationService,
     private readonly httpErrorFactory: HttpErrorFactory,
     @Inject(CacheService) cacheService: ICacheService,
+    @Inject(IBlockchainApiManager)
+    private readonly blockchainApiManager: IBlockchainApiManager,
   ) {
     super(cacheService);
     this.baseUri = configurationService.getOrThrow<string>(
@@ -101,7 +104,9 @@ export class OzRelayerApi extends RelayCountCache implements IRelayApi {
           value: 0,
           data: args.data,
           speed: OzRelayerApi.SPEED,
-          ...(args.gasLimit && { gas_limit: Number(args.gasLimit) }),
+          ...(args.gasLimit && {
+            gas_limit: OzRelayerApi.toSafeNumber(args.gasLimit),
+          }),
         },
         networkRequest: { headers: this.getHeaders() },
       })
@@ -137,31 +142,61 @@ export class OzRelayerApi extends RelayCountCache implements IRelayApi {
       );
     }
     const { status, hash } = response.data;
+    const resolved = await this.resolveStatus(
+      args.chainId,
+      status,
+      hash ?? null,
+    );
     return rawify({
-      status: OzRelayerApi.toStatusCode(status, hash ?? null),
-      ...(hash && { receipt: { transactionHash: hash } }),
+      status: resolved.status,
+      ...(resolved.transactionHash && {
+        receipt: { transactionHash: resolved.transactionHash },
+      }),
     });
   }
 
-  private static toStatusCode(
+  private async resolveStatus(
+    chainId: string,
     status: OzTransactionStatus,
     hash: string | null,
-  ): RelayStatusCode {
-    switch (status) {
-      case 'pending':
-      case 'sent':
-        return RelayStatusCode.Pending;
-      case 'submitted':
-        return RelayStatusCode.Submitted;
-      case 'mined':
-      case 'confirmed':
-        return RelayStatusCode.Included;
-      case 'failed':
-        // With a hash the transaction reverted on-chain; without it never got there
-        return hash ? RelayStatusCode.Reverted : RelayStatusCode.Rejected;
-      case 'canceled':
-      case 'expired':
-        return RelayStatusCode.Rejected;
+  ): Promise<{ status: RelayStatusCode; transactionHash?: string }> {
+    if (status === 'canceled' || status === 'expired') {
+      return { status: RelayStatusCode.Rejected };
+    }
+    if (status === 'pending' || status === 'sent') {
+      return { status: RelayStatusCode.Pending };
+    }
+    if (!hash) {
+      return {
+        status:
+          status === 'failed'
+            ? RelayStatusCode.Rejected
+            : RelayStatusCode.Submitted,
+      };
+    }
+    if (status === 'submitted') {
+      return { status: RelayStatusCode.Submitted };
+    }
+
+    try {
+      const receipt = await (
+        await this.blockchainApiManager.getApi(chainId)
+      ).getTransactionReceipt({
+        hash: hash as Hash,
+      });
+      if (!receipt) return { status: RelayStatusCode.Submitted };
+      if (receipt.status !== 'success' && receipt.status !== 'reverted') {
+        return { status: RelayStatusCode.Submitted };
+      }
+      return {
+        status:
+          receipt.status === 'reverted'
+            ? RelayStatusCode.Reverted
+            : RelayStatusCode.Included,
+        transactionHash: hash,
+      };
+    } catch {
+      return { status: RelayStatusCode.Submitted };
     }
   }
 
@@ -173,6 +208,14 @@ export class OzRelayerApi extends RelayCountCache implements IRelayApi {
       );
     }
     return `${this.baseUri}/api/v1/relayers/${relayerId}`;
+  }
+
+  private static toSafeNumber(value: bigint): number {
+    const number = Number(value);
+    if (!Number.isSafeInteger(number) || number <= 0) {
+      throw new UnprocessableEntityException('Invalid gas limit');
+    }
+    return number;
   }
 
   private getHeaders(): Record<string, string> {

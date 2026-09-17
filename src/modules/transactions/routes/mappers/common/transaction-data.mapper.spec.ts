@@ -203,12 +203,15 @@ describe('Transaction Data Mapper (Unit)', () => {
         .with('method', 'changeMasterCopy')
         .with('parameters', [
           dataDecodedParameterBuilder()
-            .with('value', faker.string.alphanumeric(42)) // non-hex
+            .with('type', 'address')
+            .with('value', 'not-an-address') // non-hex
             .build(),
           dataDecodedParameterBuilder()
+            .with('type', 'address')
             .with('value', NULL_ADDRESS) // null address (zero hex)
             .build(),
           dataDecodedParameterBuilder()
+            .with('type', 'address')
             .with('value', faker.string.hexadecimal({ length: 5 })) // invalid (short) hex
             .build(),
         ])
