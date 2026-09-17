@@ -65,7 +65,7 @@ export class RelayService {
   }
 
   async getFeeConfiguration(chainId: string): Promise<{
-    gasTokens: Array<{ address: Address; decimals: number }>;
+    gasTokens: Array<{ address: Address; symbol: string; decimals: number }>;
     refundReceiver: Address | null;
   }> {
     return this.relayRepository.getGasTokenConfiguration(chainId);

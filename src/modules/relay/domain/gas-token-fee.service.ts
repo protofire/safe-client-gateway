@@ -142,12 +142,14 @@ export class GasTokenFeeService {
   }
 
   getConfiguration(chainId: string): {
-    gasTokens: Array<Pick<GasTokenAllowlistEntry, 'address' | 'decimals'>>;
+    gasTokens: Array<
+      Pick<GasTokenAllowlistEntry, 'address' | 'symbol' | 'decimals'>
+    >;
     refundReceiver: Address | null;
   } {
     return {
       gasTokens: (this.configuration.allowlist[chainId] ?? []).map(
-        ({ address, decimals }) => ({ address, decimals }),
+        ({ address, symbol, decimals }) => ({ address, symbol, decimals }),
       ),
       refundReceiver: this.getRefundReceiver(chainId),
     };

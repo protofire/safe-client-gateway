@@ -41,7 +41,7 @@ describe('GasTokenRelayer', () => {
   const safeAddress = getAddress(faker.finance.ethereumAddress());
   const refundReceiver = getAddress(faker.finance.ethereumAddress());
   const usdc = getAddress(faker.finance.ethereumAddress());
-  const token = { address: usdc, decimals: 6, usdPrice: 1 };
+  const token = { address: usdc, symbol: 'USDC', decimals: 6, usdPrice: 1 };
   let target: GasTokenRelayer;
 
   const safePaysData = (): ReturnType<

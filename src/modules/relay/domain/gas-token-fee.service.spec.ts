@@ -17,7 +17,10 @@ import type { IEstimationsRepository } from '@/modules/estimations/domain/estima
 import type { ICacheService } from '@/datasources/cache/cache.service.interface';
 import { GasTokenFeeService } from '@/modules/relay/domain/gas-token-fee.service';
 import { GasTokenRelayError } from '@/modules/relay/domain/errors/gas-token-relay.error';
-import type { GasTokenConfiguration } from '@/modules/relay/domain/entities/gas-token.configuration';
+import {
+  GasTokenConfigurationSchema,
+  type GasTokenConfiguration,
+} from '@/modules/relay/domain/entities/gas-token.configuration';
 import { Operation } from '@/modules/safe/domain/entities/operation.entity';
 import { rawify } from '@/validation/entities/raw.entity';
 
@@ -88,7 +91,9 @@ describe('GasTokenFeeService', () => {
   const configuration: GasTokenConfiguration = {
     refundReceivers: { [chainId]: refundReceiver },
     nativeUsdPrices: {},
-    allowlist: { [chainId]: [{ address: usdc, decimals: 6, usdPrice: 1 }] },
+    allowlist: {
+      [chainId]: [{ address: usdc, symbol: 'USDC', decimals: 6, usdPrice: 1 }],
+    },
     marginBps: 2_000,
     minMarginBps: 500,
     baseGas: 70_000,
@@ -172,9 +177,21 @@ describe('GasTokenFeeService', () => {
       expect(mockBlockchainApiManager.getApi).not.toHaveBeenCalled();
     });
 
+    it.each([undefined, '', '   '])(
+      'rejects a missing or blank token symbol: %s',
+      (symbol) => {
+        expect(() =>
+          GasTokenConfigurationSchema.parse({
+            ...configuration,
+            allowlist: { [chainId]: [{ address: usdc, symbol, decimals: 6 }] },
+          }),
+        ).toThrow();
+      },
+    );
+
     it('should expose enabled token configuration', () => {
       expect(target.getConfiguration(chainId)).toStrictEqual({
-        gasTokens: [{ address: usdc, decimals: 6 }],
+        gasTokens: [{ address: usdc, symbol: 'USDC', decimals: 6 }],
         refundReceiver,
       });
     });
@@ -275,7 +292,9 @@ describe('GasTokenFeeService', () => {
       const fakeConfigurationService = new FakeConfigurationService();
       fakeConfigurationService.set('relay.gasToken', {
         ...configuration,
-        allowlist: { [chainId]: [{ address: dai, decimals: 18 }] },
+        allowlist: {
+          [chainId]: [{ address: dai, symbol: 'DAI', decimals: 18 }],
+        },
       });
       target = new GasTokenFeeService(
         fakeConfigurationService,

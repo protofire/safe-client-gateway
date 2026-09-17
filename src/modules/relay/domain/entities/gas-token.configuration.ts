@@ -25,6 +25,7 @@ export const GasTokenConfigurationSchema = z.object({
       .array(
         z.object({
           address: NonZeroAddressSchema,
+          symbol: z.string().trim().min(1),
           decimals: z.number().int().nonnegative().max(255),
           usdPrice: PositivePriceSchema.optional(),
         }),
@@ -53,6 +54,7 @@ export const GasTokenConfigurationSchema = z.object({
 
 export type GasTokenAllowlistEntry = {
   address: Address;
+  symbol: string;
   decimals: number;
   /** Fixed USD price (e.g. 1 for a stablecoin on a testnet without a market). */
   usdPrice?: number;

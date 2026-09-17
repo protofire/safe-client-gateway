@@ -6,6 +6,9 @@ export class FeeConfigurationToken {
   address!: Address;
 
   @ApiProperty()
+  symbol!: string;
+
+  @ApiProperty()
   decimals!: number;
 }
 

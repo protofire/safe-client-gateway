@@ -431,9 +431,14 @@ export default () => ({
         dailyLimitGwei: number;
         maxGasPriceWei: string;
       }>(process.env.RELAY_GAS_TOKEN_NATIVE_SPEND_BUDGETS),
-      // JSON: { "<chainId>": [{ "address": "0x…", "decimals": 6, "usdPrice": 1 }] } (usdPrice optional)
+      // JSON: { "<chainId>": [{ "address": "0x…", "symbol": "USDC", "decimals": 6, "usdPrice": 1 }] } (usdPrice optional)
       allowlist: parseJsonRecord<
-        Array<{ address: string; decimals: number; usdPrice?: number }>
+        Array<{
+          address: string;
+          symbol: string;
+          decimals: number;
+          usdPrice?: number;
+        }>
       >(process.env.RELAY_GAS_TOKEN_ALLOWLIST),
       marginBps: parseSafeNonNegativeInteger(
         process.env.RELAY_GAS_TOKEN_MARGIN_BPS,
