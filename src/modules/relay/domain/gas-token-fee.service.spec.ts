@@ -443,11 +443,12 @@ describe('GasTokenFeeService', () => {
   });
 
   describe('reserveNativeSpend', () => {
-    it('hides the capability when the per-chain budget is missing', async () => {
+    it('allows quoting and relay without a per-chain budget and skips the counter', async () => {
       const budgets = configuration.nativeSpendBudgets;
       configuration.nativeSpendBudgets = {};
+      mockSimulation({ estimate: BigInt(100_000), success: true });
       try {
-        await expect(target.isEnabled(chainId)).resolves.toBe(false);
+        await expect(target.isEnabled(chainId)).resolves.toBe(true);
         await expect(
           target.preview({
             chainId,
@@ -459,7 +460,20 @@ describe('GasTokenFeeService', () => {
             gasToken: usdc,
             numberSignatures: 1,
           }),
-        ).rejects.toThrow('not available');
+        ).resolves.toMatchObject({
+          txData: { gasToken: usdc, refundReceiver },
+        });
+        await expect(
+          target.reserveNativeSpend(chainId, BigInt(200_000)),
+        ).resolves.toBeUndefined();
+        expect(mockCacheService.increment).not.toHaveBeenCalled();
+        mockChainsRepository.getChain.mockResolvedValue({
+          ...chain,
+          features: [],
+        });
+        await expect(
+          target.reserveNativeSpend(chainId, BigInt(200_000)),
+        ).rejects.toThrow('not enabled');
       } finally {
         configuration.nativeSpendBudgets = budgets;
       }
