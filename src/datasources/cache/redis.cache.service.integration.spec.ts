@@ -43,8 +43,9 @@ describe('RedisCacheService', () => {
     await redisClient.flushDb();
     defaultExpirationTimeInSeconds = faker.number.int({ min: 1, max: 3600 });
     defaultExpirationDeviatePercent = faker.number.int({ min: 1, max: 99 });
-    maxTtlDeviated =
-      MAX_TTL - (MAX_TTL * defaultExpirationDeviatePercent) / 100;
+    maxTtlDeviated = Math.floor(
+      MAX_TTL - (MAX_TTL * defaultExpirationDeviatePercent) / 100,
+    );
     mockConfigurationService.getOrThrow.mockImplementation((key) => {
       if (key === 'expirationTimeInSeconds.default') {
         return defaultExpirationTimeInSeconds;
