@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Post } from '@nestjs/common';
 import {
   ApiBody,
   ApiOkResponse,
@@ -14,6 +14,7 @@ import { RelayService } from '@/modules/relay/routes/relay.service';
 import { AddressSchema } from '@/validation/entities/schemas/address.schema';
 import { ValidationPipe } from '@/validation/pipes/validation.pipe';
 import type { Address } from 'viem';
+import { FeeConfiguration } from '@/modules/relay/routes/entities/fee-configuration.entity';
 
 @ApiTags('relay')
 @Controller({
@@ -22,6 +23,16 @@ import type { Address } from 'viem';
 })
 export class FeesController {
   constructor(private readonly relayService: RelayService) {}
+
+  @ApiOperation({ summary: 'Get gas-token fee configuration' })
+  @ApiParam({ name: 'chainId', type: 'string', example: '1' })
+  @ApiOkResponse({ type: FeeConfiguration })
+  @Get()
+  async getConfiguration(
+    @Param('chainId') chainId: string,
+  ): Promise<FeeConfiguration> {
+    return this.relayService.getFeeConfiguration(chainId);
+  }
 
   @ApiOperation({
     summary: 'Preview a fee paid from the Safe',

@@ -4,10 +4,12 @@ import { OzRelayerApi } from '@/modules/relay/datasources/oz-relayer-api.service
 import { IRelayApi } from '@/domain/interfaces/relay-api.interface';
 import { HttpErrorFactory } from '@/datasources/errors/http-error-factory';
 import { IConfigurationService } from '@/config/configuration.service.interface';
+import { BlockchainModule } from '@/modules/blockchain/blockchain.module';
 
 export type RelayProvider = 'gelato' | 'oz-relayer';
 
 @Module({
+  imports: [BlockchainModule],
   providers: [
     HttpErrorFactory,
     GelatoApi,

@@ -72,6 +72,13 @@ describe('FakeCacheService', () => {
     expect(results).toEqual([2, 3, 4, 5, 6]);
   });
 
+  it('increments a counter by an explicit amount while keeping the default amount at one', async () => {
+    const key = faker.string.uuid();
+
+    await expect(target.increment(key, undefined, 0, 7)).resolves.toBe(7);
+    await expect(target.increment(key, undefined)).resolves.toBe(8);
+  });
+
   it('increments the value of an existing key', async () => {
     const key = faker.string.alphanumeric();
     const initialValue = faker.number.int({ min: 100 });
