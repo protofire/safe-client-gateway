@@ -149,6 +149,7 @@ export class MessageVerifierHelper {
     const signature = new SafeSignature({
       hash: args.messageHash,
       signature: args.signature,
+      chainId: args.chainId,
     });
 
     const isBlocked = this.blocklist.some((blockedAddress) => {
