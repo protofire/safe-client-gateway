@@ -20,7 +20,6 @@ export interface ICacheService {
     cacheKey: string,
     expireTimeSeconds: number | undefined,
     expireDeviatePercent?: number,
-    amount?: number,
   ): Promise<number>;
 
   setCounter(

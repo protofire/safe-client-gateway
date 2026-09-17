@@ -9,7 +9,6 @@ import {
   getSafeToL2SetupDeployments as _getSafeToL2SetupDeployments,
   getSafeToL2MigrationDeployments as _getSafeToL2MigrationDeployments,
   getSafeMigrationDeployments as _getSafeMigrationDeployments,
-  getSimulateTxAccessorDeployments as _getSimulateTxAccessorDeployments,
 } from '@safe-global/safe-deployments';
 import {
   _SAFE_DEPLOYMENTS,
@@ -30,8 +29,7 @@ type DeploymentGetter =
   | typeof _getMultiSendDeployments
   | typeof _getFallbackHandlerDeployments
   | typeof _getSafeToL2SetupDeployments
-  | typeof _getSafeToL2MigrationDeployments
-  | typeof _getSimulateTxAccessorDeployments;
+  | typeof _getSafeToL2MigrationDeployments;
 
 /**
  * Returns a list of official ProxyFactory addresses based on given {@link Filter}.
@@ -137,18 +135,6 @@ export function getSafeMigrationDeployments(args: Filter): Array<Address> {
  *
  * @returns {Array<Address>} - a list of checksummed addresses
  */
-/**
- * Returns a list of official SimulateTxAccessor addresses based on given {@link Filter}.
- *
- * @param {string} args.chainId - the chain ID to filter deployments by
- * @param {string} args.version - the version to filter deployments by
- *
- * @returns {Array<Address>} - a list of checksummed SimulateTxAccessor addresses
- */
-export function getSimulateTxAccessorDeployments(args: Filter): Array<Address> {
-  return formatDeployments(_getSimulateTxAccessorDeployments, args);
-}
-
 function formatDeployments(
   getDeployments: DeploymentGetter,
   filter: Filter,

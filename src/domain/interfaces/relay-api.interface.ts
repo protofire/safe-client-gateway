@@ -1,5 +1,4 @@
 import type { Relay } from '@/modules/relay/domain/entities/relay.entity';
-import type { RelayStatus } from '@/modules/relay/domain/entities/relay-status.entity';
 import type { Raw } from '@/validation/entities/raw.entity';
 import type { Address } from 'viem';
 
@@ -12,11 +11,6 @@ export interface IRelayApi {
     data: string;
     gasLimit: bigint | null;
   }): Promise<Raw<Relay>>;
-
-  getRelayStatus(args: {
-    chainId: string;
-    taskId: string;
-  }): Promise<Raw<RelayStatus>>;
 
   getRelayCount(args: { chainId: string; address: Address }): Promise<number>;
 
