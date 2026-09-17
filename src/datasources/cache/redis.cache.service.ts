@@ -105,12 +105,8 @@ export class RedisCacheService
     cacheKey: string,
     expireTimeSeconds: number | undefined,
     expireDeviatePercent?: number,
-    amount = 1,
   ): Promise<number> {
-    const transaction =
-      amount === 1
-        ? this.client.multi().incr(cacheKey)
-        : this.client.multi().incrBy(cacheKey, amount);
+    const transaction = this.client.multi().incr(cacheKey);
     if (expireTimeSeconds !== undefined && expireTimeSeconds > 0) {
       const expirationTime = this.enforceMaxRedisTTL(
         deviateRandomlyByPercentage(

@@ -1,5 +1,4 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { z } from 'zod';
 import {
   NetworkService,
   INetworkService,
@@ -7,28 +6,17 @@ import {
 import { IRelayApi } from '@/domain/interfaces/relay-api.interface';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import { HttpErrorFactory } from '@/datasources/errors/http-error-factory';
+import { CacheRouter } from '@/datasources/cache/cache.router';
 import {
   CacheService,
   ICacheService,
 } from '@/datasources/cache/cache.service.interface';
-import { RelayCountCache } from '@/modules/relay/datasources/relay-count.cache';
-import {
-  RelayStatusCode,
-  type RelayStatus,
-} from '@/modules/relay/domain/entities/relay-status.entity';
 import type { Relay } from '@/modules/relay/domain/entities/relay.entity';
-import { rawify, type Raw } from '@/validation/entities/raw.entity';
+import type { Raw } from '@/validation/entities/raw.entity';
 import type { Address } from 'viem';
 
-const GelatoTaskStatusSchema = z.object({
-  task: z.object({
-    taskState: z.string(),
-    transactionHash: z.string().optional(),
-  }),
-});
-
 @Injectable()
-export class GelatoApi extends RelayCountCache implements IRelayApi {
+export class GelatoApi implements IRelayApi {
   /**
    * If you are using your own custom gas limit, please add a 150k gas buffer on top of the expected
    * gas usage for the transaction. This is for the Gelato Relay execution overhead, and adding this
@@ -36,15 +24,6 @@ export class GelatoApi extends RelayCountCache implements IRelayApi {
    * @see https://docs.gelato.network/developer-services/relay/quick-start/optional-parameters
    */
   private static GAS_LIMIT_BUFFER = BigInt(150_000);
-
-  private static readonly TASK_STATES: Record<string, RelayStatusCode> = {
-    CheckPending: RelayStatusCode.Pending,
-    ExecPending: RelayStatusCode.Submitted,
-    WaitingForConfirmation: RelayStatusCode.Submitted,
-    ExecSuccess: RelayStatusCode.Included,
-    ExecReverted: RelayStatusCode.Reverted,
-    Cancelled: RelayStatusCode.Rejected,
-  };
 
   private readonly baseUri: string;
 
@@ -54,9 +33,8 @@ export class GelatoApi extends RelayCountCache implements IRelayApi {
     @Inject(IConfigurationService)
     private readonly configurationService: IConfigurationService,
     private readonly httpErrorFactory: HttpErrorFactory,
-    @Inject(CacheService) cacheService: ICacheService,
+    @Inject(CacheService) private readonly cacheService: ICacheService,
   ) {
-    super(cacheService);
     this.baseUri =
       this.configurationService.getOrThrow<string>('relay.baseUri');
   }
@@ -91,28 +69,31 @@ export class GelatoApi extends RelayCountCache implements IRelayApi {
     }
   }
 
-  async getRelayStatus(args: {
-    chainId: string;
-    taskId: string;
-  }): Promise<Raw<RelayStatus>> {
-    try {
-      const url = `${this.baseUri}/tasks/status/${args.taskId}`;
-      const { data } = await this.networkService.get<unknown>({ url });
-      const { task } = GelatoTaskStatusSchema.parse(data);
-      const status =
-        GelatoApi.TASK_STATES[task.taskState] ?? RelayStatusCode.Pending;
-      return rawify({
-        status,
-        ...(task.transactionHash && {
-          receipt: { transactionHash: task.transactionHash },
-        }),
-      });
-    } catch (error) {
-      throw this.httpErrorFactory.from(error);
-    }
-  }
-
   private getRelayGasLimit(gasLimit: bigint): bigint {
     return gasLimit + GelatoApi.GAS_LIMIT_BUFFER;
+  }
+
+  async getRelayCount(args: {
+    chainId: string;
+    address: Address;
+    // TODO: Change to Raw when cache service is migrated
+  }): Promise<number> {
+    const cacheDir = CacheRouter.getRelayCacheDir(args);
+    const count = await this.cacheService.hGet(cacheDir);
+    return count ? parseInt(count) : 0;
+  }
+
+  async setRelayCount(args: {
+    chainId: string;
+    address: Address;
+    count: number;
+    ttlSeconds: number;
+  }): Promise<void> {
+    const cacheDir = CacheRouter.getRelayCacheDir(args);
+    await this.cacheService.hSet(
+      cacheDir,
+      args.count.toString(),
+      args.ttlSeconds,
+    );
   }
 }
