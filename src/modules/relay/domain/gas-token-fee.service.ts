@@ -90,14 +90,6 @@ export class GasTokenFeeService {
 
   async isEnabled(chainId: string): Promise<boolean> {
     const chain = await this.chainsRepository.getChain(chainId);
-    return (
-      chain.features.includes(GasTokenFeeService.FEATURE) &&
-      this.configuration.nativeSpendBudgets[chainId] !== undefined
-    );
-  }
-
-  private async hasFeature(chainId: string): Promise<boolean> {
-    const chain = await this.chainsRepository.getChain(chainId);
     return chain.features.includes(GasTokenFeeService.FEATURE);
   }
 
@@ -112,9 +104,7 @@ export class GasTokenFeeService {
     }
     const budget = this.configuration.nativeSpendBudgets[chainId];
     if (!budget) {
-      throw new GasTokenRelayError(
-        `Paying fees from the Safe is not available on chain ${chainId}`,
-      );
+      return;
     }
     const weiPerGwei = BigInt(1_000_000_000);
     const amountGwei =
@@ -175,14 +165,9 @@ export class GasTokenFeeService {
     gasToken: Address;
     numberSignatures: number;
   }): Promise<FeePreview> {
-    if (!(await this.hasFeature(args.chainId))) {
+    if (!(await this.isEnabled(args.chainId))) {
       throw new GasTokenRelayError(
         `Paying fees from the Safe is not enabled on chain ${args.chainId}`,
-      );
-    }
-    if (!this.configuration.nativeSpendBudgets[args.chainId]) {
-      throw new GasTokenRelayError(
-        `Paying fees from the Safe is not available on chain ${args.chainId}`,
       );
     }
     const refundReceiver = this.getRefundReceiver(args.chainId);
