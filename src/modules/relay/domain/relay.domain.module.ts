@@ -12,6 +12,7 @@ import { EstimationsModule } from '@/modules/estimations/estimations.module';
 import { DailyLimitRelayer } from '@/modules/relay/domain/relayers/daily-limit.relayer';
 import { NoFeeCampaignRelayer } from '@/modules/relay/domain/relayers/no-fee-campaign.relayer';
 import { GasTokenRelayer } from '@/modules/relay/domain/relayers/gas-token.relayer';
+import { RelayNativePriceService } from '@/modules/relay/domain/relay-native-price.service';
 import { GasTokenFeeService } from '@/modules/relay/domain/gas-token-fee.service';
 import { RelayManager } from '@/modules/relay/domain/relay.manager';
 import { IRelayManager } from '@/modules/relay/domain/interfaces/relay-manager.interface';
@@ -33,6 +34,7 @@ import { IRelayManager } from '@/modules/relay/domain/interfaces/relay-manager.i
     DailyLimitRelayer,
     NoFeeCampaignRelayer,
     GasTokenFeeService,
+    RelayNativePriceService,
     GasTokenRelayer,
     {
       provide: IRelayManager,
