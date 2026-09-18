@@ -1,3 +1,4 @@
+import type { RelayNativePriceService } from '@/modules/relay/domain/relay-native-price.service';
 import { faker } from '@faker-js/faker';
 import {
   concatHex,
@@ -27,6 +28,10 @@ import { rawify } from '@/validation/entities/raw.entity';
 const mockChainsRepository = jest.mocked({
   getChain: jest.fn(),
 } as jest.MockedObjectDeep<IChainsRepository>);
+
+const mockNativePrices = {
+  getPrice: jest.fn(),
+} as unknown as jest.Mocked<RelayNativePriceService>;
 
 const mockPricesApi = jest.mocked({
   getNativeCoinPrice: jest.fn(),
@@ -121,9 +126,9 @@ describe('GasTokenFeeService', () => {
     mockPublicClient.call.mockResolvedValue({
       data: encodeAbiParameters([{ type: 'bool' }], [true]),
     });
-    mockPricesApi.getNativeCoinPrice.mockResolvedValue({
+    mockNativePrices.getPrice.mockResolvedValue({
       usd: 2_500,
-      usd_24h_change: null,
+      fetchedAt: Date.now(),
     });
 
     target = new GasTokenFeeService(
@@ -133,6 +138,7 @@ describe('GasTokenFeeService', () => {
       mockBlockchainApiManager,
       mockEstimationsRepository,
       mockCacheService,
+      mockNativePrices,
     );
   });
 
@@ -219,13 +225,13 @@ describe('GasTokenFeeService', () => {
           safeTxGas: '120000',
           // 70k + 2 × 1.5k
           baseGas: '73000',
-          gasPrice: '60',
+          gasPrice: '85',
           gasToken: usdc,
           refundReceiver,
           numberSignatures: 2,
         },
-        // (120k + 73k) × 20 gwei = 0.00386 ETH × $2,500
-        relayCost: { fiatCode: 'USD', fiatValue: '9.65' },
+        // (120k + 73k + 50k limit buffer) × 20 gwei × $2,500
+        relayCost: { fiatCode: 'USD', fiatValue: '12.15' },
         pricingContextSnapshot: {
           phase: 2,
           priceSource: 'coingecko+fixed',
@@ -303,6 +309,7 @@ describe('GasTokenFeeService', () => {
         mockBlockchainApiManager,
         mockEstimationsRepository,
         mockCacheService,
+        mockNativePrices,
       );
       mockSimulation({ estimate: BigInt(0), success: true });
       mockPricesApi.getTokenPrices.mockResolvedValue(
@@ -321,7 +328,7 @@ describe('GasTokenFeeService', () => {
       });
 
       // $0.00006 per gas at $0.5 per token = 0.00012 tokens = 1.2e14 wei-units
-      expect(result.txData.gasPrice).toBe('120000000000000');
+      expect(result.txData.gasPrice).toBe('220699300699301');
     });
 
     it('should use a fixed native price when configured', async () => {
@@ -337,6 +344,7 @@ describe('GasTokenFeeService', () => {
         mockBlockchainApiManager,
         mockEstimationsRepository,
         mockCacheService,
+        mockNativePrices,
       );
       mockSimulation({ estimate: BigInt(0), success: true });
 
@@ -352,9 +360,9 @@ describe('GasTokenFeeService', () => {
       });
 
       // twice the market price of ETH → twice the token gas price
-      expect(result.txData.gasPrice).toBe('120');
+      expect(result.txData.gasPrice).toBe('221');
       expect(result.pricingContextSnapshot.priceSource).toBe('fixed');
-      expect(mockPricesApi.getNativeCoinPrice).not.toHaveBeenCalled();
+      expect(mockNativePrices.getPrice).not.toHaveBeenCalled();
     });
 
     it('should refuse a token that is not allowlisted', async () => {
@@ -388,7 +396,7 @@ describe('GasTokenFeeService', () => {
     });
 
     it('should fail when the native price is unavailable', async () => {
-      mockPricesApi.getNativeCoinPrice.mockResolvedValue(null);
+      mockNativePrices.getPrice.mockResolvedValue(null);
       mockSimulation({ estimate: BigInt(0), success: true });
 
       await expect(
@@ -404,6 +412,56 @@ describe('GasTokenFeeService', () => {
         }),
       ).rejects.toThrow('Price data is unavailable');
     });
+  });
+
+  describe('quote to execution regression', () => {
+    it.each([6, 18])(
+      'covers the Base transfer with %i token decimals and rejects a gas spike',
+      async (decimals) => {
+        const config = new FakeConfigurationService();
+        const token = { address: usdc, symbol: 'USD', decimals, usdPrice: 1 };
+        config.set('relay.gasToken', {
+          ...configuration,
+          allowlist: { [chainId]: [token] },
+        });
+        const service = new GasTokenFeeService(
+          config,
+          mockChainsRepository,
+          mockPricesApi,
+          mockBlockchainApiManager,
+          mockEstimationsRepository,
+          mockCacheService,
+          mockNativePrices,
+        );
+        mockSimulation({ estimate: BigInt(43_546), success: true });
+        mockPublicClient.getGasPrice.mockResolvedValue(BigInt(6_000_000));
+        const preview = await service.preview({
+          chainId,
+          safeAddress: usdc,
+          to: usdc,
+          value: '0',
+          data: '0x',
+          operation: Operation.CALL,
+          gasToken: usdc,
+          numberSignatures: 1,
+        });
+        const execution = {
+          chainId,
+          token,
+          gasPrice: BigInt(preview.txData.gasPrice),
+          baseGas: BigInt(preview.txData.baseGas),
+          innerGasEstimate: BigInt(43_546),
+          outerGasLimit: BigInt(143_964 + 50_000),
+        };
+        await expect(
+          service.assertRefundCovers(execution),
+        ).resolves.toBeUndefined();
+        mockPublicClient.getGasPrice.mockResolvedValue(parseGwei('20'));
+        await expect(service.assertRefundCovers(execution)).rejects.toThrow(
+          'no longer covers',
+        );
+      },
+    );
   });
 
   describe('assertRefundCovers', () => {
