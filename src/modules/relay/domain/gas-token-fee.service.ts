@@ -1,3 +1,4 @@
+import { RelayNativePriceService } from '@/modules/relay/domain/relay-native-price.service';
 import { Inject, Injectable } from '@nestjs/common';
 import {
   BaseError,
@@ -36,6 +37,7 @@ type Market = {
   gasPriceWei: bigint;
   nativeUsd: bigint;
   tokenUsd: bigint;
+  nativePriceTimestamp?: number;
 };
 
 /**
@@ -79,6 +81,7 @@ export class GasTokenFeeService {
     @Inject(IEstimationsRepository)
     private readonly estimationsRepository: IEstimationsRepository,
     @Inject(CacheService) private readonly cacheService: ICacheService,
+    private readonly nativePrices: RelayNativePriceService,
   ) {
     this.configuration =
       configurationService.getOrThrow<GasTokenConfiguration>('relay.gasToken');
@@ -198,12 +201,23 @@ export class GasTokenFeeService {
       BigInt(this.configuration.baseGas) +
       BigInt(this.configuration.baseGasPerSignature) *
         BigInt(args.numberSignatures);
+    // Quote the outer gas budget, but collect it through the Safe's inner-gas refund.
+    // The signed execution is still simulated and checked against its actual estimate.
+    const outerGasBudget =
+      safeTxGas + baseGas + BigInt(this.configuration.gasLimitBuffer);
+    if (innerGas + baseGas === BigInt(0)) {
+      throw new GasTokenRelayError(
+        'Cannot quote a transaction with zero refundable gas',
+      );
+    }
     const gasPrice = GasTokenFeeService.toTokenGasPrice(
       market,
       token.decimals,
       this.configuration.marginBps,
+      outerGasBudget,
+      innerGas + baseGas,
     );
-    const nativeCostWei = (safeTxGas + baseGas) * market.gasPriceWei;
+    const nativeCostWei = outerGasBudget * market.gasPriceWei;
 
     return {
       txData: {
@@ -230,7 +244,9 @@ export class GasTokenFeeService {
           this.configuration.nativeUsdPrices[args.chainId] !== undefined,
           token.usdPrice !== undefined,
         ),
-        priceTimestamp: Math.floor(Date.now() / 1_000),
+        priceTimestamp: Math.floor(
+          (market.nativePriceTimestamp ?? Date.now()) / 1_000,
+        ),
         gasPriceVolatilityBuffer:
           1 + this.configuration.marginBps / Number(GasTokenFeeService.BPS),
       },
@@ -369,16 +385,20 @@ export class GasTokenFeeService {
     market: Market,
     decimals: number,
     marginBps: number,
+    outerGasBudget = BigInt(1),
+    refundGas = BigInt(1),
   ): bigint {
     const numerator =
       market.gasPriceWei *
       market.nativeUsd *
       BigInt(10) ** BigInt(decimals) *
-      (GasTokenFeeService.BPS + BigInt(marginBps));
+      (GasTokenFeeService.BPS + BigInt(marginBps)) *
+      outerGasBudget;
     const denominator =
       market.tokenUsd *
       GasTokenFeeService.WEI_PER_ETHER *
-      GasTokenFeeService.BPS;
+      GasTokenFeeService.BPS *
+      refundGas;
     return (numerator + denominator - BigInt(1)) / denominator;
   }
 
@@ -494,13 +514,18 @@ export class GasTokenFeeService {
       this.chainsRepository.getChain(chainId),
       this.blockchainApiManager.getApi(chainId),
     ]);
-    const [gasPriceWei, nativeUsd, tokenUsd] = await Promise.all([
+    const [gasPriceWei, nativePrice, tokenUsd] = await Promise.all([
       client.getGasPrice(),
-      this.configuration.nativeUsdPrices[chainId] ??
-        this.getNativeUsdPrice(chain),
+      this.configuration.nativeUsdPrices[chainId] !== undefined
+        ? {
+            usd: this.configuration.nativeUsdPrices[chainId],
+            fetchedAt: Date.now(),
+          }
+        : this.nativePrices.getPrice(chain),
       token.usdPrice ?? this.getTokenUsdPrice(chain, token.address),
     ]);
 
+    const nativeUsd = nativePrice?.usd ?? null;
     if (
       nativeUsd === null ||
       tokenUsd === null ||
@@ -516,17 +541,10 @@ export class GasTokenFeeService {
 
     return {
       gasPriceWei,
+      nativePriceTimestamp: nativePrice?.fetchedAt,
       nativeUsd: GasTokenFeeService.toScaled(nativeUsd),
       tokenUsd: GasTokenFeeService.toScaled(tokenUsd),
     };
-  }
-
-  private async getNativeUsdPrice(chain: Chain): Promise<number | null> {
-    const price = await this.pricesApi.getNativeCoinPrice({
-      chain,
-      fiatCode: GasTokenFeeService.FIAT_CODE,
-    });
-    return price?.[GasTokenFeeService.FIAT_CODE.toLowerCase()] ?? null;
   }
 
   private async getTokenUsdPrice(
