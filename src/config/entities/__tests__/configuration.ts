@@ -16,7 +16,9 @@ export default (): ReturnType<typeof configuration> => ({
     reconnectTimeInSeconds: 5,
   },
   application: {
-    isProduction: faker.datatype.boolean(),
+    // false by default: relay.sanctions.listUrl is undefined in this fixture, and
+    // SanctionsListService throws when isProduction is true without a configured list
+    isProduction: false,
     isDevelopment: faker.datatype.boolean(),
     runMigrations: true,
     port: faker.internet.port().toString(),

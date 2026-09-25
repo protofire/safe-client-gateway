@@ -59,6 +59,14 @@ describe('AuthController', () => {
         ...defaultConfiguration.features,
         auth: true,
       },
+      relay: {
+        ...defaultConfiguration.relay,
+        sanctions: {
+          ...defaultConfiguration.relay.sanctions,
+          // isProduction: true requires a configured sanctions list (SanctionsListService)
+          listUrl: faker.internet.url({ appendSlash: false }),
+        },
+      },
     });
 
     await initApp(testConfiguration);
