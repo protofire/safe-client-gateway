@@ -267,6 +267,11 @@ export default (): ReturnType<typeof configuration> => ({
       baseGasPerSignature: 1_500,
       gasLimitBuffer: 50_000,
     },
+    sanctions: {
+      listUrl: undefined,
+      maxStalenessHours: 48,
+      extraAddresses: [],
+    },
     limit: faker.number.int({ min: 1 }),
     ttlSeconds: faker.number.int(),
     apiKey: {

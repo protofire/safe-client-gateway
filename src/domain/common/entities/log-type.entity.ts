@@ -27,6 +27,8 @@ export enum LogType {
   NotificationError = 'NOTIFICATION_ERROR',
   NotificationSent = 'NOTIFICATION_SENT',
   RateLimit = 'RATE_LIMIT',
+  SanctionsListRefreshFailed = 'SANCTIONS_LIST_REFRESH_FAILED',
+  SanctionsScreening = 'SANCTIONS_SCREENING',
   TransactionPropose = 'TRANSACTION_PROPOSE',
   TransactionValidity = 'TRANSACTION_VALIDITY',
   TxnExportFetchRequest = 'TRANSACTION_EXPORT_FETCH_REQUEST',
