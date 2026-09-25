@@ -73,7 +73,12 @@ describe('Relay controller - sanctions screening', () => {
           relay: {
             ...configuration().relay,
             limit: 5,
-            sanctions: { listUrl, maxStalenessHours: 48, extraAddresses: [] },
+            sanctions: {
+              listUrl,
+              maxStalenessHours: 48,
+              extraAddresses: [],
+              disabled: false,
+            },
           },
         }),
       });
@@ -310,7 +315,12 @@ describe('Relay controller - sanctions screening', () => {
           relay: {
             ...configuration().relay,
             limit: 5,
-            sanctions: { listUrl, maxStalenessHours: 48, extraAddresses: [] },
+            sanctions: {
+              listUrl,
+              maxStalenessHours: 48,
+              extraAddresses: [],
+              disabled: false,
+            },
           },
         }),
       });
@@ -378,6 +388,7 @@ describe('Relay controller - sanctions screening', () => {
               listUrl: undefined,
               maxStalenessHours: 48,
               extraAddresses: [],
+              disabled: true,
             },
           },
         }),

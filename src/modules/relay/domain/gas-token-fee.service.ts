@@ -79,7 +79,7 @@ export class GasTokenFeeService {
   // GasTokenFeeService is part of RelayModule, which every gateway instance
   // loads, so a misconfiguration must not crash the whole gateway (unlike a
   // component the app can run without). It fails closed instead: isEnabled()
-  // returns false on every chain until minMarginBps is fixed.
+  // returns false on every chain, in every environment, until minMarginBps is fixed.
   private readonly disabled: boolean;
 
   constructor(
@@ -98,15 +98,11 @@ export class GasTokenFeeService {
     this.configuration =
       configurationService.getOrThrow<GasTokenConfiguration>('relay.gasToken');
     let disabled = false;
-    if (
-      configurationService.getOrThrow<boolean>('application.isProduction') &&
-      this.configuration.minMarginBps <= 0
-    ) {
+    if (this.configuration.minMarginBps <= 0) {
       disabled = true;
       this.loggingService.error({
         type: LogType.GasTokenFeeMisconfigured,
-        error:
-          'relay.gasToken.minMarginBps must be > 0 in production; Safe-pays is disabled',
+        error: 'relay.gasToken.minMarginBps must be > 0; Safe-pays is disabled',
       });
     }
     this.disabled = disabled;

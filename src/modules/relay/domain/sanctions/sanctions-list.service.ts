@@ -18,6 +18,7 @@ export type SanctionsConfiguration = {
   listUrl: string | undefined;
   maxStalenessHours: number;
   extraAddresses: Array<string>;
+  disabled: boolean;
 };
 
 const SanctionsListSchema = z
@@ -49,9 +50,11 @@ const REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 @Injectable()
 export class SanctionsListService implements OnModuleInit {
   private readonly config: SanctionsConfiguration;
-  // Misconfiguration in production must not crash the gateway (RelayModule is
-  // imported unconditionally); it fails closed instead: isEnabled() stays true
-  // and check() always returns 'unavailable' (503) until fixed.
+  // Screening is mandatory by default, in every environment. A missing
+  // SANCTIONS_LIST_URL must not crash the gateway (RelayModule is imported
+  // unconditionally); it fails closed instead: isEnabled() stays true and
+  // check() always returns 'unavailable' (503) until fixed. Only an explicit
+  // SANCTIONS_SCREENING_DISABLED='true' turns screening off.
   private readonly misconfigured: boolean;
   private list: {
     addresses: Set<string>;
@@ -67,29 +70,23 @@ export class SanctionsListService implements OnModuleInit {
       configurationService.getOrThrow<SanctionsConfiguration>(
         'relay.sanctions',
       );
-    let misconfigured = false;
-    if (configurationService.getOrThrow<boolean>('application.isProduction')) {
+    if (this.config.disabled) {
+      this.misconfigured = false;
+      this.loggingService.warn({
+        type: LogType.SanctionsScreeningDisabled,
+        message:
+          'sanctions screening explicitly disabled (SANCTIONS_SCREENING_DISABLED=true)',
+      });
+    } else {
+      let misconfigured = false;
       if (!this.config.listUrl) {
         misconfigured = true;
         this.loggingService.error({
           type: LogType.SanctionsListRefreshFailed,
-          error: 'SANCTIONS_LIST_URL is required in production',
+          error: 'SANCTIONS_LIST_URL is required for sanctions screening',
         });
       }
-      if (this.config.extraAddresses.length > 0) {
-        misconfigured = true;
-        this.loggingService.error({
-          type: LogType.SanctionsListRefreshFailed,
-          error: 'SANCTIONS_EXTRA_ADDRESSES is not allowed in production',
-        });
-      }
-    }
-    this.misconfigured = misconfigured;
-    if (!misconfigured && !this.config.listUrl) {
-      this.loggingService.warn({
-        type: LogType.SanctionsScreeningDisabled,
-        message: 'sanctions screening disabled (SANCTIONS_LIST_URL empty)',
-      });
+      this.misconfigured = misconfigured;
     }
     if (
       !Number.isFinite(this.config.maxStalenessHours) ||
@@ -102,7 +99,7 @@ export class SanctionsListService implements OnModuleInit {
   }
 
   isEnabled(): boolean {
-    return this.misconfigured || !!this.config.listUrl;
+    return !this.config.disabled;
   }
 
   async onModuleInit(): Promise<void> {
@@ -120,10 +117,10 @@ export class SanctionsListService implements OnModuleInit {
       });
       const parsed = SanctionsListSchema.parse(data);
       this.list = {
+        // Extras only ever add blocks; they never weaken screening.
         addresses: new Set([
           ...parsed.addresses,
-          // Never merge extras when misconfigured (production disallows them)
-          ...(this.misconfigured ? [] : this.config.extraAddresses),
+          ...this.config.extraAddresses,
         ]),
         version: {
           sourceSha256: parsed.sourceSha256,
