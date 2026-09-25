@@ -267,6 +267,13 @@ export default (): ReturnType<typeof configuration> => ({
       baseGasPerSignature: 1_500,
       gasLimitBuffer: 50_000,
     },
+    sanctions: {
+      listUrl: undefined,
+      maxStalenessHours: 48,
+      extraAddresses: [],
+      // Screening off by default in fixture-based suites, which don't set up a list
+      disabled: true,
+    },
     limit: faker.number.int({ min: 1 }),
     ttlSeconds: faker.number.int(),
     apiKey: {

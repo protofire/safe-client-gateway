@@ -461,6 +461,22 @@ export default () => ({
         50_000,
       ),
     }),
+    // OFAC screening of every relay, mandatory in every environment; see
+    // SanctionsListService for what happens without a URL.
+    sanctions: {
+      listUrl: process.env.SANCTIONS_LIST_URL || undefined,
+      maxStalenessHours: parseSafeNonNegativeInteger(
+        process.env.SANCTIONS_MAX_STALENESS_HOURS,
+        48,
+      ),
+      // Extra addresses merged into the list (e.g. a QA wallet); only ever adds blocks
+      extraAddresses: (process.env.SANCTIONS_EXTRA_ADDRESSES ?? '')
+        .split(',')
+        .map((address) => address.trim().toLowerCase())
+        .filter(Boolean),
+      // Explicit opt-out only; true for the exact string 'true'
+      disabled: process.env.SANCTIONS_SCREENING_DISABLED === 'true',
+    },
     apiKey: {
       // Ethereum Mainnet
       1: process.env.RELAY_PROVIDER_API_KEY_MAINNET,
@@ -731,7 +747,7 @@ const parseSafeNonNegativeInteger = (
   value: string | undefined,
   fallback: number,
 ): number => {
-  if (value === undefined) return fallback;
+  if (value === undefined || value === '') return fallback;
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 0) {
     throw new Error(

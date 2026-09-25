@@ -31,6 +31,11 @@ import type { FeePreview } from '@/modules/relay/domain/entities/fee-preview.ent
 import { GasTokenRelayError } from '@/modules/relay/domain/errors/gas-token-relay.error';
 import { CacheService } from '@/datasources/cache/cache.service.interface';
 import type { ICacheService } from '@/datasources/cache/cache.service.interface';
+import { LogType } from '@/domain/common/entities/log-type.entity';
+import {
+  LoggingService,
+  type ILoggingService,
+} from '@/logging/logging.interface';
 
 /** Snapshot of what the relayer will pay and what the token is worth, prices scaled by PRICE_SCALE. */
 type Market = {
@@ -70,6 +75,12 @@ export class GasTokenFeeService {
   ]);
 
   private readonly configuration: GasTokenConfiguration;
+  // Legal memo V2: the fee must carry our margin, never a pure gas pass-through.
+  // GasTokenFeeService is part of RelayModule, which every gateway instance
+  // loads, so a misconfiguration must not crash the whole gateway (unlike a
+  // component the app can run without). It fails closed instead: isEnabled()
+  // returns false on every chain, in every environment, until minMarginBps is fixed.
+  private readonly disabled: boolean;
 
   constructor(
     @Inject(IConfigurationService) configurationService: IConfigurationService,
@@ -82,9 +93,19 @@ export class GasTokenFeeService {
     private readonly estimationsRepository: IEstimationsRepository,
     @Inject(CacheService) private readonly cacheService: ICacheService,
     private readonly nativePrices: RelayNativePriceService,
+    @Inject(LoggingService) private readonly loggingService: ILoggingService,
   ) {
     this.configuration =
       configurationService.getOrThrow<GasTokenConfiguration>('relay.gasToken');
+    let disabled = false;
+    if (this.configuration.minMarginBps <= 0) {
+      disabled = true;
+      this.loggingService.error({
+        type: LogType.GasTokenFeeMisconfigured,
+        error: 'relay.gasToken.minMarginBps must be > 0; Safe-pays is disabled',
+      });
+    }
+    this.disabled = disabled;
   }
 
   getRefundReceiver(chainId: string): Address | null {
@@ -92,6 +113,9 @@ export class GasTokenFeeService {
   }
 
   async isEnabled(chainId: string): Promise<boolean> {
+    if (this.disabled) {
+      return false;
+    }
     const chain = await this.chainsRepository.getChain(chainId);
     return chain.features.includes(GasTokenFeeService.FEATURE);
   }
