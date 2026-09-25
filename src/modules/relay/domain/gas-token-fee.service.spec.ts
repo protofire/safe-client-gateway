@@ -141,7 +141,6 @@ describe('GasTokenFeeService', () => {
     jest.resetAllMocks();
     const fakeConfigurationService = new FakeConfigurationService();
     fakeConfigurationService.set('relay.gasToken', configuration);
-    fakeConfigurationService.set('application.isProduction', false);
     mockChainsRepository.getChain.mockResolvedValue(chain);
     mockBlockchainApiManager.getApi.mockResolvedValue(mockPublicClient);
     mockPublicClient.getGasPrice.mockResolvedValue(parseGwei('20'));
@@ -316,7 +315,6 @@ describe('GasTokenFeeService', () => {
           [chainId]: [{ address: dai, symbol: 'DAI', decimals: 18 }],
         },
       });
-      fakeConfigurationService.set('application.isProduction', false);
       target = buildService(fakeConfigurationService);
       mockSimulation({ estimate: BigInt(0), success: true });
       mockPricesApi.getTokenPrices.mockResolvedValue(
@@ -344,7 +342,6 @@ describe('GasTokenFeeService', () => {
         ...configuration,
         nativeUsdPrices: { [chainId]: 5_000 },
       });
-      fakeConfigurationService.set('application.isProduction', false);
       target = buildService(fakeConfigurationService);
       mockSimulation({ estimate: BigInt(0), success: true });
 
@@ -424,7 +421,6 @@ describe('GasTokenFeeService', () => {
           ...configuration,
           allowlist: { [chainId]: [token] },
         });
-        config.set('application.isProduction', false);
         const service = buildService(config);
         mockSimulation({ estimate: BigInt(43_546), success: true });
         mockPublicClient.getGasPrice.mockResolvedValue(BigInt(6_000_000));
@@ -653,10 +649,9 @@ describe('GasTokenFeeService', () => {
     });
   });
 
-  describe('zero fee margin in production', () => {
-    it('disables Safe-pays and logs an error when minMarginBps is 0 in production', async () => {
+  describe('zero fee margin', () => {
+    it('disables Safe-pays and logs an error when minMarginBps is 0', async () => {
       const config = new FakeConfigurationService();
-      config.set('application.isProduction', true);
       config.set('relay.gasToken', { ...configuration, minMarginBps: 0 });
 
       expect(() => buildService(config, mockLoggingService)).not.toThrow();
@@ -670,21 +665,9 @@ describe('GasTokenFeeService', () => {
       );
     });
 
-    it('keeps Safe-pays enabled in production with the default margin', async () => {
+    it('keeps Safe-pays enabled with the default margin', async () => {
       const config = new FakeConfigurationService();
-      config.set('application.isProduction', true);
       config.set('relay.gasToken', configuration);
-
-      const service = buildService(config, mockLoggingService);
-
-      await expect(service.isEnabled(chainId)).resolves.toBe(true);
-      expect(mockLoggingService.error).not.toHaveBeenCalled();
-    });
-
-    it('does not disable Safe-pays for a zero margin outside production', async () => {
-      const config = new FakeConfigurationService();
-      config.set('application.isProduction', false);
-      config.set('relay.gasToken', { ...configuration, minMarginBps: 0 });
 
       const service = buildService(config, mockLoggingService);
 

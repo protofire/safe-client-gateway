@@ -16,10 +16,7 @@ export default (): ReturnType<typeof configuration> => ({
     reconnectTimeInSeconds: 5,
   },
   application: {
-    // false by default: relay.sanctions.listUrl is undefined in this fixture, and
-    // in production without a URL SanctionsListService would fail closed
-    // (every relay 503s), which would break these fixture-based suites
-    isProduction: false,
+    isProduction: faker.datatype.boolean(),
     isDevelopment: faker.datatype.boolean(),
     runMigrations: true,
     port: faker.internet.port().toString(),
@@ -274,6 +271,8 @@ export default (): ReturnType<typeof configuration> => ({
       listUrl: undefined,
       maxStalenessHours: 48,
       extraAddresses: [],
+      // Screening off by default in fixture-based suites, which don't set up a list
+      disabled: true,
     },
     limit: faker.number.int({ min: 1 }),
     ttlSeconds: faker.number.int(),

@@ -31,16 +31,13 @@ function list(overrides: Record<string, unknown> = {}): unknown {
   };
 }
 
-function service(
-  sanctions: Record<string, unknown>,
-  isProduction = false,
-): SanctionsListService {
+function service(sanctions: Record<string, unknown>): SanctionsListService {
   const config = new FakeConfigurationService();
-  config.set('application.isProduction', isProduction);
   config.set('relay.sanctions', {
     listUrl: url,
     maxStalenessHours: 48,
     extraAddresses: [],
+    disabled: false,
     ...sanctions,
   });
   return new SanctionsListService(
@@ -53,25 +50,10 @@ function service(
 describe('SanctionsListService', () => {
   beforeEach(() => jest.resetAllMocks());
 
-  it('fails closed in production without a list URL, without crashing', () => {
-    const target = service({ listUrl: undefined }, true);
+  it('fails closed without a list URL, without crashing', () => {
+    const target = service({ listUrl: undefined });
     expect(target.isEnabled()).toBe(true);
     expect(target.check([getAddress(clean)], now).result).toBe('unavailable');
-    expect(mockLoggingService.error).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'SANCTIONS_LIST_REFRESH_FAILED' }),
-    );
-  });
-
-  it('fails closed on extra addresses in production, without crashing', async () => {
-    mockNetworkService.get.mockResolvedValue({
-      status: 200,
-      data: list(),
-    } as never);
-    const target = service({ extraAddresses: [clean] }, true);
-    expect(target.isEnabled()).toBe(true);
-    await target.refresh();
-    const result = target.check([getAddress(clean)], now);
-    expect(result.result).toBe('unavailable');
     expect(mockLoggingService.error).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'SANCTIONS_LIST_REFRESH_FAILED' }),
     );
@@ -85,19 +67,19 @@ describe('SanctionsListService', () => {
     expect(() => service({ maxStalenessHours: 0 })).toThrow();
   });
 
-  it('is disabled without a URL outside production', () => {
-    expect(service({ listUrl: undefined }).isEnabled()).toBe(false);
+  it('is not enabled when explicitly disabled', () => {
+    expect(service({ disabled: true }).isEnabled()).toBe(false);
   });
 
-  it('logs a warning once at construction when disabled outside production', () => {
-    service({ listUrl: undefined });
+  it('logs a warning once at construction when explicitly disabled', () => {
+    service({ disabled: true });
     expect(mockLoggingService.warn).toHaveBeenCalledTimes(1);
     expect(mockLoggingService.warn).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'SANCTIONS_SCREENING_DISABLED' }),
     );
   });
 
-  it('does not log the disabled warning when a list URL is configured', () => {
+  it('does not log the disabled warning when screening is enabled', () => {
     service({});
     expect(mockLoggingService.warn).not.toHaveBeenCalled();
   });
@@ -167,7 +149,7 @@ describe('SanctionsListService', () => {
     expect(target.check([getAddress(listed)], now).result).toBe('unavailable');
   });
 
-  it('merges extra addresses outside production', async () => {
+  it('merges extra addresses with a list URL present', async () => {
     mockNetworkService.get.mockResolvedValue({
       status: 200,
       data: list(),
