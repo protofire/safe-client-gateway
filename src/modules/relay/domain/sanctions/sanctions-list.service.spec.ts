@@ -10,6 +10,7 @@ const mockNetworkService = jest.mocked({
 } as jest.MockedObjectDeep<INetworkService>);
 const mockLoggingService = jest.mocked({
   warn: jest.fn(),
+  error: jest.fn(),
 } as jest.MockedObjectDeep<ILoggingService>);
 
 const listed = faker.finance.ethereumAddress().toLowerCase();
@@ -52,12 +53,28 @@ function service(
 describe('SanctionsListService', () => {
   beforeEach(() => jest.resetAllMocks());
 
-  it('refuses to start in production without a list URL', () => {
-    expect(() => service({ listUrl: undefined }, true)).toThrow();
+  it('fails closed in production without a list URL, without crashing', () => {
+    const target = service({ listUrl: undefined }, true);
+    expect(target.isEnabled()).toBe(true);
+    expect(target.check([getAddress(clean)], now).result).toBe('unavailable');
+    expect(mockLoggingService.error).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'SANCTIONS_LIST_REFRESH_FAILED' }),
+    );
   });
 
-  it('refuses extra addresses in production', () => {
-    expect(() => service({ extraAddresses: [clean] }, true)).toThrow();
+  it('fails closed on extra addresses in production, without crashing', async () => {
+    mockNetworkService.get.mockResolvedValue({
+      status: 200,
+      data: list(),
+    } as never);
+    const target = service({ extraAddresses: [clean] }, true);
+    expect(target.isEnabled()).toBe(true);
+    await target.refresh();
+    const result = target.check([getAddress(clean)], now);
+    expect(result.result).toBe('unavailable');
+    expect(mockLoggingService.error).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'SANCTIONS_LIST_REFRESH_FAILED' }),
+    );
   });
 
   it('refuses a non-finite maxStalenessHours', () => {

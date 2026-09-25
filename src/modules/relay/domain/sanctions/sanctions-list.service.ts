@@ -48,6 +48,10 @@ const REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 @Injectable()
 export class SanctionsListService implements OnModuleInit {
   private readonly config: SanctionsConfiguration;
+  // Misconfiguration in production must not crash the gateway (RelayModule is
+  // imported unconditionally); it fails closed instead: isEnabled() stays true
+  // and check() always returns 'unavailable' (503) until fixed.
+  private readonly misconfigured: boolean;
   private list: {
     addresses: Set<string>;
     version: SanctionsListVersion;
@@ -62,16 +66,24 @@ export class SanctionsListService implements OnModuleInit {
       configurationService.getOrThrow<SanctionsConfiguration>(
         'relay.sanctions',
       );
+    let misconfigured = false;
     if (configurationService.getOrThrow<boolean>('application.isProduction')) {
       if (!this.config.listUrl) {
-        throw new Error('SANCTIONS_LIST_URL is required in production');
+        misconfigured = true;
+        this.loggingService.error({
+          type: LogType.SanctionsListRefreshFailed,
+          error: 'SANCTIONS_LIST_URL is required in production',
+        });
       }
       if (this.config.extraAddresses.length > 0) {
-        throw new Error(
-          'SANCTIONS_EXTRA_ADDRESSES is not allowed in production',
-        );
+        misconfigured = true;
+        this.loggingService.error({
+          type: LogType.SanctionsListRefreshFailed,
+          error: 'SANCTIONS_EXTRA_ADDRESSES is not allowed in production',
+        });
       }
     }
+    this.misconfigured = misconfigured;
     if (
       !Number.isFinite(this.config.maxStalenessHours) ||
       this.config.maxStalenessHours <= 0
@@ -83,7 +95,7 @@ export class SanctionsListService implements OnModuleInit {
   }
 
   isEnabled(): boolean {
-    return !!this.config.listUrl;
+    return this.misconfigured || !!this.config.listUrl;
   }
 
   async onModuleInit(): Promise<void> {
@@ -103,7 +115,8 @@ export class SanctionsListService implements OnModuleInit {
       this.list = {
         addresses: new Set([
           ...parsed.addresses,
-          ...this.config.extraAddresses,
+          // Never merge extras when misconfigured (production disallows them)
+          ...(this.misconfigured ? [] : this.config.extraAddresses),
         ]),
         version: {
           sourceSha256: parsed.sourceSha256,
@@ -121,6 +134,9 @@ export class SanctionsListService implements OnModuleInit {
   }
 
   check(addresses: ReadonlyArray<Address>, now = Date.now()): SanctionsCheck {
+    if (this.misconfigured) {
+      return { result: 'unavailable', matches: [], list: null };
+    }
     const list = this.list;
     const maxAgeMs = this.config.maxStalenessHours * 60 * 60 * 1000;
     if (!list || now - Date.parse(list.version.checkedAt) > maxAgeMs) {
