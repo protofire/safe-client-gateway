@@ -18,6 +18,7 @@ import {
 import { getMultiSendDeployments } from '@/domain/common/utils/deployments';
 import { rawify } from '@/validation/entities/raw.entity';
 import { createTestModule } from '@/__tests__/testing-module';
+import { getDeploymentVersionsByChainIds } from '@/__tests__/deployments.helper';
 import type { Server } from 'net';
 
 const listUrl = 'https://lists.example/sanctioned-evm/latest.json';
@@ -28,6 +29,11 @@ const supportedChainId = faker.helpers.arrayElement(
   Object.keys(configuration().relay.apiKey).filter(
     (chainId) => !noFeeCampaignChains.includes(chainId),
   ),
+);
+const multiSendVersion = faker.helpers.arrayElement(
+  getDeploymentVersionsByChainIds('MultiSend', [supportedChainId])[
+    supportedChainId
+  ],
 );
 
 describe('Relay controller - sanctions screening', () => {
@@ -159,7 +165,8 @@ describe('Relay controller - sanctions screening', () => {
         .send({ version: safe.version, to: safeAddress, data })
         .expect(403);
 
-      expect(JSON.stringify(res.body)).not.toContain(listed);
+      expect(res.body.message).toBe('This transaction cannot be relayed.');
+      expect(JSON.stringify(res.body).toLowerCase()).not.toContain(listed);
       expect(networkService.post).not.toHaveBeenCalledWith(
         expect.objectContaining({ url: expect.stringContaining(relayUrl) }),
       );
@@ -192,10 +199,15 @@ describe('Relay controller - sanctions screening', () => {
         return Promise.reject(`No matching rule for url: ${url}`);
       });
 
-      await request(app.getHttpServer())
+      const res = await request(app.getHttpServer())
         .post(`/v1/chains/${chain.chainId}/relay`)
         .send({ version: safe.version, to: safeAddress, data })
         .expect(403);
+
+      expect(res.body.message).toBe('This transaction cannot be relayed.');
+      expect(networkService.post).not.toHaveBeenCalledWith(
+        expect.objectContaining({ url: expect.stringContaining(relayUrl) }),
+      );
     });
 
     it('refuses with 403 when the Safe itself is listed', async () => {
@@ -223,19 +235,23 @@ describe('Relay controller - sanctions screening', () => {
         return Promise.reject(`No matching rule for url: ${url}`);
       });
 
-      await request(app.getHttpServer())
+      const res = await request(app.getHttpServer())
         .post(`/v1/chains/${chain.chainId}/relay`)
         .send({ version: safe.version, to: safeAddress, data })
         .expect(403);
+
+      expect(res.body.message).toBe('This transaction cannot be relayed.');
+      expect(networkService.post).not.toHaveBeenCalledWith(
+        expect.objectContaining({ url: expect.stringContaining(relayUrl) }),
+      );
     });
 
     it('answers 422 for a MultiSend containing execTransaction with gasPrice > 0', async () => {
       const chain = chainBuilder().with('chainId', supportedChainId).build();
       const safe = safeBuilder().build();
       const safeAddress = getAddress(safe.address);
-      const version = safe.version as string;
       const [multiSendAddress] = getMultiSendDeployments({
-        version,
+        version: multiSendVersion,
         chainId: chain.chainId,
       });
       const transactions = [
@@ -270,10 +286,14 @@ describe('Relay controller - sanctions screening', () => {
         return Promise.reject(`No matching rule for url: ${url}`);
       });
 
-      await request(app.getHttpServer())
+      const res = await request(app.getHttpServer())
         .post(`/v1/chains/${chain.chainId}/relay`)
-        .send({ version, to: multiSendAddress, data })
+        .send({ version: multiSendVersion, to: multiSendAddress, data })
         .expect(422);
+
+      expect(res.body.message).toBe(
+        'A transaction that refunds the executor must be relayed on its own, not inside a batch.',
+      );
     });
   });
 
@@ -334,10 +354,15 @@ describe('Relay controller - sanctions screening', () => {
         return Promise.reject(`No matching rule for url: ${url}`);
       });
 
-      await request(app.getHttpServer())
+      const res = await request(app.getHttpServer())
         .post(`/v1/chains/${chain.chainId}/relay`)
         .send({ version: safe.version, to: safeAddress, data })
         .expect(503);
+
+      expect(res.body.message).toBe('Relaying is temporarily unavailable.');
+      expect(networkService.post).not.toHaveBeenCalledWith(
+        expect.objectContaining({ url: expect.stringContaining(relayUrl) }),
+      );
     });
   });
 });
