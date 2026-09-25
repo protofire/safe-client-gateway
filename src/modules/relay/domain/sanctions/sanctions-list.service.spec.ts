@@ -60,6 +60,14 @@ describe('SanctionsListService', () => {
     expect(() => service({ extraAddresses: [clean] }, true)).toThrow();
   });
 
+  it('refuses a non-finite maxStalenessHours', () => {
+    expect(() => service({ maxStalenessHours: NaN })).toThrow();
+  });
+
+  it('refuses a non-positive maxStalenessHours', () => {
+    expect(() => service({ maxStalenessHours: 0 })).toThrow();
+  });
+
   it('is disabled without a URL outside production', () => {
     expect(service({ listUrl: undefined }).isEnabled()).toBe(false);
   });

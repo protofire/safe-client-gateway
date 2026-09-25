@@ -464,8 +464,9 @@ export default () => ({
     // OFAC screening of every relay; empty URL disables it (refused in production)
     sanctions: {
       listUrl: process.env.SANCTIONS_LIST_URL || undefined,
-      maxStalenessHours: parseInt(
-        process.env.SANCTIONS_MAX_STALENESS_HOURS ?? `${48}`,
+      maxStalenessHours: parseSafeNonNegativeInteger(
+        process.env.SANCTIONS_MAX_STALENESS_HOURS,
+        48,
       ),
       // Test-only additions merged into the list (e.g. a QA wallet); refused in production
       extraAddresses: (process.env.SANCTIONS_EXTRA_ADDRESSES ?? '')

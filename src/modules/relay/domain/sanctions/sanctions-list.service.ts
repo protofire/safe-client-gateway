@@ -72,6 +72,14 @@ export class SanctionsListService implements OnModuleInit {
         );
       }
     }
+    if (
+      !Number.isFinite(this.config.maxStalenessHours) ||
+      this.config.maxStalenessHours <= 0
+    ) {
+      throw new Error(
+        'SANCTIONS_MAX_STALENESS_HOURS must be a positive number',
+      );
+    }
   }
 
   isEnabled(): boolean {
