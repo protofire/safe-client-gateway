@@ -4,6 +4,7 @@ import { SafeDecoder } from '@/modules/contracts/domain/decoders/safe-decoder.he
 import { MultiSendDecoder } from '@/modules/contracts/domain/decoders/multi-send-decoder.helper';
 import { Erc20Decoder } from '@/modules/relay/domain/contracts/decoders/erc-20-decoder.helper';
 import { ProxyFactoryDecoder } from '@/modules/relay/domain/contracts/decoders/proxy-factory-decoder.helper';
+import { DelayModifierDecoder } from '@/modules/alerts/domain/contracts/decoders/delay-modifier-decoder.helper';
 import { LimitAddressesMapper } from '@/modules/relay/domain/limit-addresses.mapper';
 import { NestedRefundError } from '@/modules/relay/domain/errors/nested-refund.error';
 import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
@@ -22,6 +23,7 @@ export class ScreeningAddressesMapper {
     private readonly erc20Decoder: Erc20Decoder,
     private readonly multiSendDecoder: MultiSendDecoder,
     private readonly proxyFactoryDecoder: ProxyFactoryDecoder,
+    private readonly delayModifierDecoder: DelayModifierDecoder,
   ) {}
 
   async map(args: {
@@ -77,12 +79,29 @@ export class ScreeningAddressesMapper {
       this.walk(innerData, depth + 1, screened);
       return;
     }
+    if (safeCall?.functionName === 'execTransactionFromModule') {
+      const [to, , innerData] = safeCall.args;
+      screened.push({ address: to, role: 'to' });
+      this.walk(innerData, depth + 1, screened);
+      return;
+    }
     if (safeCall?.functionName === 'addOwnerWithThreshold') {
       screened.push({ address: safeCall.args[0], role: 'recipient' });
       return;
     }
     if (safeCall?.functionName === 'swapOwner') {
       screened.push({ address: safeCall.args[2], role: 'recipient' });
+      return;
+    }
+
+    const delayCall = this.tryDecodeDelayModifier(data);
+    if (
+      delayCall?.functionName === 'execTransactionFromModule' ||
+      delayCall?.functionName === 'executeNextTx'
+    ) {
+      const [to, , innerData] = delayCall.args;
+      screened.push({ address: to, role: 'to' });
+      this.walk(innerData, depth + 1, screened);
       return;
     }
 
@@ -138,6 +157,16 @@ export class ScreeningAddressesMapper {
   ): ReturnType<ProxyFactoryDecoder['decodeFunctionData']> | null {
     try {
       return this.proxyFactoryDecoder.decodeFunctionData({ data });
+    } catch {
+      return null;
+    }
+  }
+
+  private tryDecodeDelayModifier(
+    data: Hex,
+  ): ReturnType<DelayModifierDecoder['decodeFunctionData']> | null {
+    try {
+      return this.delayModifierDecoder.decodeFunctionData({ data });
     } catch {
       return null;
     }
