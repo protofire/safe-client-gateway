@@ -461,6 +461,18 @@ export default () => ({
         50_000,
       ),
     }),
+    // OFAC screening of every relay; empty URL disables it (refused in production)
+    sanctions: {
+      listUrl: process.env.SANCTIONS_LIST_URL || undefined,
+      maxStalenessHours: parseInt(
+        process.env.SANCTIONS_MAX_STALENESS_HOURS ?? `${48}`,
+      ),
+      // Test-only additions merged into the list (e.g. a QA wallet); refused in production
+      extraAddresses: (process.env.SANCTIONS_EXTRA_ADDRESSES ?? '')
+        .split(',')
+        .map((address) => address.trim().toLowerCase())
+        .filter(Boolean),
+    },
     apiKey: {
       // Ethereum Mainnet
       1: process.env.RELAY_PROVIDER_API_KEY_MAINNET,
