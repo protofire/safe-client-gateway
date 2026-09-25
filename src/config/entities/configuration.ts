@@ -1,4 +1,5 @@
 import type { RelayRules } from '@/modules/relay/domain/entities/relay.configuration';
+import { GasTokenConfigurationSchema } from '@/modules/relay/domain/entities/gas-token.configuration';
 
 // Custom configuration for the application
 // eslint-disable-next-line @typescript-eslint/explicit-function-return-type
@@ -407,6 +408,59 @@ export default () => ({
     ),
     dailyLimitRelayerChainsIds:
       process.env.RELAY_DAILY_LIMIT_CHAIN_IDS?.split(',') ?? [],
+    // Which service broadcasts relayed transactions: 'gelato' | 'oz-relayer'
+    provider: process.env.RELAY_PROVIDER ?? 'gelato',
+    // Self-hosted OpenZeppelin Relayer
+    ozRelayer: {
+      baseUri: process.env.RELAY_OZ_BASE_URI ?? 'http://localhost:8080',
+      apiKey: process.env.RELAY_OZ_API_KEY,
+      // JSON: { "<chainId>": "<relayer id>" }
+      relayerIds: parseJsonRecord<string>(process.env.RELAY_OZ_RELAYER_IDS),
+    },
+    // "Safe pays": the Safe refunds the relayer in a token via execTransaction's gasToken/refundReceiver
+    gasToken: GasTokenConfigurationSchema.parse({
+      // JSON: { "<chainId>": "<address receiving the token refund>" }
+      refundReceivers: parseJsonRecord<string>(
+        process.env.RELAY_GAS_TOKEN_REFUND_RECEIVERS,
+      ),
+      // JSON: { "<chainId>": <usd price of the native coin> } for chains without a price feed (testnets)
+      nativeUsdPrices: parseJsonRecord<number>(
+        process.env.RELAY_GAS_TOKEN_NATIVE_USD_PRICES,
+      ),
+      nativeSpendBudgets: parseJsonRecord<{
+        dailyLimitGwei: number;
+        maxGasPriceWei: string;
+      }>(process.env.RELAY_GAS_TOKEN_NATIVE_SPEND_BUDGETS),
+      // JSON: { "<chainId>": [{ "address": "0x…", "symbol": "USDC", "decimals": 6, "usdPrice": 1 }] } (usdPrice optional)
+      allowlist: parseJsonRecord<
+        Array<{
+          address: string;
+          symbol: string;
+          decimals: number;
+          usdPrice?: number;
+        }>
+      >(process.env.RELAY_GAS_TOKEN_ALLOWLIST),
+      marginBps: parseSafeNonNegativeInteger(
+        process.env.RELAY_GAS_TOKEN_MARGIN_BPS,
+        2_000,
+      ),
+      minMarginBps: parseSafeNonNegativeInteger(
+        process.env.RELAY_GAS_TOKEN_MIN_MARGIN_BPS,
+        500,
+      ),
+      baseGas: parseSafeNonNegativeInteger(
+        process.env.RELAY_GAS_TOKEN_BASE_GAS,
+        70_000,
+      ),
+      baseGasPerSignature: parseSafeNonNegativeInteger(
+        process.env.RELAY_GAS_TOKEN_BASE_GAS_PER_SIGNATURE,
+        1_500,
+      ),
+      gasLimitBuffer: parseSafeNonNegativeInteger(
+        process.env.RELAY_GAS_TOKEN_GAS_LIMIT_BUFFER,
+        50_000,
+      ),
+    }),
     apiKey: {
       // Ethereum Mainnet
       1: process.env.RELAY_PROVIDER_API_KEY_MAINNET,
@@ -668,6 +722,24 @@ export default () => ({
     ),
   },
 });
+
+// Parses a JSON object keyed by chain id from an environment variable
+const parseJsonRecord = <T>(envValue: string | undefined): Record<string, T> =>
+  envValue ? (JSON.parse(envValue) as Record<string, T>) : {};
+
+const parseSafeNonNegativeInteger = (
+  value: string | undefined,
+  fallback: number,
+): number => {
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error(
+      'Gas-token numeric configuration must be a safe integer >= 0',
+    );
+  }
+  return parsed;
+};
 
 // Helper function to parse relay rules from environment variable
 const parseRelayRules = (

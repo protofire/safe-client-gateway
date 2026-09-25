@@ -70,11 +70,12 @@ export class FakeCacheService implements ICacheService, ICacheReadiness {
 
   increment(
     cacheKey: string,
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     expireTimeSeconds: number | undefined,
+    expireDeviatePercent?: number,
+    amount = 1,
   ): Promise<number> {
     let currentValue: number = this.cache[cacheKey] as number;
-    currentValue = currentValue ? currentValue + 1 : 1;
+    currentValue = currentValue ? currentValue + amount : amount;
     this.cache[cacheKey] = currentValue;
     return Promise.resolve(currentValue);
   }

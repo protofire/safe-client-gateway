@@ -24,6 +24,8 @@ describe('JobQueueService & TestJobConsumer integration', () => {
             port: Number(process.env.REDIS_PORT) || 6379,
             username: process.env.REDIS_USER,
             password: process.env.REDIS_PASS,
+            // Cache integration tests flush DB 0 in parallel.
+            db: 1,
           },
         }),
         BullModule.registerQueue({
@@ -69,7 +71,7 @@ describe('JobQueueService & TestJobConsumer integration', () => {
     await service.addJob(JobType.TEST_JOB, data);
 
     // Wait for job to be processed
-    await waitUntil(() => consumer.handledJobs.length === 1);
+    await waitUntil(() => consumer.completedJobs.length === 1);
 
     expect(consumer.handledJobs).toHaveLength(1);
 
@@ -86,7 +88,7 @@ describe('JobQueueService & TestJobConsumer integration', () => {
 
     await service.addJob(JobType.TEST_JOB, data);
 
-    await waitUntil(() => consumer.handledJobs.length === 1);
+    await waitUntil(() => consumer.completedJobs.length === 1);
 
     const processedJob = consumer.handledJobs[0];
     expect(processedJob.name).toBe(JobType.TEST_JOB);
@@ -115,7 +117,7 @@ describe('JobQueueService & TestJobConsumer integration', () => {
       await service.addJob(JobType.TEST_JOB, data);
     }
 
-    await waitUntil(() => consumer.handledJobs.length === jobs.length);
+    await waitUntil(() => consumer.completedJobs.length === jobs.length);
 
     for (let i = 0; i < jobs.length; i++) {
       expect(consumer.handledJobs[i].data).toEqual(jobs[i]);
