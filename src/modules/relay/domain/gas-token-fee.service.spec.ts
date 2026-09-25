@@ -16,6 +16,7 @@ import { chainBuilder } from '@/modules/chains/domain/entities/__tests__/chain.b
 import type { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
 import type { IEstimationsRepository } from '@/modules/estimations/domain/estimations.repository.interface';
 import type { ICacheService } from '@/datasources/cache/cache.service.interface';
+import type { ILoggingService } from '@/logging/logging.interface';
 import { GasTokenFeeService } from '@/modules/relay/domain/gas-token-fee.service';
 import { GasTokenRelayError } from '@/modules/relay/domain/errors/gas-token-relay.error';
 import {
@@ -85,6 +86,26 @@ const mockCacheService = jest.mocked({
   increment: jest.fn(),
 } as jest.MockedObjectDeep<ICacheService>);
 
+const mockLoggingService = jest.mocked({
+  error: jest.fn(),
+} as jest.MockedObjectDeep<ILoggingService>);
+
+function buildService(
+  config: FakeConfigurationService,
+  loggingService: jest.MockedObjectDeep<ILoggingService> = mockLoggingService,
+): GasTokenFeeService {
+  return new GasTokenFeeService(
+    config,
+    mockChainsRepository,
+    mockPricesApi,
+    mockBlockchainApiManager,
+    mockEstimationsRepository,
+    mockCacheService,
+    mockNativePrices,
+    loggingService,
+  );
+}
+
 describe('GasTokenFeeService', () => {
   const chainId = '11155111';
   const chain = chainBuilder()
@@ -120,6 +141,7 @@ describe('GasTokenFeeService', () => {
     jest.resetAllMocks();
     const fakeConfigurationService = new FakeConfigurationService();
     fakeConfigurationService.set('relay.gasToken', configuration);
+    fakeConfigurationService.set('application.isProduction', false);
     mockChainsRepository.getChain.mockResolvedValue(chain);
     mockBlockchainApiManager.getApi.mockResolvedValue(mockPublicClient);
     mockPublicClient.getGasPrice.mockResolvedValue(parseGwei('20'));
@@ -131,15 +153,7 @@ describe('GasTokenFeeService', () => {
       fetchedAt: Date.now(),
     });
 
-    target = new GasTokenFeeService(
-      fakeConfigurationService,
-      mockChainsRepository,
-      mockPricesApi,
-      mockBlockchainApiManager,
-      mockEstimationsRepository,
-      mockCacheService,
-      mockNativePrices,
-    );
+    target = buildService(fakeConfigurationService);
   });
 
   describe('toTokenGasPrice', () => {
@@ -302,15 +316,8 @@ describe('GasTokenFeeService', () => {
           [chainId]: [{ address: dai, symbol: 'DAI', decimals: 18 }],
         },
       });
-      target = new GasTokenFeeService(
-        fakeConfigurationService,
-        mockChainsRepository,
-        mockPricesApi,
-        mockBlockchainApiManager,
-        mockEstimationsRepository,
-        mockCacheService,
-        mockNativePrices,
-      );
+      fakeConfigurationService.set('application.isProduction', false);
+      target = buildService(fakeConfigurationService);
       mockSimulation({ estimate: BigInt(0), success: true });
       mockPricesApi.getTokenPrices.mockResolvedValue(
         rawify([{ [dai.toLowerCase()]: { usd: 0.5, usd_24h_change: null } }]),
@@ -337,15 +344,8 @@ describe('GasTokenFeeService', () => {
         ...configuration,
         nativeUsdPrices: { [chainId]: 5_000 },
       });
-      target = new GasTokenFeeService(
-        fakeConfigurationService,
-        mockChainsRepository,
-        mockPricesApi,
-        mockBlockchainApiManager,
-        mockEstimationsRepository,
-        mockCacheService,
-        mockNativePrices,
-      );
+      fakeConfigurationService.set('application.isProduction', false);
+      target = buildService(fakeConfigurationService);
       mockSimulation({ estimate: BigInt(0), success: true });
 
       const result = await target.preview({
@@ -424,15 +424,8 @@ describe('GasTokenFeeService', () => {
           ...configuration,
           allowlist: { [chainId]: [token] },
         });
-        const service = new GasTokenFeeService(
-          config,
-          mockChainsRepository,
-          mockPricesApi,
-          mockBlockchainApiManager,
-          mockEstimationsRepository,
-          mockCacheService,
-          mockNativePrices,
-        );
+        config.set('application.isProduction', false);
+        const service = buildService(config);
         mockSimulation({ estimate: BigInt(43_546), success: true });
         mockPublicClient.getGasPrice.mockResolvedValue(BigInt(6_000_000));
         const preview = await service.preview({
@@ -657,6 +650,46 @@ describe('GasTokenFeeService', () => {
           data: '0x',
         }),
       ).rejects.toThrow('Simulation failed: GS012');
+    });
+  });
+
+  describe('zero fee margin in production', () => {
+    it('disables Safe-pays and logs an error when minMarginBps is 0 in production', async () => {
+      const config = new FakeConfigurationService();
+      config.set('application.isProduction', true);
+      config.set('relay.gasToken', { ...configuration, minMarginBps: 0 });
+
+      expect(() => buildService(config, mockLoggingService)).not.toThrow();
+      const service = buildService(config, mockLoggingService);
+
+      await expect(service.isEnabled(chainId)).resolves.toBe(false);
+      expect(mockLoggingService.error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.stringContaining('relay.gasToken.minMarginBps'),
+        }),
+      );
+    });
+
+    it('keeps Safe-pays enabled in production with the default margin', async () => {
+      const config = new FakeConfigurationService();
+      config.set('application.isProduction', true);
+      config.set('relay.gasToken', configuration);
+
+      const service = buildService(config, mockLoggingService);
+
+      await expect(service.isEnabled(chainId)).resolves.toBe(true);
+      expect(mockLoggingService.error).not.toHaveBeenCalled();
+    });
+
+    it('does not disable Safe-pays for a zero margin outside production', async () => {
+      const config = new FakeConfigurationService();
+      config.set('application.isProduction', false);
+      config.set('relay.gasToken', { ...configuration, minMarginBps: 0 });
+
+      const service = buildService(config, mockLoggingService);
+
+      await expect(service.isEnabled(chainId)).resolves.toBe(true);
+      expect(mockLoggingService.error).not.toHaveBeenCalled();
     });
   });
 });
