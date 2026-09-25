@@ -18,6 +18,8 @@ import { SafeDecoder } from '@/modules/contracts/domain/decoders/safe-decoder.he
 import { MultiSendDecoder } from '@/modules/contracts/domain/decoders/multi-send-decoder.helper';
 import { Erc20Decoder } from '@/modules/relay/domain/contracts/decoders/erc-20-decoder.helper';
 import { ProxyFactoryDecoder } from '@/modules/relay/domain/contracts/decoders/proxy-factory-decoder.helper';
+import { DelayModifierDecoder } from '@/modules/alerts/domain/contracts/decoders/delay-modifier-decoder.helper';
+import { executeNextTxEncoder } from '@/modules/alerts/domain/contracts/__tests__/encoders/delay-modifier-encoder.builder';
 import type { LimitAddressesMapper } from '@/modules/relay/domain/limit-addresses.mapper';
 import { NestedRefundError } from '@/modules/relay/domain/errors/nested-refund.error';
 import {
@@ -54,6 +56,7 @@ describe('ScreeningAddressesMapper', () => {
       new Erc20Decoder(),
       new MultiSendDecoder(mockLoggingService),
       new ProxyFactoryDecoder(),
+      new DelayModifierDecoder(),
     );
   });
 
@@ -98,7 +101,7 @@ describe('ScreeningAddressesMapper', () => {
       .with('data', '0x')
       .encode();
 
-    await target.map({
+    const result = await target.map({
       version,
       chainId,
       to: safe.address,
@@ -107,6 +110,64 @@ describe('ScreeningAddressesMapper', () => {
     });
 
     expect(mockLimitAddressesMapper.getLimitAddresses).toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.arrayContaining([
+        { address: safe.address, role: 'safe' },
+        ...safe.owners.map((owner) => ({ address: owner, role: 'owner' })),
+      ]),
+    );
+  });
+
+  it('screens the module target, inner Safe target and added owner for a DelayModifier recovery relay', async () => {
+    const safe = safeBuilder().build();
+    mockLimitAddressesMapper.getLimitAddresses.mockResolvedValue([
+      safe.address,
+    ]);
+    mockSafeRepository.getSafe.mockResolvedValue(safe);
+    const newOwner = address();
+    const moduleTo = address();
+    const innerExec = execTransactionEncoder()
+      .with('to', safe.address)
+      .with(
+        'data',
+        addOwnerWithThresholdEncoder().with('owner', newOwner).encode(),
+      )
+      .with('gasPrice', BigInt(0))
+      .encode();
+    const batch = multiSendEncoder()
+      .with(
+        'transactions',
+        multiSendTransactionsEncoder([
+          {
+            operation: 0,
+            to: safe.address,
+            value: BigInt(0),
+            data: innerExec,
+          },
+        ]),
+      )
+      .encode();
+    const data = executeNextTxEncoder()
+      .with('to', moduleTo)
+      .with('data', batch)
+      .with('operation', 1)
+      .encode();
+
+    const result = await target.map({
+      version,
+      chainId,
+      to: address(),
+      data,
+      isSafePays: false,
+    });
+
+    expect(result).toEqual(
+      expect.arrayContaining([
+        { address: moduleTo, role: 'to' },
+        { address: safe.address, role: 'to' },
+        { address: newOwner, role: 'recipient' },
+      ]),
+    );
   });
 
   it('decodes transferFrom, approve, addOwnerWithThreshold and swapOwner inside MultiSend', async () => {
