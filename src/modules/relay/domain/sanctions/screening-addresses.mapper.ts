@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { getAddress, type Address, type Hex } from 'viem';
+import { getAddress, zeroAddress, type Address, type Hex } from 'viem';
 import { SafeDecoder } from '@/modules/contracts/domain/decoders/safe-decoder.helper';
 import { MultiSendDecoder } from '@/modules/contracts/domain/decoders/multi-send-decoder.helper';
 import { Erc20Decoder } from '@/modules/relay/domain/contracts/decoders/erc-20-decoder.helper';
@@ -41,6 +41,7 @@ export class ScreeningAddressesMapper {
       owners.forEach((owner) =>
         screened.push({ address: owner, role: 'owner' }),
       );
+      this.screenCreateProxySetup(args.data, screened);
       return screened;
     }
 
@@ -64,10 +65,19 @@ export class ScreeningAddressesMapper {
     return screened;
   }
 
+  /**
+   * Runs the nested-refund guard alone, independently of sanctions screening
+   * being enabled. A MultiSend-wrapped execTransaction with gasPrice > 0 must
+   * never reach a relayer, screening on or off.
+   */
+  assertNoNestedRefund(data: Hex): void {
+    this.walk(data, 0, null);
+  }
+
   private walk(
     data: Hex,
     depth: number,
-    screened: Array<ScreenedAddress>,
+    screened: Array<ScreenedAddress> | null,
   ): void {
     const safeCall = this.tryDecodeSafe(data);
     if (safeCall?.functionName === 'execTransaction') {
@@ -75,22 +85,22 @@ export class ScreeningAddressesMapper {
       if (depth > 0 && gasPrice > BigInt(0)) {
         throw new NestedRefundError();
       }
-      screened.push({ address: to, role: 'to' });
+      screened?.push({ address: to, role: 'to' });
       this.walk(innerData, depth + 1, screened);
       return;
     }
     if (safeCall?.functionName === 'execTransactionFromModule') {
       const [to, , innerData] = safeCall.args;
-      screened.push({ address: to, role: 'to' });
+      screened?.push({ address: to, role: 'to' });
       this.walk(innerData, depth + 1, screened);
       return;
     }
     if (safeCall?.functionName === 'addOwnerWithThreshold') {
-      screened.push({ address: safeCall.args[0], role: 'recipient' });
+      screened?.push({ address: safeCall.args[0], role: 'recipient' });
       return;
     }
     if (safeCall?.functionName === 'swapOwner') {
-      screened.push({ address: safeCall.args[2], role: 'recipient' });
+      screened?.push({ address: safeCall.args[2], role: 'recipient' });
       return;
     }
 
@@ -100,14 +110,14 @@ export class ScreeningAddressesMapper {
       delayCall?.functionName === 'executeNextTx'
     ) {
       const [to, , innerData] = delayCall.args;
-      screened.push({ address: to, role: 'to' });
+      screened?.push({ address: to, role: 'to' });
       this.walk(innerData, depth + 1, screened);
       return;
     }
 
     if (this.multiSendDecoder.helpers.isMultiSend(data)) {
       for (const tx of this.multiSendDecoder.mapMultiSendTransactions(data)) {
-        screened.push({ address: getAddress(tx.to), role: 'to' });
+        screened?.push({ address: getAddress(tx.to), role: 'to' });
         this.walk(tx.data, depth + 1, screened);
       }
       return;
@@ -118,14 +128,39 @@ export class ScreeningAddressesMapper {
       erc20Call?.functionName === 'transfer' ||
       erc20Call?.functionName === 'approve'
     ) {
-      screened.push({ address: erc20Call.args[0], role: 'recipient' });
+      screened?.push({ address: erc20Call.args[0], role: 'recipient' });
     } else if (erc20Call?.functionName === 'transferFrom') {
-      screened.push(
+      screened?.push(
         { address: erc20Call.args[0], role: 'recipient' },
         { address: erc20Call.args[1], role: 'recipient' },
       );
     }
     // ponytail: arbitrary contract calls (swaps, bridges) are screened by `to` only; decode more targets when a real case appears
+  }
+
+  /**
+   * For a Safe creation relay, screens the setup() delegatecall target (`to`)
+   * and payment receiver alongside the owners already collected.
+   */
+  private screenCreateProxySetup(
+    data: Hex,
+    screened: Array<ScreenedAddress>,
+  ): void {
+    const proxyCall = this.tryDecodeProxyFactory(data);
+    if (proxyCall?.functionName !== 'createProxyWithNonce') {
+      return;
+    }
+    const setupCall = this.tryDecodeSafe(proxyCall.args[1]);
+    if (setupCall?.functionName !== 'setup') {
+      return;
+    }
+    const [, , to, , , , , paymentReceiver] = setupCall.args;
+    if (to !== zeroAddress) {
+      screened.push({ address: to, role: 'to' });
+    }
+    if (paymentReceiver !== zeroAddress) {
+      screened.push({ address: paymentReceiver, role: 'recipient' });
+    }
   }
 
   private isCreateProxy(data: Hex): boolean {

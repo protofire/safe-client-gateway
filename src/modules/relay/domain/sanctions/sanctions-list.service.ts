@@ -2,6 +2,7 @@ import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
 import { Interval } from '@nestjs/schedule';
 import { getAddress, type Address } from 'viem';
 import { z } from 'zod';
+import { DateStringSchema } from '@/validation/entities/schemas/date-string.schema';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import {
   NetworkService,
@@ -25,7 +26,7 @@ const SanctionsListSchema = z
     sourceSha256: z.string(),
     sourcePublishDate: z.string(),
     generatedAt: z.string(),
-    checkedAt: z.string().datetime(),
+    checkedAt: DateStringSchema,
     count: z.number().int().positive(),
     addresses: z.array(z.string().regex(/^0x[0-9a-f]{40}$/)),
   })
@@ -84,6 +85,12 @@ export class SanctionsListService implements OnModuleInit {
       }
     }
     this.misconfigured = misconfigured;
+    if (!misconfigured && !this.config.listUrl) {
+      this.loggingService.warn({
+        type: LogType.SanctionsScreeningDisabled,
+        message: 'sanctions screening disabled (SANCTIONS_LIST_URL empty)',
+      });
+    }
     if (
       !Number.isFinite(this.config.maxStalenessHours) ||
       this.config.maxStalenessHours <= 0

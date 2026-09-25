@@ -17,7 +17,8 @@ export default (): ReturnType<typeof configuration> => ({
   },
   application: {
     // false by default: relay.sanctions.listUrl is undefined in this fixture, and
-    // SanctionsListService throws when isProduction is true without a configured list
+    // in production without a URL SanctionsListService would fail closed
+    // (every relay 503s), which would break these fixture-based suites
     isProduction: false,
     isDevelopment: faker.datatype.boolean(),
     runMigrations: true,

@@ -89,6 +89,19 @@ describe('SanctionsListService', () => {
     expect(service({ listUrl: undefined }).isEnabled()).toBe(false);
   });
 
+  it('logs a warning once at construction when disabled outside production', () => {
+    service({ listUrl: undefined });
+    expect(mockLoggingService.warn).toHaveBeenCalledTimes(1);
+    expect(mockLoggingService.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'SANCTIONS_SCREENING_DISABLED' }),
+    );
+  });
+
+  it('does not log the disabled warning when a list URL is configured', () => {
+    service({});
+    expect(mockLoggingService.warn).not.toHaveBeenCalled();
+  });
+
   it('is unavailable before the first successful load', () => {
     expect(service({}).check([getAddress(clean)], now).result).toBe(
       'unavailable',

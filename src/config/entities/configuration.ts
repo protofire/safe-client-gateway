@@ -744,7 +744,7 @@ const parseSafeNonNegativeInteger = (
   value: string | undefined,
   fallback: number,
 ): number => {
-  if (value === undefined) return fallback;
+  if (value === undefined || value === '') return fallback;
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 0) {
     throw new Error(

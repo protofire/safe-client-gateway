@@ -8,6 +8,7 @@ import {
   SanctionsListUnavailableError,
   SanctionsScreeningError,
 } from '@/modules/relay/domain/errors/sanctions-screening.error';
+import { NestedRefundError } from '@/modules/relay/domain/errors/nested-refund.error';
 
 const mockList = jest.mocked({
   isEnabled: jest.fn(),
@@ -15,6 +16,7 @@ const mockList = jest.mocked({
 } as jest.MockedObjectDeep<SanctionsListService>);
 const mockMapper = jest.mocked({
   map: jest.fn(),
+  assertNoNestedRefund: jest.fn(),
 } as jest.MockedObjectDeep<ScreeningAddressesMapper>);
 const mockLogging = jest.mocked({
   info: jest.fn(),
@@ -47,10 +49,21 @@ describe('RelayScreeningService', () => {
     target = new RelayScreeningService(mockList, mockMapper, mockLogging);
   });
 
-  it('skips everything when screening is disabled', async () => {
+  it('skips everything but the nested-refund guard when screening is disabled', async () => {
     mockList.isEnabled.mockReturnValue(false);
     await target.screen(args);
     expect(mockMapper.map).not.toHaveBeenCalled();
+    expect(mockMapper.assertNoNestedRefund).toHaveBeenCalledWith(args.data);
+  });
+
+  it('still rejects a nested refund when screening is disabled', async () => {
+    mockList.isEnabled.mockReturnValue(false);
+    mockMapper.assertNoNestedRefund.mockImplementation(() => {
+      throw new NestedRefundError();
+    });
+    await expect(target.screen(args)).rejects.toThrow(
+      'A transaction that refunds the executor must be relayed on its own, not inside a batch.',
+    );
   });
 
   it('logs a clear check with list version and dataHash, and returns', async () => {

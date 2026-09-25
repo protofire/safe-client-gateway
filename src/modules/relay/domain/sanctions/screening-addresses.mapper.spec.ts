@@ -1,10 +1,12 @@
 import { faker } from '@faker-js/faker';
-import { getAddress, type Address } from 'viem';
+import { getAddress, zeroAddress, type Address } from 'viem';
 import {
   addOwnerWithThresholdEncoder,
   execTransactionEncoder,
+  setupEncoder,
   swapOwnerEncoder,
 } from '@/modules/contracts/domain/__tests__/encoders/safe-encoder.builder';
+import { createProxyWithNonceEncoder } from '@/modules/relay/domain/contracts/__tests__/encoders/proxy-factory-encoder.builder';
 import {
   erc20ApproveEncoder,
   erc20TransferEncoder,
@@ -260,6 +262,136 @@ describe('ScreeningAddressesMapper', () => {
     await expect(
       target.map({ version, chainId, to: address(), data, isSafePays: false }),
     ).rejects.toThrow(NestedRefundError);
+  });
+
+  it('screens owners, setup delegatecall target and payment receiver on a Safe creation relay', async () => {
+    const owners = [address(), address()];
+    const setupTo = address();
+    const paymentReceiver = address();
+    mockLimitAddressesMapper.getLimitAddresses.mockResolvedValue(owners);
+    const data = createProxyWithNonceEncoder()
+      .with(
+        'initializer',
+        setupEncoder()
+          .with('owners', owners)
+          .with('to', setupTo)
+          .with('paymentReceiver', paymentReceiver)
+          .encode(),
+      )
+      .encode();
+
+    const result = await target.map({
+      version,
+      chainId,
+      to: address(),
+      data,
+      isSafePays: false,
+    });
+
+    expect(result).toEqual(
+      expect.arrayContaining([
+        ...owners.map((owner) => ({ address: owner, role: 'owner' })),
+        { address: setupTo, role: 'to' },
+        { address: paymentReceiver, role: 'recipient' },
+      ]),
+    );
+  });
+
+  it('does not screen a zero-address setup target/paymentReceiver on a Safe creation relay', async () => {
+    const owners = [address()];
+    mockLimitAddressesMapper.getLimitAddresses.mockResolvedValue(owners);
+    const data = createProxyWithNonceEncoder()
+      .with(
+        'initializer',
+        setupEncoder()
+          .with('owners', owners)
+          .with('to', zeroAddress)
+          .with('paymentReceiver', zeroAddress)
+          .encode(),
+      )
+      .encode();
+
+    const result = await target.map({
+      version,
+      chainId,
+      to: address(),
+      data,
+      isSafePays: false,
+    });
+
+    expect(result).toEqual([{ address: owners[0], role: 'owner' }]);
+  });
+
+  it('screens inner recipients of a non-Safe-pays MultiSend batch', async () => {
+    const safe = safeBuilder().build();
+    mockLimitAddressesMapper.getLimitAddresses.mockResolvedValue([
+      safe.address,
+    ]);
+    mockSafeRepository.getSafe.mockResolvedValue(safe);
+    const [recipientA, recipientB] = [address(), address()];
+    const batch = multiSendEncoder()
+      .with(
+        'transactions',
+        multiSendTransactionsEncoder([
+          {
+            operation: 0,
+            to: address(),
+            value: BigInt(0),
+            data: erc20TransferEncoder().with('to', recipientA).encode(),
+          },
+          {
+            operation: 0,
+            to: address(),
+            value: BigInt(0),
+            data: erc20TransferEncoder().with('to', recipientB).encode(),
+          },
+        ]),
+      )
+      .encode();
+    const data = execTransactionEncoder()
+      .with('to', address())
+      .with('data', batch)
+      .with('operation', 1)
+      .with('gasPrice', BigInt(0))
+      .encode();
+
+    const result = await target.map({
+      version,
+      chainId,
+      to: safe.address,
+      data,
+      isSafePays: false,
+    });
+
+    expect(result).toEqual(
+      expect.arrayContaining([
+        { address: recipientA, role: 'recipient' },
+        { address: recipientB, role: 'recipient' },
+      ]),
+    );
+  });
+
+  it('runs the nested-refund guard on its own via assertNoNestedRefund', () => {
+    const nested = execTransactionEncoder()
+      .with('gasPrice', BigInt(1))
+      .encode();
+    const data = multiSendEncoder()
+      .with(
+        'transactions',
+        multiSendTransactionsEncoder([
+          { operation: 0, to: address(), value: BigInt(0), data: nested },
+        ]),
+      )
+      .encode();
+
+    expect(() => target.assertNoNestedRefund(data)).toThrow(NestedRefundError);
+    expect(mockLimitAddressesMapper.getLimitAddresses).not.toHaveBeenCalled();
+    expect(mockSafeRepository.getSafe).not.toHaveBeenCalled();
+  });
+
+  it('does not throw via assertNoNestedRefund for a clean transaction', () => {
+    const data = execTransactionEncoder().with('gasPrice', BigInt(0)).encode();
+    expect(() => target.assertNoNestedRefund(data)).not.toThrow();
   });
 
   it('throws when owners cannot be loaded for an existing Safe', async () => {

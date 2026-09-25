@@ -365,4 +365,78 @@ describe('Relay controller - sanctions screening', () => {
       );
     });
   });
+
+  describe('screening disabled', () => {
+    beforeEach(async () => {
+      const moduleFixture = await createTestModule({
+        config: () => ({
+          ...configuration(),
+          relay: {
+            ...configuration().relay,
+            limit: 5,
+            sanctions: {
+              listUrl: undefined,
+              maxStalenessHours: 48,
+              extraAddresses: [],
+            },
+          },
+        }),
+      });
+      configurationService = moduleFixture.get(IConfigurationService);
+      safeConfigUrl = configurationService.getOrThrow('safeConfig.baseUri');
+      relayUrl = configurationService.getOrThrow('relay.baseUri');
+      networkService = moduleFixture.get(NetworkService);
+
+      app = await new TestAppProvider().provide(moduleFixture);
+      await app.init();
+    });
+
+    it('still answers 422 for a MultiSend containing execTransaction with gasPrice > 0', async () => {
+      const chain = chainBuilder().with('chainId', supportedChainId).build();
+      const safe = safeBuilder().build();
+      const safeAddress = getAddress(safe.address);
+      const [multiSendAddress] = getMultiSendDeployments({
+        version: multiSendVersion,
+        chainId: chain.chainId,
+      });
+      const transactions = [
+        execTransactionEncoder().encode(),
+        execTransactionEncoder().with('gasPrice', BigInt(1)).encode(),
+      ].map((data) => ({
+        operation: 0,
+        data,
+        to: safeAddress,
+        value: BigInt(0),
+      }));
+      const data = multiSendEncoder()
+        .with('transactions', multiSendTransactionsEncoder(transactions))
+        .encode();
+
+      networkService.get.mockImplementation(({ url }) => {
+        switch (url) {
+          case `${safeConfigUrl}/api/v1/chains/${chain.chainId}`:
+            return Promise.resolve({ data: rawify(chain), status: 200 });
+          case `${chain.transactionService}/api/v1/safes/${safeAddress}`:
+            return Promise.resolve({ data: rawify(safe), status: 200 });
+          default:
+            return Promise.reject(`No matching rule for url: ${url}`);
+        }
+      });
+      networkService.post.mockImplementation(({ url }) => {
+        return Promise.reject(`No matching rule for url: ${url}`);
+      });
+
+      const res = await request(app.getHttpServer())
+        .post(`/v1/chains/${chain.chainId}/relay`)
+        .send({ version: multiSendVersion, to: multiSendAddress, data })
+        .expect(422);
+
+      expect(res.body.message).toBe(
+        'A transaction that refunds the executor must be relayed on its own, not inside a batch.',
+      );
+      expect(networkService.post).not.toHaveBeenCalledWith(
+        expect.objectContaining({ url: expect.stringContaining(relayUrl) }),
+      );
+    });
+  });
 });
