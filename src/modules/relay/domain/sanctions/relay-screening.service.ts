@@ -28,6 +28,8 @@ export class RelayScreeningService {
     isSafePays: boolean;
   }): Promise<void> {
     if (!this.sanctionsList.isEnabled()) {
+      // Screening off must not skip the nested-refund guard: it runs on its own
+      this.screeningAddressesMapper.assertNoNestedRefund(args.data);
       return;
     }
     const screened = await this.screeningAddressesMapper.map(args);

@@ -30,6 +30,7 @@ export enum LogType {
   RateLimit = 'RATE_LIMIT',
   SanctionsListRefreshFailed = 'SANCTIONS_LIST_REFRESH_FAILED',
   SanctionsScreening = 'SANCTIONS_SCREENING',
+  SanctionsScreeningDisabled = 'SANCTIONS_SCREENING_DISABLED',
   TransactionPropose = 'TRANSACTION_PROPOSE',
   TransactionValidity = 'TRANSACTION_VALIDITY',
   TxnExportFetchRequest = 'TRANSACTION_EXPORT_FETCH_REQUEST',
