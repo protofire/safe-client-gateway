@@ -106,6 +106,7 @@ describe('Relay controller', () => {
   let balancesService: jest.MockedObjectDeep<BalancesService>;
   let safeConfigUrl: string;
   let relayUrl: string;
+  let getCode: jest.Mock;
 
   beforeEach(async () => {
     jest.resetAllMocks();
@@ -144,12 +145,13 @@ describe('Relay controller', () => {
 
     const blockchainApiManager =
       moduleFixture.get<IBlockchainApiManager>(IBlockchainApiManager);
+    getCode = jest.fn().mockResolvedValue('0x6080');
     jest.spyOn(blockchainApiManager, 'getApi').mockResolvedValue({
       estimateGas: jest.fn().mockResolvedValue(BigInt(100_000)),
       call: jest.fn().mockResolvedValue({
         data: encodeAbiParameters([{ type: 'bool' }], [true]),
       }),
-      getCode: jest.fn().mockResolvedValue('0x6080'),
+      getCode,
     } as never);
 
     app = await new TestAppProvider().provide(moduleFixture);
@@ -2704,6 +2706,8 @@ describe('Relay controller', () => {
                 data,
               });
 
+            // Owners are EOAs: the GET reports their creation count
+            getCode.mockResolvedValue('0x');
             for (const owner of owners) {
               await request(app.getHttpServer())
                 .get(`/v1/chains/${chain.chainId}/relay/${owner}`)

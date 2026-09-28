@@ -105,13 +105,14 @@ export class DailyLimitRelayer implements IRelayer {
     }
 
     // ponytail: slots reserved here are not released when a later address, the budget or the relayer refuses; at most one lost slot per refused attempt, release on refusal if users hit it
+    const countKind = kind === 'creation' ? 'creation' : 'safe';
     const limit =
-      kind === 'creation'
+      countKind === 'creation'
         ? config.perOwnerCreationsPerDay
         : config.perSafePerDay;
     for (const address of limitAddresses) {
       const count = await this.cacheService.increment(
-        this.countKey(args.chainId, address),
+        this.countKey(args.chainId, countKind, address),
         DailyLimitRelayer.COUNT_TTL_SECONDS,
         0,
       );
@@ -160,14 +161,14 @@ export class DailyLimitRelayer implements IRelayer {
     }
     const client = await this.blockchainApiManager.getApi(args.chainId);
     const code = await client.getCode({ address: args.address });
-    // An owner that is itself a contract is reported with the Safe limit; creation still enforces the owner limit (spec §4.1).
+    const countKind = code && code !== '0x' ? 'safe' : 'creation';
     const limit =
-      code && code !== '0x'
+      countKind === 'safe'
         ? config.perSafePerDay
         : config.perOwnerCreationsPerDay;
     const count =
       (await this.cacheService.getCounter(
-        this.countKey(args.chainId, args.address),
+        this.countKey(args.chainId, countKind, args.address),
       )) ?? 0;
     return { remaining: Math.max(limit - count, 0), limit };
   }
@@ -181,9 +182,13 @@ export class DailyLimitRelayer implements IRelayer {
     return chain.features.includes(DailyLimitRelayer.FEATURE) ? config : null;
   }
 
-  private countKey(chainId: string, address: Address): string {
-    // Checksummed so the POST (calldata addresses) and the GET (path parameter) hit the same key
-    return `sponsored-count:${chainId}:${getAddress(address)}:${new Date().toISOString().slice(0, 10)}`;
+  private countKey(
+    chainId: string,
+    countKind: 'creation' | 'safe',
+    address: Address,
+  ): string {
+    // Kind keeps creation-owner counts off a Safe's quota; checksummed so POST and GET hit the same key
+    return `sponsored-count:${chainId}:${countKind}:${getAddress(address)}:${new Date().toISOString().slice(0, 10)}`;
   }
 
   private getKind(data: Hex): 'exec' | 'multisend' | 'creation' | 'other' {

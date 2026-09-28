@@ -50,7 +50,7 @@ describe('DailyLimitRelayer (sponsored)', () => {
     maxGasPriceWei: '500000000',
   };
   const safe = getAddress(faker.finance.ethereumAddress());
-  const execData = execTransactionEncoder().encode(); // gasPrice 0 by default — verify in the builder
+  const execData = execTransactionEncoder().encode();
   let cache: FakeCacheService;
   let target: DailyLimitRelayer;
 
@@ -152,6 +152,21 @@ describe('DailyLimitRelayer (sponsored)', () => {
     );
   });
 
+  it('does not let creations naming a Safe as owner burn that Safe’s quota', async () => {
+    const data = createProxyWithNonceEncoder().encode();
+    mockMapper.getLimitAddresses.mockResolvedValue([safe]);
+    await relay(data);
+    await relay(data);
+    mockMapper.getLimitAddresses.mockResolvedValue([safe]);
+    await expect(
+      target.getRelaysRemaining({ chainId, address: safe }),
+    ).resolves.toEqual({ remaining: 3, limit: 3 });
+    await relay();
+    await relay();
+    await relay();
+    expect(mockRelayApi.relay).toHaveBeenCalledTimes(5);
+  });
+
   it('does not reserve quota or budget when simulation fails', async () => {
     mockFee.simulate.mockRejectedValue(new Error('Simulation failed: GS013'));
     await expect(relay()).rejects.toThrow('Simulation failed');
@@ -248,6 +263,25 @@ describe('DailyLimitRelayer (sponsored)', () => {
       await expect(
         target.getRelaysRemaining({ chainId, address: safe }),
       ).resolves.toEqual({ remaining: 2, limit: 2 });
+    });
+
+    it('reports creation usage for an address without code', async () => {
+      mockMapper.getLimitAddresses.mockResolvedValue([safe]);
+      await relay(createProxyWithNonceEncoder().encode());
+      mockClient.getCode.mockResolvedValue(undefined);
+      await expect(
+        target.getRelaysRemaining({ chainId, address: safe }),
+      ).resolves.toEqual({ remaining: 1, limit: 2 });
+    });
+
+    it('reports Safe usage, not creation usage, for a contract', async () => {
+      await relay();
+      mockMapper.getLimitAddresses.mockResolvedValue([safe]);
+      await relay(createProxyWithNonceEncoder().encode());
+      mockClient.getCode.mockResolvedValue('0x6080');
+      await expect(
+        target.getRelaysRemaining({ chainId, address: safe }),
+      ).resolves.toEqual({ remaining: 2, limit: 3 });
     });
 
     it('matches the POST key regardless of address case', async () => {
