@@ -1,5 +1,6 @@
 import type { RelayRules } from '@/modules/relay/domain/entities/relay.configuration';
 import { GasTokenConfigurationSchema } from '@/modules/relay/domain/entities/gas-token.configuration';
+import { SponsoredChainsConfigurationSchema } from '@/modules/relay/domain/entities/sponsored-chains.configuration';
 
 // Custom configuration for the application
 // eslint-disable-next-line @typescript-eslint/explicit-function-return-type
@@ -461,6 +462,11 @@ export default () => ({
         50_000,
       ),
     }),
+    // Sponsored relays (`gasPrice == 0`, the relayer pays):
+    // JSON: { "<chainId>": { "perSafePerDay": 100, "perOwnerCreationsPerDay": 20, "maxGasLimit": 1500000, "dailyBudgetGwei": 100000000, "maxGasPriceWei": "500000000" } }
+    sponsoredChains: SponsoredChainsConfigurationSchema.parse(
+      parseJsonRecord(process.env.RELAY_SPONSORED_CHAINS),
+    ),
     // OFAC screening of every relay, mandatory in every environment; see
     // SanctionsListService for what happens without a URL.
     sanctions: {
