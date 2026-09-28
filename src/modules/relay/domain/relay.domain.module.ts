@@ -16,6 +16,9 @@ import { RelayNativePriceService } from '@/modules/relay/domain/relay-native-pri
 import { GasTokenFeeService } from '@/modules/relay/domain/gas-token-fee.service';
 import { RelayManager } from '@/modules/relay/domain/relay.manager';
 import { IRelayManager } from '@/modules/relay/domain/interfaces/relay-manager.interface';
+import { SanctionsListService } from '@/modules/relay/domain/sanctions/sanctions-list.service';
+import { ScreeningAddressesMapper } from '@/modules/relay/domain/sanctions/screening-addresses.mapper';
+import { RelayScreeningService } from '@/modules/relay/domain/sanctions/relay-screening.service';
 
 @Module({
   imports: [
@@ -36,6 +39,9 @@ import { IRelayManager } from '@/modules/relay/domain/interfaces/relay-manager.i
     GasTokenFeeService,
     RelayNativePriceService,
     GasTokenRelayer,
+    SanctionsListService,
+    ScreeningAddressesMapper,
+    RelayScreeningService,
     {
       provide: IRelayManager,
       useClass: RelayManager,
