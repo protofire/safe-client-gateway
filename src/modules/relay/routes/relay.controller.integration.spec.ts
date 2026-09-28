@@ -117,9 +117,10 @@ describe('Relay controller', () => {
       relay: {
         ...defaultConfiguration.relay,
         limit: 5,
-        // all API-key chains: some upstream cases (e.g. 'different chains') use chains outside supportedChainIds
+        // all non-campaign API-key chains: some upstream cases (e.g. 'different chains') use chains
+        // outside supportedChainIds; a sponsored entry would route campaign chains to the DailyLimitRelayer
         sponsoredChains: Object.fromEntries(
-          allSupportedChainIds.map((id) => [
+          nonnoFeeCampaignChainIds.map((id) => [
             id,
             {
               perSafePerDay: 5,
