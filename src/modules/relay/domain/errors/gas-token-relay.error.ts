@@ -1,6 +1,9 @@
 import { HttpException, HttpStatus } from '@nestjs/common';
 
-export type GasTokenRelayErrorCode = 'SIMULATION_FAILED';
+export type GasTokenRelayErrorCode =
+  | 'SIMULATION_FAILED'
+  | 'CHAIN_NOT_SPONSORED'
+  | 'BUDGET_EXHAUSTED';
 
 /**
  * A Safe-pays relay was refused before reaching the relayer.

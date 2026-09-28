@@ -16,6 +16,7 @@ const redisClientTypeMock = {
   unlink: jest.fn(),
   quit: jest.fn(),
   scanIterator: jest.fn(),
+  multi: jest.fn(),
 } as unknown as jest.MockedObjectDeep<RedisClientType>;
 
 const mockLoggingService: jest.MockedObjectDeep<ILoggingService> = {
@@ -111,5 +112,33 @@ describe('RedisCacheService with a Key Prefix', () => {
       'NX',
     );
     jest.useRealTimers();
+  });
+
+  it('incrementing a counter should use the prefix, like getCounter', async () => {
+    const exec = jest.fn().mockResolvedValue([3, 'OK', '3']);
+    const transaction = {
+      incrBy: jest.fn(),
+      incr: jest.fn(),
+      expire: jest.fn(),
+      get: jest.fn(),
+    };
+    transaction.incrBy.mockReturnValue(transaction);
+    transaction.incr.mockReturnValue(transaction);
+    transaction.expire.mockReturnValue(transaction);
+    transaction.get.mockReturnValue({ exec });
+    (redisClientTypeMock.multi as unknown as jest.Mock).mockReturnValue(
+      transaction,
+    );
+    const key = faker.string.alphanumeric();
+
+    await redisCacheService.increment(key, 60, 0, 5);
+
+    expect(transaction.incrBy).toHaveBeenCalledWith(`${keyPrefix}-${key}`, 5);
+    expect(transaction.expire).toHaveBeenCalledWith(
+      `${keyPrefix}-${key}`,
+      expect.any(Number),
+      'NX',
+    );
+    expect(transaction.get).toHaveBeenCalledWith(`${keyPrefix}-${key}`);
   });
 });
