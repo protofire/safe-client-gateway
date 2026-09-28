@@ -250,6 +250,30 @@ export default (): ReturnType<typeof configuration> => ({
   },
   relay: {
     baseUri: faker.internet.url({ appendSlash: false }),
+    provider: 'gelato',
+    ozRelayer: {
+      baseUri: faker.internet.url({ appendSlash: false }),
+      apiKey: faker.string.hexadecimal({ length: 32 }),
+      relayerIds: { 11155111: 'sepolia' },
+    },
+    gasToken: {
+      refundReceivers: {},
+      nativeUsdPrices: {},
+      nativeSpendBudgets: {},
+      allowlist: {},
+      marginBps: 2_000,
+      minMarginBps: 500,
+      baseGas: 70_000,
+      baseGasPerSignature: 1_500,
+      gasLimitBuffer: 50_000,
+    },
+    sanctions: {
+      listUrl: undefined,
+      maxStalenessHours: 48,
+      extraAddresses: [],
+      // Screening off by default in fixture-based suites, which don't set up a list
+      disabled: true,
+    },
     limit: faker.number.int({ min: 1 }),
     ttlSeconds: faker.number.int(),
     apiKey: {

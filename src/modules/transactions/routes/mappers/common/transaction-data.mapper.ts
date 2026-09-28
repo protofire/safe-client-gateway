@@ -20,7 +20,7 @@ import { TransactionData } from '@/modules/transactions/routes/entities/transact
 import { DataDecodedParamHelper } from '@/modules/transactions/routes/mappers/common/data-decoded-param.helper';
 import { AddressInfo } from '@/routes/common/entities/address-info.entity';
 import type { Address } from 'viem';
-import { getAddress } from 'viem';
+import { AddressSchema } from '@/validation/entities/schemas/address.schema';
 import {
   Erc20Token,
   Erc721Token,
@@ -336,9 +336,10 @@ export class TransactionDataMapper {
     chainId: string,
     value: unknown,
   ): Promise<AddressInfo | null> {
-    if (typeof value === 'string' && value !== NULL_ADDRESS) {
+    const address = AddressSchema.safeParse(value);
+    if (address.success && address.data !== NULL_ADDRESS) {
       const addressInfo = await this.addressInfoHelper
-        .get(chainId, getAddress(value), ['TOKEN', 'CONTRACT'])
+        .get(chainId, address.data, ['TOKEN', 'CONTRACT'])
         .catch(() => null);
       return addressInfo?.name ? addressInfo : null;
     }

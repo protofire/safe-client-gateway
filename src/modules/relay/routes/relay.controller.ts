@@ -21,6 +21,7 @@ import { RelayDtoSchema } from '@/modules/relay/routes/entities/schemas/relay.dt
 import { AddressSchema } from '@/validation/entities/schemas/address.schema';
 import { Relay } from '@/modules/relay/routes/entities/relay.entity';
 import { RelaysRemaining } from '@/modules/relay/routes/entities/relays-remaining.entity';
+import { RelayStatus } from '@/modules/relay/routes/entities/relay-status.entity';
 import type { Address } from 'viem';
 
 @ApiTags('relay')
@@ -102,5 +103,25 @@ export class RelayController {
     safeAddress: Address,
   ): Promise<RelaysRemaining> {
     return this.relayService.getRelaysRemaining({ chainId, safeAddress });
+  }
+
+  @ApiOperation({
+    summary: 'Get relay status',
+    description:
+      'Returns the state of a relayed transaction by the task id returned from the relay endpoint.',
+  })
+  @ApiParam({ name: 'chainId', type: 'string', example: '1' })
+  @ApiParam({
+    name: 'taskId',
+    type: 'string',
+    description: 'Task id returned when the transaction was relayed',
+  })
+  @ApiOkResponse({ type: RelayStatus })
+  @Get('status/:taskId')
+  async getRelayStatus(
+    @Param('chainId') chainId: string,
+    @Param('taskId') taskId: string,
+  ): Promise<RelayStatus> {
+    return this.relayService.getRelayStatus({ chainId, taskId });
   }
 }
