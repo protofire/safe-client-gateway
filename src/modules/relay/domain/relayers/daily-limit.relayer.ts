@@ -26,6 +26,9 @@ import { SafeDecoder } from '@/modules/contracts/domain/decoders/safe-decoder.he
 import { MultiSendDecoder } from '@/modules/contracts/domain/decoders/multi-send-decoder.helper';
 import { ProxyFactoryDecoder } from '@/modules/relay/domain/contracts/decoders/proxy-factory-decoder.helper';
 
+// ponytail: ceiling is 2x the estimate from the Safe's view; upgrade: simulate from the relayer's own address
+const MAX_CLIENT_GAS_LIMIT_FACTOR = 2n;
+
 /**
  * Relays `gasPrice == 0` transactions paid by the relayer ("sponsored").
  * Only chains carrying RELAYING and listed in `relay.sponsoredChains` are sponsored; each relay
@@ -95,10 +98,11 @@ export class DailyLimitRelayer implements IRelayer {
       checkSafeResult: kind === 'exec',
     });
     const simulatedLimit = estimate + this.gasLimitBuffer;
-    const gasLimit =
-      args.gasLimit && args.gasLimit > simulatedLimit
-        ? args.gasLimit
-        : simulatedLimit;
+    const clientCeiling = simulatedLimit * MAX_CLIENT_GAS_LIMIT_FACTOR;
+    let gasLimit = simulatedLimit;
+    if (args.gasLimit && args.gasLimit > simulatedLimit) {
+      gasLimit = args.gasLimit < clientCeiling ? args.gasLimit : clientCeiling;
+    }
     const maxGasLimit = BigInt(config.maxGasLimit);
     if (gasLimit > maxGasLimit) {
       throw new ExceedsMaxGasLimitError(gasLimit, maxGasLimit);

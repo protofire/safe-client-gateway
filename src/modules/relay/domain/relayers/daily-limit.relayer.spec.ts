@@ -177,6 +177,7 @@ describe('DailyLimitRelayer (sponsored)', () => {
   });
 
   it('refuses above maxGasLimit, also when the client asks for more', async () => {
+    mockFee.simulate.mockResolvedValue(BigInt(600_000));
     await expect(relay(execData, BigInt(1_000_001))).rejects.toBeInstanceOf(
       ExceedsMaxGasLimitError,
     );
@@ -185,10 +186,20 @@ describe('DailyLimitRelayer (sponsored)', () => {
     expect(mockRelayApi.relay).not.toHaveBeenCalled();
   });
 
-  it('uses a larger client gasLimit within the cap', async () => {
+  it('uses a larger client gasLimit up to twice the simulated limit', async () => {
+    await relay(execData, BigInt(250_000));
+    expect(mockRelayApi.relay).toHaveBeenCalledWith(
+      expect.objectContaining({ gasLimit: BigInt(250_000) }),
+    );
+  });
+
+  it('caps a client gasLimit at twice the simulated limit, sent and reserved', async () => {
     await relay(execData, BigInt(400_000));
     expect(mockRelayApi.relay).toHaveBeenCalledWith(
-      expect.objectContaining({ gasLimit: BigInt(400_000) }),
+      expect.objectContaining({ gasLimit: BigInt(300_000) }),
+    );
+    expect(mockFee.reserveGasBudget).toHaveBeenCalledWith(
+      expect.objectContaining({ outerGasLimit: BigInt(300_000) }),
     );
   });
 

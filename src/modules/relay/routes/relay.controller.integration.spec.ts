@@ -406,8 +406,9 @@ describe('Relay controller', () => {
                 const chain = chainBuilder().with('chainId', chainId).with('features', ['RELAYING']).build();
                 const safe = safeBuilder().build();
                 const safeAddress = getAddress(safe.address);
-                // Above the simulated floor (estimate 100_000 + buffer 50_000), so the
-                // manual value is used as-is before Gelato adds its own 150_000 buffer.
+                // Above twice the simulated limit (estimate 100_000 + buffer 50_000):
+                // the DailyLimitRelayer caps it at 300_000. NoFeeCampaignRelayer passes
+                // the manual value through. Gelato adds its own 150_000 buffer on top.
                 const gasLimit = '400000';
                 const data = execTransactionEncoder().encode();
                 const taskId = faker.string.uuid();
@@ -453,9 +454,10 @@ describe('Relay controller', () => {
                     taskId,
                   });
 
-                // Gelato adds its own 150_000 buffer to the manual value
                 const expectedGasLimit = (
-                  BigInt(gasLimit) + BigInt(150_000)
+                  (noFeeCampaignSupportedChainIds.includes(chainId)
+                    ? BigInt(gasLimit)
+                    : BigInt(300_000)) + BigInt(150_000)
                 ).toString();
                 expect(networkService.post).toHaveBeenCalledWith({
                   url: `${relayUrl}/relays/v2/sponsored-call`,
