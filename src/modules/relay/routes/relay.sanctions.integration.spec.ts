@@ -20,6 +20,8 @@ import { rawify } from '@/validation/entities/raw.entity';
 import { createTestModule } from '@/__tests__/testing-module';
 import { getDeploymentVersionsByChainIds } from '@/__tests__/deployments.helper';
 import type { Server } from 'net';
+import { encodeAbiParameters } from 'viem';
+import { IBlockchainApiManager } from '@/domain/interfaces/blockchain-api.manager.interface';
 
 const listUrl = 'https://lists.example/sanctioned-evm/latest.json';
 const noFeeCampaignChains = Object.keys(
@@ -73,6 +75,15 @@ describe('Relay controller - sanctions screening', () => {
           relay: {
             ...configuration().relay,
             limit: 5,
+            sponsoredChains: {
+              [supportedChainId]: {
+                perSafePerDay: 5,
+                perOwnerCreationsPerDay: 5,
+                maxGasLimit: 30_000_000,
+                dailyBudgetGwei: Number.MAX_SAFE_INTEGER,
+                maxGasPriceWei: '1',
+              },
+            },
             sanctions: {
               listUrl,
               maxStalenessHours: 48,
@@ -93,12 +104,25 @@ describe('Relay controller - sanctions screening', () => {
         return Promise.reject(`No matching rule for url: ${url}`);
       });
 
+      const blockchainApiManager =
+        moduleFixture.get<IBlockchainApiManager>(IBlockchainApiManager);
+      jest.spyOn(blockchainApiManager, 'getApi').mockResolvedValue({
+        estimateGas: jest.fn().mockResolvedValue(BigInt(100_000)),
+        call: jest.fn().mockResolvedValue({
+          data: encodeAbiParameters([{ type: 'bool' }], [true]),
+        }),
+        getCode: jest.fn().mockResolvedValue('0x6080'),
+      } as never);
+
       app = await new TestAppProvider().provide(moduleFixture);
       await app.init();
     });
 
     it('relays a clean execTransaction (201)', async () => {
-      const chain = chainBuilder().with('chainId', supportedChainId).build();
+      const chain = chainBuilder()
+        .with('chainId', supportedChainId)
+        .with('features', ['RELAYING'])
+        .build();
       const safe = safeBuilder().build();
       const safeAddress = getAddress(safe.address);
       const data = execTransactionEncoder().encode();
