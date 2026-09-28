@@ -10,7 +10,9 @@ describe('SponsoredChainsConfigurationSchema', () => {
   };
 
   it('accepts a valid per-chain map', () => {
-    expect(SponsoredChainsConfigurationSchema.parse({ '84532': entry })).toEqual({ '84532': entry });
+    expect(
+      SponsoredChainsConfigurationSchema.parse({ '84532': entry }),
+    ).toEqual({ '84532': entry });
   });
 
   it('accepts an empty map', () => {
@@ -18,7 +20,11 @@ describe('SponsoredChainsConfigurationSchema', () => {
   });
 
   it('allows perOwnerCreationsPerDay 0 (creation not sponsored)', () => {
-    expect(() => SponsoredChainsConfigurationSchema.parse({ '1': { ...entry, perOwnerCreationsPerDay: 0 } })).not.toThrow();
+    expect(() =>
+      SponsoredChainsConfigurationSchema.parse({
+        '1': { ...entry, perOwnerCreationsPerDay: 0 },
+      }),
+    ).not.toThrow();
   });
 
   it.each([
@@ -31,10 +37,16 @@ describe('SponsoredChainsConfigurationSchema', () => {
     ['maxGasPriceWei', '1e9'],
     ['perOwnerCreationsPerDay', -1],
   ])('rejects %s = %p', (field, value) => {
-    expect(() => SponsoredChainsConfigurationSchema.parse({ '84532': { ...entry, [field]: value } })).toThrow();
+    expect(() =>
+      SponsoredChainsConfigurationSchema.parse({
+        '84532': { ...entry, [field]: value },
+      }),
+    ).toThrow();
   });
 
   it('rejects a non-numeric chain id', () => {
-    expect(() => SponsoredChainsConfigurationSchema.parse({ base: entry })).toThrow();
+    expect(() =>
+      SponsoredChainsConfigurationSchema.parse({ base: entry }),
+    ).toThrow();
   });
 });

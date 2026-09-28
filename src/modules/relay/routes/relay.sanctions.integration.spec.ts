@@ -104,8 +104,9 @@ describe('Relay controller - sanctions screening', () => {
         return Promise.reject(`No matching rule for url: ${url}`);
       });
 
-      const blockchainApiManager =
-        moduleFixture.get<IBlockchainApiManager>(IBlockchainApiManager);
+      const blockchainApiManager = moduleFixture.get<IBlockchainApiManager>(
+        IBlockchainApiManager,
+      );
       jest.spyOn(blockchainApiManager, 'getApi').mockResolvedValue({
         estimateGas: jest.fn().mockResolvedValue(BigInt(100_000)),
         call: jest.fn().mockResolvedValue({
