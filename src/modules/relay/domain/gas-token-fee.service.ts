@@ -60,9 +60,11 @@ export class GasTokenFeeService {
   private static readonly WEI_PER_ETHER = BigInt(10) ** BigInt(18);
   /** Fee model version reported to the web app */
   private static readonly PRICING_PHASE = 2;
-  /** Any account works: with a non-zero gasToken the Safe pays refundReceiver, not msg.sender. */
+  /** Any account works: the Safe pays refundReceiver, not msg.sender. */
   private static readonly SIMULATION_SENDER: Address =
     '0x0000000000000000000000000000000000000001';
+  /** Simulation sender balance when simulating at a real gas price, enough for any gas limit */
+  private static readonly SIMULATION_SENDER_BALANCE = BigInt(10) ** BigInt(30);
   /** SimulateTxAccessor versions to look for, newest first; any of them works with a Safe ≥ 1.3.0 */
   private static readonly ACCESSOR_VERSIONS = ['1.4.1', '1.3.0'];
   /** `simulateAndRevert` measures the inner call once; the real one runs in a different state, so pad it */
@@ -366,25 +368,35 @@ export class GasTokenFeeService {
   /**
    * `eth_estimateGas` doubles as the pre-flight simulation: a failed token refund (GS012)
    * or any other revert surfaces here instead of costing the relayer a failed transaction.
+   * Without `gasPrice` it runs at tx.gasprice 0, which makes a native refund 0; pass the signed
+   * gasPrice for a native gasToken so the refund's send() (GS011) runs too. The sender is funded
+   * by a state override to afford that price.
    * @returns gas the execution needs
    */
   async simulate(args: {
     chainId: string;
     safeAddress: Address;
     data: Hex;
+    gasPrice?: bigint;
   }): Promise<bigint> {
     const client = await this.blockchainApiManager.getApi(args.chainId);
+    const request = {
+      account: GasTokenFeeService.SIMULATION_SENDER,
+      to: args.safeAddress,
+      data: args.data,
+      ...(args.gasPrice !== undefined && {
+        gasPrice: args.gasPrice,
+        stateOverride: [
+          {
+            address: GasTokenFeeService.SIMULATION_SENDER,
+            balance: GasTokenFeeService.SIMULATION_SENDER_BALANCE,
+          },
+        ],
+      }),
+    };
     try {
-      const estimate = await client.estimateGas({
-        account: GasTokenFeeService.SIMULATION_SENDER,
-        to: args.safeAddress,
-        data: args.data,
-      });
-      const call = await client.call({
-        account: GasTokenFeeService.SIMULATION_SENDER,
-        to: args.safeAddress,
-        data: args.data,
-      });
+      const estimate = await client.estimateGas(request);
+      const call = await client.call(request);
       if (!call.data) throw new Error('Missing execution result');
       const [success] = decodeAbiParameters([{ type: 'bool' }], call.data);
       if (!success) throw new Error('Safe execution returned false');
@@ -437,7 +449,7 @@ export class GasTokenFeeService {
 
   /**
    * Native refund is `(gasUsed + baseGas) × min(gasPrice, tx.gasprice)` (handlePayment), so the
-   * signed gasPrice must reach today's price and the margin has to come from the gas units.
+   * signed gasPrice needs headroom over today's price and the margin has to come from the gas units.
    */
   private assertNativeRefundCovers(
     args: {
@@ -448,16 +460,20 @@ export class GasTokenFeeService {
     },
     currentGasPrice: bigint,
   ): void {
-    if (args.gasPrice < currentGasPrice) {
+    // Headroom for the relayer's price: 'fast' speed and replacement bumps land above today's price
+    if (
+      args.gasPrice * GasTokenFeeService.BPS <
+      currentGasPrice *
+        (GasTokenFeeService.BPS + BigInt(this.configuration.minMarginBps))
+    ) {
       throw new GasTokenRelayError(
         'The gas price signed into this transaction is below the current network gas price, so the refund would not cover the gas cost. Propose it again to refresh the fee.',
       );
     }
-    const paidGasPrice =
-      args.gasPrice < currentGasPrice ? args.gasPrice : currentGasPrice;
+    // The refund is paid at min(gasPrice, tx.gasprice), i.e. at most the current price
     const covered =
       (args.innerGasEstimate + args.baseGas) *
-      paidGasPrice *
+      currentGasPrice *
       GasTokenFeeService.BPS;
     const required =
       args.outerGasLimit *

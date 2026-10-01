@@ -639,15 +639,20 @@ describe('GasTokenFeeService', () => {
         expect(mockPricesApi.getTokenPrices).not.toHaveBeenCalled();
       });
 
-      it('refuses a signed gas price below the current gas price', async () => {
-        mockPublicClient.getGasPrice.mockResolvedValue(
-          parseGwei('24') + BigInt(1),
-        );
+      // current 20 gwei × (1 + 5 % minimum margin) = 21 gwei
+      it('passes a signed gas price exactly at current × (1 + minMargin)', async () => {
+        await expect(
+          service.assertRefundCovers({ ...args, gasPrice: parseGwei('21') }),
+        ).resolves.toBeUndefined();
+      });
 
-        await expect(service.assertRefundCovers(args)).rejects.toThrow(
+      it('refuses a signed gas price one wei below current × (1 + minMargin)', async () => {
+        const low = { ...args, gasPrice: parseGwei('21') - BigInt(1) };
+
+        await expect(service.assertRefundCovers(low)).rejects.toThrow(
           'Propose it again to refresh the fee',
         );
-        await expect(service.assertRefundCovers(args)).rejects.toThrow(
+        await expect(service.assertRefundCovers(low)).rejects.toThrow(
           'below the current network gas price',
         );
       });
@@ -784,10 +789,65 @@ describe('GasTokenFeeService', () => {
       await expect(
         target.simulate({ chainId, safeAddress, data: '0xdeadbeef' }),
       ).resolves.toBe(BigInt(123_456));
-      expect(mockPublicClient.estimateGas).toHaveBeenCalledWith({
+      // without a gas price the call shape stays exactly as before
+      const request = {
         account: '0x0000000000000000000000000000000000000001',
         to: safeAddress,
         data: '0xdeadbeef',
+      };
+      expect(mockPublicClient.estimateGas.mock.calls[0][0]).toStrictEqual(
+        request,
+      );
+      expect(mockPublicClient.call.mock.calls[0][0]).toStrictEqual(request);
+    });
+
+    it('should simulate at the signed gas price with a funded sender when given', async () => {
+      mockPublicClient.estimateGas.mockResolvedValue(BigInt(123_456));
+      const safeAddress = getAddress(faker.finance.ethereumAddress());
+
+      await expect(
+        target.simulate({
+          chainId,
+          safeAddress,
+          data: '0xdeadbeef',
+          gasPrice: parseGwei('24'),
+        }),
+      ).resolves.toBe(BigInt(123_456));
+
+      const request = {
+        account: '0x0000000000000000000000000000000000000001',
+        to: safeAddress,
+        data: '0xdeadbeef',
+        gasPrice: parseGwei('24'),
+        stateOverride: [
+          {
+            address: '0x0000000000000000000000000000000000000001',
+            balance: BigInt(10) ** BigInt(30),
+          },
+        ],
+      };
+      expect(mockPublicClient.estimateGas.mock.calls[0][0]).toStrictEqual(
+        request,
+      );
+      expect(mockPublicClient.call.mock.calls[0][0]).toStrictEqual(request);
+    });
+
+    it('should turn a native refund revert at the signed price into SIMULATION_FAILED', async () => {
+      mockPublicClient.estimateGas.mockRejectedValue(new Error('GS011'));
+
+      const error: unknown = await target
+        .simulate({
+          chainId,
+          safeAddress: getAddress(faker.finance.ethereumAddress()),
+          data: '0xdeadbeef',
+          gasPrice: parseGwei('24'),
+        })
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(GasTokenRelayError);
+      expect((error as GasTokenRelayError).getResponse()).toMatchObject({
+        code: 'SIMULATION_FAILED',
+        message: 'Simulation failed: GS011',
       });
     });
 
