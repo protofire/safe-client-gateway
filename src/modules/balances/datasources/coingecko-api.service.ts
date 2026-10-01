@@ -496,7 +496,7 @@ export class CoingeckoApi implements IPricesApi {
           const hexAddr = base58ToHexMap[key.toLowerCase()];
           remapped[hexAddr ?? key] = value;
         }
-        return rawify(remapped) as Raw<AssetPrice>;
+        return rawify(remapped);
       }
 
       return merge({}, ...fulfilled);
