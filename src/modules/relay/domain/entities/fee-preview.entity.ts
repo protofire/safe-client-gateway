@@ -19,7 +19,8 @@ export type FeePreview = {
   /** Native gas cost at quote time, for display only. */
   relayCost: {
     fiatCode: string;
-    fiatValue: string;
+    /** Null when the native coin has no USD price; a native-coin fee is still quoted. */
+    fiatValue: string | null;
   };
   pricingContextSnapshot: {
     phase: number;
