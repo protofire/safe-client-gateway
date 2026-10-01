@@ -3,6 +3,7 @@ import { isAddressEqual, type Address, type Hex } from 'viem';
 import { IRelayer } from '@/modules/relay/domain/interfaces/relayer.interface';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import { IRelayApi } from '@/domain/interfaces/relay-api.interface';
+import { IBlockchainApiManager } from '@/domain/interfaces/blockchain-api.manager.interface';
 import { ILoggingService, LoggingService } from '@/logging/logging.interface';
 import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
 import { SafeDecoder } from '@/modules/contracts/domain/decoders/safe-decoder.helper';
@@ -43,6 +44,8 @@ export class GasTokenRelayer implements IRelayer {
     @Inject(ISafeRepository) private readonly safeRepository: ISafeRepository,
     private readonly feeService: GasTokenFeeService,
     @Inject(IRelayApi) private readonly relayApi: IRelayApi,
+    @Inject(IBlockchainApiManager)
+    private readonly blockchainApiManager: IBlockchainApiManager,
   ) {
     this.gasLimitBuffer = BigInt(
       configurationService.getOrThrow<GasTokenConfiguration>('relay.gasToken')
@@ -185,6 +188,14 @@ export class GasTokenRelayer implements IRelayer {
       innerGasEstimate: innerGas,
       outerGasLimit: gasLimit,
     });
+    if (GasTokenFeeService.isNative(fee.gasToken)) {
+      await this.assertNativeRefundPayable({
+        chainId: args.chainId,
+        safeAddress: args.to,
+        fee,
+        innerGas,
+      });
+    }
     await this.feeService.reserveNativeSpend(args.chainId, gasLimit);
 
     const relay = await this.relayApi
@@ -201,6 +212,36 @@ export class GasTokenRelayer implements IRelayer {
     );
 
     return relay;
+  }
+
+  /**
+   * eth_call/eth_estimateGas run at tx.gasprice 0, so the simulation never pays a native refund.
+   * Check here what would make handlePayment revert on chain at the relayer's cost.
+   */
+  private async assertNativeRefundPayable(args: {
+    chainId: string;
+    safeAddress: Address;
+    fee: SafePaysFee;
+    innerGas: bigint;
+  }): Promise<void> {
+    const client = await this.blockchainApiManager.getApi(args.chainId);
+    const [code, balance] = await Promise.all([
+      client.getCode({ address: args.fee.refundReceiver }),
+      client.getBalance({ address: args.safeAddress }),
+    ]);
+    // handlePayment uses send(): 2300 gas is too little for any contract receiver (GS011)
+    if (code && code !== '0x') {
+      throw new GasTokenRelayError(
+        'The refund receiver is a contract and cannot receive a native refund (GS011)',
+      );
+    }
+    const required =
+      args.fee.value + (args.innerGas + args.fee.baseGas) * args.fee.gasPrice;
+    if (balance < required) {
+      throw new GasTokenRelayError(
+        `The Safe holds ${balance} wei of the native coin but needs ${required} for the transaction value and the fee`,
+      );
+    }
   }
 
   private decode(

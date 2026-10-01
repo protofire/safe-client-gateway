@@ -1,5 +1,7 @@
 import { faker } from '@faker-js/faker';
-import { getAddress } from 'viem';
+import { getAddress, parseEther, parseGwei, zeroAddress } from 'viem';
+import type { PublicClient } from 'viem';
+import type { IBlockchainApiManager } from '@/domain/interfaces/blockchain-api.manager.interface';
 import { FakeConfigurationService } from '@/config/__tests__/fake.configuration.service';
 import type { IRelayApi } from '@/domain/interfaces/relay-api.interface';
 import type { ILoggingService } from '@/logging/logging.interface';
@@ -35,6 +37,15 @@ const mockRelayApi = jest.mocked({
   relay: jest.fn(),
 } as jest.MockedObjectDeep<IRelayApi>);
 
+const mockPublicClient = jest.mocked({
+  getCode: jest.fn(),
+  getBalance: jest.fn(),
+} as jest.MockedObjectDeep<PublicClient>);
+
+const mockBlockchainApiManager = jest.mocked({
+  getApi: jest.fn(),
+} as jest.MockedObjectDeep<IBlockchainApiManager>);
+
 describe('GasTokenRelayer', () => {
   const chainId = '11155111';
   const version = '1.4.1';
@@ -67,6 +78,7 @@ describe('GasTokenRelayer', () => {
     mockFeeService.estimateSafeTxGas.mockResolvedValue(BigInt(50_000));
     mockFeeService.simulate.mockResolvedValue(BigInt(150_000));
     mockFeeService.assertRefundCovers.mockResolvedValue();
+    mockBlockchainApiManager.getApi.mockResolvedValue(mockPublicClient);
 
     target = new GasTokenRelayer(
       mockLoggingService,
@@ -75,6 +87,7 @@ describe('GasTokenRelayer', () => {
       mockSafeRepository,
       mockFeeService,
       mockRelayApi,
+      mockBlockchainApiManager,
     );
   });
 
@@ -164,6 +177,8 @@ describe('GasTokenRelayer', () => {
         data,
         gasLimit: BigInt(200_000),
       });
+      // ERC-20 refunds go through transfer(): no native receiver or balance checks
+      expect(mockBlockchainApiManager.getApi).not.toHaveBeenCalled();
     });
 
     it('should keep a larger gas limit requested by the caller', async () => {
@@ -310,6 +325,133 @@ describe('GasTokenRelayer', () => {
           gasLimit: null,
         }),
       ).rejects.toThrow('Not a Safe-pays execTransaction');
+    });
+  });
+  describe('relay with the native coin', () => {
+    const native = { address: zeroAddress, symbol: 'USDC', decimals: 18 };
+    const value = parseEther('1');
+    const gasPrice = parseGwei('24');
+    const baseGas = BigInt(191_600);
+    // value + (50k inner + 191.6k baseGas) × 24 gwei
+    const required = value + (BigInt(50_000) + baseGas) * gasPrice;
+    const nativeData = (): ReturnType<
+      ReturnType<typeof execTransactionEncoder>['encode']
+    > =>
+      execTransactionEncoder()
+        .with('value', value)
+        .with('safeTxGas', BigInt(120_000))
+        .with('baseGas', baseGas)
+        .with('gasPrice', gasPrice)
+        .with('gasToken', zeroAddress)
+        .with('refundReceiver', refundReceiver)
+        .encode();
+
+    beforeEach(() => {
+      mockFeeService.getAllowlistedToken.mockReturnValue(native);
+      mockPublicClient.getCode.mockResolvedValue(undefined);
+      mockPublicClient.getBalance.mockResolvedValue(required);
+    });
+
+    it('should check the receiver and balance, then relay', async () => {
+      const taskId = faker.string.uuid();
+      mockRelayApi.relay.mockResolvedValue(rawify({ taskId }));
+      const data = nativeData();
+
+      await expect(
+        target.relay({
+          version,
+          chainId,
+          to: safeAddress,
+          data,
+          gasLimit: null,
+        }),
+      ).resolves.toStrictEqual({ taskId });
+
+      expect(mockBlockchainApiManager.getApi).toHaveBeenCalledWith(chainId);
+      expect(mockPublicClient.getCode).toHaveBeenCalledWith({
+        address: refundReceiver,
+      });
+      expect(mockPublicClient.getBalance).toHaveBeenCalledWith({
+        address: safeAddress,
+      });
+      expect(mockFeeService.assertRefundCovers).toHaveBeenCalledWith({
+        chainId,
+        token: native,
+        gasPrice,
+        baseGas,
+        innerGasEstimate: BigInt(50_000),
+        outerGasLimit: BigInt(200_000),
+      });
+      expect(mockFeeService.reserveNativeSpend).toHaveBeenCalledWith(
+        chainId,
+        BigInt(200_000),
+      );
+      expect(mockRelayApi.relay).toHaveBeenCalledWith({
+        chainId,
+        to: safeAddress,
+        data,
+        gasLimit: BigInt(200_000),
+      });
+    });
+
+    it.each(['0x', undefined])(
+      'should treat %s code as an externally owned receiver',
+      async (code) => {
+        mockPublicClient.getCode.mockResolvedValue(code as `0x${string}`);
+        mockRelayApi.relay.mockResolvedValue(
+          rawify({ taskId: faker.string.uuid() }),
+        );
+
+        await expect(
+          target.relay({
+            version,
+            chainId,
+            to: safeAddress,
+            data: nativeData(),
+            gasLimit: null,
+          }),
+        ).resolves.toBeDefined();
+      },
+    );
+
+    it('should refuse a refund receiver with code', async () => {
+      mockPublicClient.getCode.mockResolvedValue('0x6080604052');
+
+      await expect(
+        target.relay({
+          version,
+          chainId,
+          to: safeAddress,
+          data: nativeData(),
+          gasLimit: null,
+        }),
+      ).rejects.toThrow(
+        new GasTokenRelayError(
+          'The refund receiver is a contract and cannot receive a native refund (GS011)',
+        ),
+      );
+      expect(mockFeeService.reserveNativeSpend).not.toHaveBeenCalled();
+      expect(mockRelayApi.relay).not.toHaveBeenCalled();
+    });
+
+    it('should refuse a Safe without enough native balance for value and refund', async () => {
+      mockPublicClient.getBalance.mockResolvedValue(required - BigInt(1));
+
+      await expect(
+        target.relay({
+          version,
+          chainId,
+          to: safeAddress,
+          data: nativeData(),
+          gasLimit: null,
+        }),
+      ).rejects.toThrow(
+        new GasTokenRelayError(
+          `The Safe holds ${required - BigInt(1)} wei of the native coin but needs ${required} for the transaction value and the fee`,
+        ),
+      );
+      expect(mockFeeService.reserveNativeSpend).not.toHaveBeenCalled();
+      expect(mockRelayApi.relay).not.toHaveBeenCalled();
     });
   });
 });
