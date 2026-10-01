@@ -918,4 +918,98 @@ describe('GasTokenFeeService', () => {
       expect(mockLoggingService.error).not.toHaveBeenCalled();
     });
   });
+
+  describe('simulate without the Safe result check', () => {
+    it('returns the estimate without calling eth_call', async () => {
+      mockPublicClient.estimateGas.mockResolvedValue(BigInt(250_000));
+      const factory = getAddress(faker.finance.ethereumAddress());
+
+      await expect(
+        target.simulate({
+          chainId,
+          safeAddress: factory,
+          data: '0xdeadbeef',
+          checkSafeResult: false,
+        }),
+      ).resolves.toBe(BigInt(250_000));
+      expect(mockPublicClient.call).not.toHaveBeenCalled();
+    });
+
+    it('still turns a revert into SIMULATION_FAILED', async () => {
+      mockPublicClient.estimateGas.mockRejectedValue(new Error('GS013'));
+
+      await expect(
+        target.simulate({
+          chainId,
+          safeAddress: getAddress(faker.finance.ethereumAddress()),
+          data: '0x',
+          checkSafeResult: false,
+        }),
+      ).rejects.toThrow('Simulation failed: GS013');
+    });
+  });
+
+  describe('reserveGasBudget', () => {
+    const args = {
+      key: 'sponsored-spend:84532:2026-09-28',
+      outerGasLimit: BigInt(250_000),
+      dailyLimitGwei: 100_000_000,
+      maxGasPriceWei: '500000000',
+    };
+
+    it('reserves ceil(gas × price / 1e9) gwei atomically and does not check GAS_TOKEN', async () => {
+      mockChainsRepository.getChain.mockResolvedValue({
+        ...chain,
+        features: [],
+      });
+      mockCacheService.increment.mockResolvedValue(125_000);
+
+      await expect(target.reserveGasBudget(args)).resolves.toBe('reserved');
+      expect(mockCacheService.increment).toHaveBeenCalledWith(
+        args.key,
+        172_800,
+        0,
+        125_000,
+      );
+      expect(mockChainsRepository.getChain).not.toHaveBeenCalled();
+    });
+
+    it('returns exceeded above the limit', async () => {
+      mockCacheService.increment.mockResolvedValue(100_000_001);
+
+      await expect(target.reserveGasBudget(args)).resolves.toBe('exceeded');
+    });
+
+    it('returns unavailable when the cache fails', async () => {
+      mockCacheService.increment.mockRejectedValue(new Error('redis down'));
+
+      await expect(target.reserveGasBudget(args)).resolves.toBe('unavailable');
+    });
+
+    it('returns exceeded without touching the cache when the amount is not a safe integer', async () => {
+      await expect(
+        target.reserveGasBudget({
+          ...args,
+          outerGasLimit: BigInt(Number.MAX_SAFE_INTEGER),
+          maxGasPriceWei: '1000000000000',
+        }),
+      ).resolves.toBe('exceeded');
+      expect(mockCacheService.increment).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('dayKey', () => {
+    afterEach(() => jest.useRealTimers());
+
+    it('uses the UTC date', () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-09-28T23:59:59.000Z'));
+      expect(GasTokenFeeService.dayKey('sponsored-spend', '84532')).toBe(
+        'sponsored-spend:84532:2026-09-28',
+      );
+      jest.setSystemTime(new Date('2026-09-29T00:00:01.000Z'));
+      expect(GasTokenFeeService.dayKey('sponsored-spend', '84532')).toBe(
+        'sponsored-spend:84532:2026-09-29',
+      );
+    });
+  });
 });

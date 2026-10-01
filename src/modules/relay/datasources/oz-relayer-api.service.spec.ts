@@ -179,6 +179,75 @@ describe('OzRelayerApi', () => {
     });
   });
 
+  describe('isAvailable', () => {
+    const relayer = (overrides: Record<string, unknown> = {}): unknown =>
+      rawify({
+        success: true,
+        data: {
+          id: relayerId,
+          paused: false,
+          system_disabled: false,
+          policies: { min_balance: 100 },
+          ...overrides,
+        },
+      });
+    const balance = (wei: number): unknown =>
+      rawify({ success: true, data: { balance: wei, unit: 'wei' } });
+    const respond = (relayerData: unknown, balanceData: unknown): void => {
+      mockNetworkService.get.mockImplementation(({ url }) =>
+        Promise.resolve({
+          status: 200,
+          data: (url.endsWith('/balance') ? balanceData : relayerData) as never,
+        }),
+      );
+    };
+
+    it('is available when active and above min_balance', async () => {
+      respond(relayer(), balance(101));
+
+      await expect(target.isAvailable(chainId)).resolves.toBe(true);
+      expect(mockNetworkService.get).toHaveBeenCalledWith({
+        url: `${baseUri}/api/v1/relayers/${relayerId}`,
+        networkRequest: { headers: { Authorization: `Bearer ${apiKey}` } },
+      });
+      expect(mockNetworkService.get).toHaveBeenCalledWith({
+        url: `${baseUri}/api/v1/relayers/${relayerId}/balance`,
+        networkRequest: { headers: { Authorization: `Bearer ${apiKey}` } },
+      });
+    });
+
+    it.each([
+      ['paused', relayer({ paused: true }), balance(1000)],
+      ['system disabled', relayer({ system_disabled: true }), balance(1000)],
+      ['below min_balance', relayer(), balance(99)],
+      ['unsuccessful response', rawify({ success: false }), balance(1000)],
+    ])('is unavailable when %s', async (_, relayerData, balanceData) => {
+      respond(relayerData, balanceData);
+
+      await expect(target.isAvailable(chainId)).resolves.toBe(false);
+    });
+
+    it('fails closed when the relayer cannot be reached', async () => {
+      mockNetworkService.get.mockRejectedValue(new Error('down'));
+
+      await expect(target.isAvailable(chainId)).resolves.toBe(false);
+    });
+
+    it('is unavailable on chains without a relayer id', async () => {
+      await expect(target.isAvailable('1')).resolves.toBe(false);
+      expect(mockNetworkService.get).not.toHaveBeenCalled();
+    });
+
+    it('caches the state per chain', async () => {
+      respond(relayer(), balance(101));
+
+      await target.isAvailable(chainId);
+      await target.isAvailable(chainId);
+
+      expect(mockNetworkService.get).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('getRelayStatus', () => {
     it.each([
       ['pending', null, RelayStatusCode.Pending],

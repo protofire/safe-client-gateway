@@ -128,6 +128,45 @@ export class GasTokenFeeService {
     return chain.features.includes(GasTokenFeeService.FEATURE);
   }
 
+  static dayKey(prefix: string, chainId: string): string {
+    return `${prefix}:${chainId}:${new Date().toISOString().slice(0, 10)}`;
+  }
+
+  /**
+   * Atomically reserves `ceil(outerGasLimit × maxGasPriceWei / 1e9)` gwei on `key`.
+   * Never released: an ambiguous submission is not a certain failure.
+   */
+  async reserveGasBudget(args: {
+    key: string;
+    outerGasLimit: bigint;
+    dailyLimitGwei: number;
+    maxGasPriceWei: string;
+  }): Promise<'reserved' | 'exceeded' | 'unavailable'> {
+    const weiPerGwei = BigInt(1_000_000_000);
+    const amountGwei =
+      (args.outerGasLimit * BigInt(args.maxGasPriceWei) +
+        weiPerGwei -
+        BigInt(1)) /
+      weiPerGwei;
+    if (amountGwei > BigInt(Number.MAX_SAFE_INTEGER)) {
+      return 'exceeded';
+    }
+    let reserved: number;
+    try {
+      reserved = await this.cacheService.increment(
+        args.key,
+        48 * 60 * 60,
+        0,
+        Number(amountGwei),
+      );
+    } catch {
+      return 'unavailable';
+    }
+    return Number.isSafeInteger(reserved) && reserved <= args.dailyLimitGwei
+      ? 'reserved'
+      : 'exceeded';
+  }
+
   async reserveNativeSpend(
     chainId: string,
     outerGasLimit: bigint,
@@ -141,27 +180,16 @@ export class GasTokenFeeService {
     if (!budget) {
       return;
     }
-    const weiPerGwei = BigInt(1_000_000_000);
-    const amountGwei =
-      (outerGasLimit * BigInt(budget.maxGasPriceWei) + weiPerGwei - BigInt(1)) /
-      weiPerGwei;
-    if (amountGwei > BigInt(Number.MAX_SAFE_INTEGER)) {
-      throw new GasTokenRelayError('Safe-pays daily gas budget exceeded');
-    }
-    const date = new Date().toISOString().slice(0, 10);
-    const key = `gas-token-spend:${chainId}:${date}`;
-    let reserved: number;
-    try {
-      reserved = await this.cacheService.increment(
-        key,
-        48 * 60 * 60,
-        0,
-        Number(amountGwei),
-      );
-    } catch {
+    const result = await this.reserveGasBudget({
+      key: GasTokenFeeService.dayKey('gas-token-spend', chainId),
+      outerGasLimit,
+      dailyLimitGwei: budget.dailyLimitGwei,
+      maxGasPriceWei: budget.maxGasPriceWei,
+    });
+    if (result === 'unavailable') {
       throw new GasTokenRelayError('Unable to reserve Safe-pays gas budget');
     }
-    if (!Number.isSafeInteger(reserved) || reserved > budget.dailyLimitGwei) {
+    if (result === 'exceeded') {
       throw new GasTokenRelayError('Safe-pays daily gas budget exceeded');
     }
   }
@@ -378,6 +406,8 @@ export class GasTokenFeeService {
     safeAddress: Address;
     data: Hex;
     gasPrice?: bigint;
+    /** `false` for targets that are not a Safe `execTransaction` (no `bool` result). */
+    checkSafeResult?: boolean;
   }): Promise<bigint> {
     const client = await this.blockchainApiManager.getApi(args.chainId);
     const request = {
@@ -396,10 +426,12 @@ export class GasTokenFeeService {
     };
     try {
       const estimate = await client.estimateGas(request);
-      const call = await client.call(request);
-      if (!call.data) throw new Error('Missing execution result');
-      const [success] = decodeAbiParameters([{ type: 'bool' }], call.data);
-      if (!success) throw new Error('Safe execution returned false');
+      if (args.checkSafeResult ?? true) {
+        const call = await client.call(request);
+        if (!call.data) throw new Error('Missing execution result');
+        const [success] = decodeAbiParameters([{ type: 'bool' }], call.data);
+        if (!success) throw new Error('Safe execution returned false');
+      }
       return estimate;
     } catch (error) {
       throw new GasTokenRelayError(

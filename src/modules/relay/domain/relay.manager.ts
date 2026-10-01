@@ -5,11 +5,13 @@ import { DailyLimitRelayer } from '@/modules/relay/domain/relayers/daily-limit.r
 import { NoFeeCampaignRelayer } from '@/modules/relay/domain/relayers/no-fee-campaign.relayer';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import { NoFeeCampaignConfiguration } from '@/modules/relay/domain/entities/relay.configuration';
+import type { SponsoredChainsConfiguration } from '@/modules/relay/domain/entities/sponsored-chains.configuration';
 
 @Injectable()
 export class RelayManager implements IRelayManager {
   private readonly noFeeCampaignConfiguration: NoFeeCampaignConfiguration;
   private readonly dailyLimitRelayChainIds: Array<string>;
+  private readonly sponsoredChains: SponsoredChainsConfiguration;
   constructor(
     @Inject(IConfigurationService) configurationService: IConfigurationService,
     private readonly dailyLimitRelayer: DailyLimitRelayer,
@@ -22,11 +24,18 @@ export class RelayManager implements IRelayManager {
     this.dailyLimitRelayChainIds = configurationService.getOrThrow(
       'relay.dailyLimitRelayerChainsIds',
     );
+
+    this.sponsoredChains = configurationService.getOrThrow(
+      'relay.sponsoredChains',
+    );
   }
 
   public getRelayer(chainId: string): IRelayer {
-    // Prioritize daily limit relayer if chainId is configured for it
-    if (this.dailyLimitRelayChainIds.includes(chainId)) {
+    // Sponsored chains and chains configured for the daily limit relayer win over no-fee campaign defaults
+    if (
+      this.sponsoredChains[chainId] ||
+      this.dailyLimitRelayChainIds.includes(chainId)
+    ) {
       return this.dailyLimitRelayer;
     }
 
