@@ -7,6 +7,7 @@ import {
   numberToHex,
   parseGwei,
   size,
+  zeroAddress,
 } from 'viem';
 import type { Address, PublicClient } from 'viem';
 import { FakeConfigurationService } from '@/config/__tests__/fake.configuration.service';
@@ -486,6 +487,188 @@ describe('GasTokenFeeService', () => {
           outerGasLimit: BigInt(200_000),
         }),
       ).rejects.toThrow('no longer covers the gas cost');
+    });
+  });
+
+  describe('native gas token', () => {
+    const native = { address: zeroAddress, symbol: 'USDC', decimals: 18 };
+    const nativeConfiguration: GasTokenConfiguration = {
+      ...configuration,
+      nativeUsdPrices: { [chainId]: 1 },
+      allowlist: { [chainId]: [native] },
+    };
+    let service: GasTokenFeeService;
+
+    beforeEach(() => {
+      const config = new FakeConfigurationService();
+      config.set('relay.gasToken', nativeConfiguration);
+      service = buildService(config);
+    });
+
+    it('accepts the zero address in the allowlist', () => {
+      expect(() =>
+        GasTokenConfigurationSchema.parse(nativeConfiguration),
+      ).not.toThrow();
+    });
+
+    it('still rejects a duplicate native entry', () => {
+      expect(() =>
+        GasTokenConfigurationSchema.parse({
+          ...nativeConfiguration,
+          allowlist: { [chainId]: [native, native] },
+        }),
+      ).toThrow('duplicate token address');
+    });
+
+    it('still rejects the zero address as a refund receiver', () => {
+      expect(() =>
+        GasTokenConfigurationSchema.parse({
+          ...nativeConfiguration,
+          refundReceivers: { [chainId]: zeroAddress },
+        }),
+      ).toThrow('must be non-zero');
+    });
+
+    it('signs a gas price ceiling above market and puts the margin in baseGas', async () => {
+      mockSimulation({ estimate: BigInt(100_000), success: true });
+
+      const result = await service.preview({
+        chainId,
+        safeAddress: getAddress(faker.finance.ethereumAddress()),
+        to: getAddress(faker.finance.ethereumAddress()),
+        value: '0',
+        data: '0x',
+        operation: Operation.CALL,
+        gasToken: zeroAddress,
+        numberSignatures: 2,
+      });
+
+      expect(result.txData).toStrictEqual({
+        chainId,
+        safeAddress: result.txData.safeAddress,
+        safeTxGas: '120000',
+        // outer budget (120k + 73k + 50k) × 1.2 − 100k inner
+        baseGas: '191600',
+        // 20 gwei × 1.2
+        gasPrice: parseGwei('24').toString(),
+        gasToken: zeroAddress,
+        refundReceiver,
+        numberSignatures: 2,
+      });
+      // 243k × 20 gwei × $1
+      expect(result.relayCost).toStrictEqual({
+        fiatCode: 'USD',
+        fiatValue: '0.00486',
+      });
+      expect(result.pricingContextSnapshot.priceSource).toBe('fixed');
+      const refundGas = BigInt(100_000) + BigInt(result.txData.baseGas);
+      expect(refundGas * BigInt(10_000)).toBeGreaterThanOrEqual(
+        BigInt(243_000) * BigInt(12_000),
+      );
+      expect(BigInt(result.txData.gasPrice)).toBeGreaterThanOrEqual(
+        parseGwei('20'),
+      );
+      expect(mockPricesApi.getTokenPrices).not.toHaveBeenCalled();
+    });
+
+    it('makes inner + baseGas equal the outer budget with a zero margin', async () => {
+      const config = new FakeConfigurationService();
+      config.set('relay.gasToken', {
+        ...nativeConfiguration,
+        marginBps: 0,
+        gasLimitBuffer: 0,
+      });
+      service = buildService(config);
+      mockSimulation({ estimate: BigInt(100_000), success: true });
+
+      const result = await service.preview({
+        chainId,
+        safeAddress: getAddress(faker.finance.ethereumAddress()),
+        to: getAddress(faker.finance.ethereumAddress()),
+        value: '0',
+        data: '0x',
+        operation: Operation.CALL,
+        gasToken: zeroAddress,
+        numberSignatures: 1,
+      });
+
+      // outer 120k + 71.5k = 191.5k, − 100k inner
+      expect(result.txData.baseGas).toBe('91500');
+      expect(result.txData.gasPrice).toBe(parseGwei('20').toString());
+    });
+
+    it('prices the native coin as the token without asking the prices API', async () => {
+      const config = new FakeConfigurationService();
+      config.set('relay.gasToken', {
+        ...nativeConfiguration,
+        nativeUsdPrices: {},
+      });
+      service = buildService(config);
+      mockSimulation({ estimate: BigInt(100_000), success: true });
+
+      const result = await service.preview({
+        chainId,
+        safeAddress: getAddress(faker.finance.ethereumAddress()),
+        to: getAddress(faker.finance.ethereumAddress()),
+        value: '0',
+        data: '0x',
+        operation: Operation.CALL,
+        gasToken: zeroAddress,
+        numberSignatures: 2,
+      });
+
+      // 243k × 20 gwei × $2,500
+      expect(result.relayCost.fiatValue).toBe('12.15');
+      expect(result.pricingContextSnapshot.priceSource).toBe('coingecko');
+      expect(mockNativePrices.getPrice).toHaveBeenCalled();
+      expect(mockPricesApi.getTokenPrices).not.toHaveBeenCalled();
+    });
+
+    describe('assertRefundCovers', () => {
+      const args = {
+        chainId,
+        token: native,
+        gasPrice: parseGwei('24'),
+        baseGas: BigInt(191_600),
+        innerGasEstimate: BigInt(100_000),
+        outerGasLimit: BigInt(243_000),
+      };
+
+      it('passes when (inner + baseGas) at the capped price covers outer gas plus the minimum margin', async () => {
+        await expect(service.assertRefundCovers(args)).resolves.toBeUndefined();
+        expect(mockPricesApi.getTokenPrices).not.toHaveBeenCalled();
+      });
+
+      it('refuses a signed gas price below the current gas price', async () => {
+        mockPublicClient.getGasPrice.mockResolvedValue(
+          parseGwei('24') + BigInt(1),
+        );
+
+        await expect(service.assertRefundCovers(args)).rejects.toThrow(
+          'Propose it again to refresh the fee',
+        );
+        await expect(service.assertRefundCovers(args)).rejects.toThrow(
+          'below the current network gas price',
+        );
+      });
+
+      it('refuses a baseGas that leaves the outer gas uncovered', async () => {
+        // 173k refundable gas < 243k × 1.05
+        await expect(
+          service.assertRefundCovers({ ...args, baseGas: BigInt(73_000) }),
+        ).rejects.toThrow('no longer covers the gas cost');
+      });
+
+      it('refuses a margin carried only in gasPrice, which the refund cap discards', async () => {
+        // the ERC-20 style quote: 24 gwei × (100k + 73k) looks like 1.2 × 20 gwei × 173k, yet pays at 20 gwei
+        await expect(
+          service.assertRefundCovers({
+            ...args,
+            baseGas: BigInt(73_000),
+            outerGasLimit: BigInt(173_000),
+          }),
+        ).rejects.toThrow('no longer covers the gas cost');
+      });
     });
   });
 
