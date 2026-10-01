@@ -91,6 +91,11 @@ export class GelatoApi extends RelayCountCache implements IRelayApi {
     }
   }
 
+  // Gelato exposes no per-chain executor state; availability shows only as a relay error
+  isAvailable(): Promise<boolean> {
+    return Promise.resolve(true);
+  }
+
   async getRelayStatus(args: {
     chainId: string;
     taskId: string;

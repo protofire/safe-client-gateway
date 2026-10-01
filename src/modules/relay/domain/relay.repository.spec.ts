@@ -29,4 +29,35 @@ describe('RelayRepository gas token capability', () => {
     });
     expect(feeService.getConfiguration).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [false, { gasTokens: [], refundReceiver: null }],
+    [true, { gasTokens: ['configured'], refundReceiver: '0xreceiver' }],
+  ])(
+    'offers Safe-pays only while the chain relayer is available (%s)',
+    async (available, expected) => {
+      const relayApi = {
+        isAvailable: jest.fn().mockResolvedValue(available),
+      } as unknown as IRelayApi;
+      const feeService = {
+        isEnabled: jest.fn().mockResolvedValue(true),
+        getConfiguration: jest.fn().mockResolvedValue({
+          gasTokens: ['configured'],
+          refundReceiver: '0xreceiver',
+        }),
+      } as unknown as GasTokenFeeService;
+      const repository = new RelayRepository(
+        {} as IRelayManager,
+        relayApi,
+        {} as GasTokenRelayer,
+        feeService,
+        { screen: jest.fn() } as unknown as RelayScreeningService,
+      );
+
+      await expect(
+        repository.getGasTokenConfiguration('8453'),
+      ).resolves.toEqual(expected);
+      expect(relayApi.isAvailable).toHaveBeenCalledWith('8453');
+    },
+  );
 });
