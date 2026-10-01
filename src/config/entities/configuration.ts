@@ -433,6 +433,8 @@ export default () => ({
         maxGasPriceWei: string;
       }>(process.env.RELAY_GAS_TOKEN_NATIVE_SPEND_BUDGETS),
       // JSON: { "<chainId>": [{ "address": "0x…", "symbol": "USDC", "decimals": 6, "usdPrice": 1 }] } (usdPrice optional)
+      // The zero address is the native coin, priced by nativeUsdPrices or the native feed (usdPrice ignored):
+      // { "5042": [{ "address": "0x0000000000000000000000000000000000000000", "symbol": "USDC", "decimals": 18 }] }
       allowlist: parseJsonRecord<
         Array<{
           address: string;

@@ -170,6 +170,11 @@ export class GasTokenRelayer implements IRelayer {
       chainId: args.chainId,
       safeAddress: args.to,
       data: args.data,
+      // At gas price 0 handlePayment sends a zero native refund, so a contract receiver (GS011)
+      // or a balance moved out by the inner call would only fail on chain, at the relayer's cost
+      ...(GasTokenFeeService.isNative(fee.gasToken) && {
+        gasPrice: fee.gasPrice,
+      }),
     });
     const simulatedLimit = outerGasEstimate + this.gasLimitBuffer;
     const gasLimit =

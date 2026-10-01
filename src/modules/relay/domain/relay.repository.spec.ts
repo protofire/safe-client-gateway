@@ -1,3 +1,4 @@
+import { zeroAddress } from 'viem';
 import { RelayRepository } from '@/modules/relay/domain/relay.repository';
 import type { IRelayManager } from '@/modules/relay/domain/interfaces/relay-manager.interface';
 import type { IRelayApi } from '@/domain/interfaces/relay-api.interface';
@@ -58,6 +59,43 @@ describe('RelayRepository gas token capability', () => {
         repository.getGasTokenConfiguration('8453'),
       ).resolves.toEqual(expected);
       expect(relayApi.isAvailable).toHaveBeenCalledWith('8453');
+    },
+  );
+
+  it.each([
+    [false, { gasTokens: [], refundReceiver: null }],
+    [
+      true,
+      {
+        gasTokens: [{ address: zeroAddress, symbol: 'USDC', decimals: 18 }],
+        refundReceiver: '0xreceiver',
+      },
+    ],
+  ])(
+    'hides a native-coin fee entry while the chain relayer is unavailable (%s)',
+    async (available, expected) => {
+      const relayApi = {
+        isAvailable: jest.fn().mockResolvedValue(available),
+      } as unknown as IRelayApi;
+      const feeService = {
+        isEnabled: jest.fn().mockResolvedValue(true),
+        getConfiguration: jest.fn().mockReturnValue({
+          gasTokens: [{ address: zeroAddress, symbol: 'USDC', decimals: 18 }],
+          refundReceiver: '0xreceiver',
+        }),
+      } as unknown as GasTokenFeeService;
+      const repository = new RelayRepository(
+        {} as IRelayManager,
+        relayApi,
+        {} as GasTokenRelayer,
+        feeService,
+        { screen: jest.fn() } as unknown as RelayScreeningService,
+      );
+
+      await expect(
+        repository.getGasTokenConfiguration('5042'),
+      ).resolves.toEqual(expected);
+      expect(relayApi.isAvailable).toHaveBeenCalledWith('5042');
     },
   );
 });

@@ -10,6 +10,7 @@ import {
   parseAbi,
   size,
   slice,
+  zeroAddress,
   type Address,
   type Hex,
 } from 'viem';
@@ -59,9 +60,11 @@ export class GasTokenFeeService {
   private static readonly WEI_PER_ETHER = BigInt(10) ** BigInt(18);
   /** Fee model version reported to the web app */
   private static readonly PRICING_PHASE = 2;
-  /** Any account works: with a non-zero gasToken the Safe pays refundReceiver, not msg.sender. */
+  /** Any account works: the Safe pays refundReceiver, not msg.sender. */
   private static readonly SIMULATION_SENDER: Address =
     '0x0000000000000000000000000000000000000001';
+  /** Simulation sender balance when simulating at a real gas price, enough for any gas limit */
+  private static readonly SIMULATION_SENDER_BALANCE = BigInt(10) ** BigInt(30);
   /** SimulateTxAccessor versions to look for, newest first; any of them works with a Safe ≥ 1.3.0 */
   private static readonly ACCESSOR_VERSIONS = ['1.4.1', '1.3.0'];
   /** `simulateAndRevert` measures the inner call once; the real one runs in a different state, so pad it */
@@ -106,6 +109,11 @@ export class GasTokenFeeService {
       });
     }
     this.disabled = disabled;
+  }
+
+  /** The zero address as gasToken: the Safe refunds in the chain's native coin. */
+  static isNative(gasToken: Address): boolean {
+    return isAddressEqual(gasToken, zeroAddress);
   }
 
   getRefundReceiver(chainId: string): Address | null {
@@ -249,26 +257,46 @@ export class GasTokenFeeService {
         GasTokenFeeService.BPS +
       GasTokenFeeService.SAFE_TX_GAS_MARGIN_FIXED;
 
-    const baseGas =
+    const configuredBaseGas =
       BigInt(this.configuration.baseGas) +
       BigInt(this.configuration.baseGasPerSignature) *
         BigInt(args.numberSignatures);
     // Quote the outer gas budget, but collect it through the Safe's inner-gas refund.
     // The signed execution is still simulated and checked against its actual estimate.
     const outerGasBudget =
-      safeTxGas + baseGas + BigInt(this.configuration.gasLimitBuffer);
-    if (innerGas + baseGas === BigInt(0)) {
+      safeTxGas + configuredBaseGas + BigInt(this.configuration.gasLimitBuffer);
+    if (innerGas + configuredBaseGas === BigInt(0)) {
       throw new GasTokenRelayError(
         'Cannot quote a transaction with zero refundable gas',
       );
     }
-    const gasPrice = GasTokenFeeService.toTokenGasPrice(
-      market,
-      token.decimals,
-      this.configuration.marginBps,
-      outerGasBudget,
-      innerGas + baseGas,
-    );
+    let baseGas = configuredBaseGas;
+    let gasPrice: bigint;
+    if (GasTokenFeeService.isNative(token.address)) {
+      // handlePayment refunds native at min(gasPrice, tx.gasprice): a margin in gasPrice never
+      // arrives. Sign gasPrice as a ceiling with headroom and carry the margin in baseGas instead.
+      const marginFactor =
+        GasTokenFeeService.BPS + BigInt(this.configuration.marginBps);
+      gasPrice = GasTokenFeeService.ceilDiv(
+        market.gasPriceWei * marginFactor,
+        GasTokenFeeService.BPS,
+      );
+      const refundGas = GasTokenFeeService.ceilDiv(
+        outerGasBudget * marginFactor,
+        GasTokenFeeService.BPS,
+      );
+      if (refundGas - innerGas > baseGas) {
+        baseGas = refundGas - innerGas;
+      }
+    } else {
+      gasPrice = GasTokenFeeService.toTokenGasPrice(
+        market,
+        token.decimals,
+        this.configuration.marginBps,
+        outerGasBudget,
+        innerGas + baseGas,
+      );
+    }
     const nativeCostWei = outerGasBudget * market.gasPriceWei;
 
     return {
@@ -294,7 +322,9 @@ export class GasTokenFeeService {
         phase: GasTokenFeeService.PRICING_PHASE,
         priceSource: GasTokenFeeService.getPriceSource(
           this.configuration.nativeUsdPrices[args.chainId] !== undefined,
-          token.usdPrice !== undefined,
+          GasTokenFeeService.isNative(token.address)
+            ? this.configuration.nativeUsdPrices[args.chainId] !== undefined
+            : token.usdPrice !== undefined,
         ),
         priceTimestamp: Math.floor(
           (market.nativePriceTimestamp ?? Date.now()) / 1_000,
@@ -366,28 +396,38 @@ export class GasTokenFeeService {
   /**
    * `eth_estimateGas` doubles as the pre-flight simulation: a failed token refund (GS012)
    * or any other revert surfaces here instead of costing the relayer a failed transaction.
+   * Without `gasPrice` it runs at tx.gasprice 0, which makes a native refund 0; pass the signed
+   * gasPrice for a native gasToken so the refund's send() (GS011) runs too. The sender is funded
+   * by a state override to afford that price.
    * @returns gas the execution needs
    */
   async simulate(args: {
     chainId: string;
     safeAddress: Address;
     data: Hex;
+    gasPrice?: bigint;
     /** `false` for targets that are not a Safe `execTransaction` (no `bool` result). */
     checkSafeResult?: boolean;
   }): Promise<bigint> {
     const client = await this.blockchainApiManager.getApi(args.chainId);
+    const request = {
+      account: GasTokenFeeService.SIMULATION_SENDER,
+      to: args.safeAddress,
+      data: args.data,
+      ...(args.gasPrice !== undefined && {
+        gasPrice: args.gasPrice,
+        stateOverride: [
+          {
+            address: GasTokenFeeService.SIMULATION_SENDER,
+            balance: GasTokenFeeService.SIMULATION_SENDER_BALANCE,
+          },
+        ],
+      }),
+    };
     try {
-      const estimate = await client.estimateGas({
-        account: GasTokenFeeService.SIMULATION_SENDER,
-        to: args.safeAddress,
-        data: args.data,
-      });
+      const estimate = await client.estimateGas(request);
       if (args.checkSafeResult ?? true) {
-        const call = await client.call({
-          account: GasTokenFeeService.SIMULATION_SENDER,
-          to: args.safeAddress,
-          data: args.data,
-        });
+        const call = await client.call(request);
         if (!call.data) throw new Error('Missing execution result');
         const [success] = decodeAbiParameters([{ type: 'bool' }], call.data);
         if (!success) throw new Error('Safe execution returned false');
@@ -414,6 +454,9 @@ export class GasTokenFeeService {
     outerGasLimit: bigint;
   }): Promise<void> {
     const market = await this.getMarket(args.chainId, args.token);
+    if (GasTokenFeeService.isNative(args.token.address)) {
+      return this.assertNativeRefundCovers(args, market.gasPriceWei);
+    }
     const refund = (args.innerGasEstimate + args.baseGas) * args.gasPrice;
     const cost = args.outerGasLimit * market.gasPriceWei;
 
@@ -434,6 +477,49 @@ export class GasTokenFeeService {
         'The fee signed into this transaction no longer covers the gas cost. Propose it again to refresh the fee.',
       );
     }
+  }
+
+  /**
+   * Native refund is `(gasUsed + baseGas) × min(gasPrice, tx.gasprice)` (handlePayment), so the
+   * signed gasPrice needs headroom over today's price and the margin has to come from the gas units.
+   */
+  private assertNativeRefundCovers(
+    args: {
+      gasPrice: bigint;
+      baseGas: bigint;
+      innerGasEstimate: bigint;
+      outerGasLimit: bigint;
+    },
+    currentGasPrice: bigint,
+  ): void {
+    // Headroom for the relayer's price: 'fast' speed and replacement bumps land above today's price
+    if (
+      args.gasPrice * GasTokenFeeService.BPS <
+      currentGasPrice *
+        (GasTokenFeeService.BPS + BigInt(this.configuration.minMarginBps))
+    ) {
+      throw new GasTokenRelayError(
+        'The gas price signed into this transaction is below the current network gas price, so the refund would not cover the gas cost. Propose it again to refresh the fee.',
+      );
+    }
+    // The refund is paid at min(gasPrice, tx.gasprice), i.e. at most the current price
+    const covered =
+      (args.innerGasEstimate + args.baseGas) *
+      currentGasPrice *
+      GasTokenFeeService.BPS;
+    const required =
+      args.outerGasLimit *
+      currentGasPrice *
+      (GasTokenFeeService.BPS + BigInt(this.configuration.minMarginBps));
+    if (covered < required) {
+      throw new GasTokenRelayError(
+        'The fee signed into this transaction no longer covers the gas cost. Propose it again to refresh the fee.',
+      );
+    }
+  }
+
+  private static ceilDiv(numerator: bigint, denominator: bigint): bigint {
+    return (numerator + denominator - BigInt(1)) / denominator;
   }
 
   /** Token units per gas: gasWei × nativeUsd × 10^decimals × (1 + margin) / (tokenUsd × 10^18), rounded up. */
@@ -570,7 +656,8 @@ export class GasTokenFeeService {
       this.chainsRepository.getChain(chainId),
       this.blockchainApiManager.getApi(chainId),
     ]);
-    const [gasPriceWei, nativePrice, tokenUsd] = await Promise.all([
+    const isNative = GasTokenFeeService.isNative(token.address);
+    const [gasPriceWei, nativePrice, erc20Usd] = await Promise.all([
       client.getGasPrice(),
       this.configuration.nativeUsdPrices[chainId] !== undefined
         ? {
@@ -578,10 +665,13 @@ export class GasTokenFeeService {
             fetchedAt: Date.now(),
           }
         : this.nativePrices.getPrice(chain),
-      token.usdPrice ?? this.getTokenUsdPrice(chain, token.address),
+      isNative
+        ? null
+        : (token.usdPrice ?? this.getTokenUsdPrice(chain, token.address)),
     ]);
 
     const nativeUsd = nativePrice?.usd ?? null;
+    const tokenUsd = isNative ? nativeUsd : erc20Usd;
     if (
       nativeUsd === null ||
       tokenUsd === null ||

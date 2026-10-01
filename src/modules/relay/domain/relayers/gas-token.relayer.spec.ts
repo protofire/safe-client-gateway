@@ -1,5 +1,5 @@
 import { faker } from '@faker-js/faker';
-import { getAddress } from 'viem';
+import { getAddress, parseGwei, zeroAddress } from 'viem';
 import { FakeConfigurationService } from '@/config/__tests__/fake.configuration.service';
 import type { IRelayApi } from '@/domain/interfaces/relay-api.interface';
 import type { ILoggingService } from '@/logging/logging.interface';
@@ -145,7 +145,8 @@ describe('GasTokenRelayer', () => {
         data: '0x',
         operation: 0,
       });
-      expect(mockFeeService.simulate).toHaveBeenCalledWith({
+      // ERC-20 refunds go through transfer(): simulate without a gas price, as before
+      expect(mockFeeService.simulate.mock.calls[0][0]).toStrictEqual({
         chainId,
         safeAddress,
         data,
@@ -310,6 +311,91 @@ describe('GasTokenRelayer', () => {
           gasLimit: null,
         }),
       ).rejects.toThrow('Not a Safe-pays execTransaction');
+    });
+  });
+  describe('relay with the native coin', () => {
+    const native = { address: zeroAddress, symbol: 'USDC', decimals: 18 };
+    const gasPrice = parseGwei('24');
+    const baseGas = BigInt(191_600);
+    const nativeData = (): ReturnType<
+      ReturnType<typeof execTransactionEncoder>['encode']
+    > =>
+      execTransactionEncoder()
+        .with('safeTxGas', BigInt(120_000))
+        .with('baseGas', baseGas)
+        .with('gasPrice', gasPrice)
+        .with('gasToken', zeroAddress)
+        .with('refundReceiver', refundReceiver)
+        .encode();
+
+    beforeEach(() => {
+      mockFeeService.getAllowlistedToken.mockReturnValue(native);
+    });
+
+    it('should simulate at the signed gas price, then relay', async () => {
+      const taskId = faker.string.uuid();
+      mockRelayApi.relay.mockResolvedValue(rawify({ taskId }));
+      const data = nativeData();
+
+      await expect(
+        target.relay({
+          version,
+          chainId,
+          to: safeAddress,
+          data,
+          gasLimit: null,
+        }),
+      ).resolves.toStrictEqual({ taskId });
+
+      expect(mockFeeService.simulate.mock.calls[0][0]).toStrictEqual({
+        chainId,
+        safeAddress,
+        data,
+        gasPrice,
+      });
+      expect(mockFeeService.assertRefundCovers).toHaveBeenCalledWith({
+        chainId,
+        token: native,
+        gasPrice,
+        baseGas,
+        innerGasEstimate: BigInt(50_000),
+        outerGasLimit: BigInt(200_000),
+      });
+      expect(mockFeeService.reserveNativeSpend).toHaveBeenCalledWith(
+        chainId,
+        BigInt(200_000),
+      );
+      expect(mockRelayApi.relay).toHaveBeenCalledWith({
+        chainId,
+        to: safeAddress,
+        data,
+        gasLimit: BigInt(200_000),
+      });
+    });
+
+    it('should refuse when the native refund fails at the signed price (GS011)', async () => {
+      // a contract receiver, a balance drained by the inner call or too little balance
+      mockFeeService.simulate.mockRejectedValue(
+        new GasTokenRelayError('Simulation failed: GS011', 'SIMULATION_FAILED'),
+      );
+
+      const error: unknown = await target
+        .relay({
+          version,
+          chainId,
+          to: safeAddress,
+          data: nativeData(),
+          gasLimit: null,
+        })
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(GasTokenRelayError);
+      expect((error as GasTokenRelayError).getResponse()).toMatchObject({
+        code: 'SIMULATION_FAILED',
+        message: 'Simulation failed: GS011',
+      });
+      expect(mockFeeService.reserveNativeSpend).not.toHaveBeenCalled();
+      expect(mockRelayApi.relay).not.toHaveBeenCalled();
     });
   });
 });

@@ -2,10 +2,11 @@ import { isAddress, isAddressEqual, zeroAddress } from 'viem';
 import { z } from 'zod';
 import type { Address } from 'viem';
 
-const NonZeroAddressSchema = z
-  .string()
-  .refine(isAddress, 'must be an address')
-  .refine((value) => !isAddressEqual(value, zeroAddress), 'must be non-zero');
+const AddressSchema = z.string().refine(isAddress, 'must be an address');
+const NonZeroAddressSchema = AddressSchema.refine(
+  (value) => !isAddressEqual(value, zeroAddress),
+  'must be non-zero',
+);
 const PositivePriceSchema = z.number().positive();
 const NativeSpendBudgetSchema = z.object({
   dailyLimitGwei: z.number().int().positive(),
@@ -24,7 +25,8 @@ export const GasTokenConfigurationSchema = z.object({
     z
       .array(
         z.object({
-          address: NonZeroAddressSchema,
+          // The zero address stands for the chain's native coin
+          address: AddressSchema,
           symbol: z.string().trim().min(1),
           decimals: z.number().int().nonnegative().max(255),
           usdPrice: PositivePriceSchema.optional(),
@@ -53,6 +55,7 @@ export const GasTokenConfigurationSchema = z.object({
 });
 
 export type GasTokenAllowlistEntry = {
+  /** Token contract, or the zero address for the chain's native coin. */
   address: Address;
   symbol: string;
   decimals: number;
