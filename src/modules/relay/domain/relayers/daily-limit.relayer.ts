@@ -154,7 +154,7 @@ export class DailyLimitRelayer implements IRelayer {
     address: Address;
   }): Promise<{ remaining: number; limit: number }> {
     const config = await this.getSponsoredChain(args.chainId);
-    if (!config) {
+    if (!config || !(await this.relayApi.isAvailable(args.chainId))) {
       return { remaining: 0, limit: 0 };
     }
     const spent = await this.cacheService.getCounter(

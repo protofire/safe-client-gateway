@@ -51,6 +51,22 @@ const OzTransactionResponseSchema = z.object({
     .optional(),
 });
 
+const OzRelayerResponseSchema = z.object({
+  success: z.boolean(),
+  data: z
+    .object({
+      paused: z.boolean(),
+      system_disabled: z.boolean().nullish(),
+      policies: z.object({ min_balance: z.number().nullish() }).nullish(),
+    })
+    .nullish(),
+});
+
+const OzBalanceResponseSchema = z.object({
+  success: z.boolean(),
+  data: z.object({ balance: z.number() }).nullish(),
+});
+
 type OzTransactionStatus = NonNullable<
   z.infer<typeof OzTransactionResponseSchema>['data']
 >['status'];
@@ -62,10 +78,16 @@ type OzTransactionStatus = NonNullable<
 @Injectable()
 export class OzRelayerApi extends RelayCountCache implements IRelayApi {
   private static readonly SPEED = 'fast';
+  private static readonly AVAILABILITY_TTL_MS = 45_000;
 
   private readonly baseUri: string;
   private readonly apiKey: string;
   private readonly relayerIds: Record<string, string>;
+  // ponytail: per-process cache, each replica asks OZ at most once per TTL; move to Redis if replicas multiply
+  private readonly availability = new Map<
+    string,
+    { available: boolean; expiresAt: number }
+  >();
 
   constructor(
     @Inject(NetworkService)
@@ -120,6 +142,55 @@ export class OzRelayerApi extends RelayCountCache implements IRelayApi {
       );
     }
     return rawify({ taskId: response.data.id });
+  }
+
+  async isAvailable(chainId: string): Promise<boolean> {
+    const cached = this.availability.get(chainId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.available;
+    }
+    const available = await this.fetchAvailability(chainId);
+    this.availability.set(chainId, {
+      available,
+      expiresAt: Date.now() + OzRelayerApi.AVAILABILITY_TTL_MS,
+    });
+    return available;
+  }
+
+  /** Fails closed: an unreachable or malformed relayer counts as unavailable. */
+  private async fetchAvailability(chainId: string): Promise<boolean> {
+    if (!this.relayerIds[chainId]) {
+      return false;
+    }
+    try {
+      const url = this.getRelayerUrl(chainId);
+      const networkRequest = { headers: this.getHeaders() };
+      // ponytail: balances arrive as JSON numbers, so wei above 2^53 compare with float precision; fine for a threshold check
+      const [relayer, balance] = await Promise.all([
+        this.networkService
+          .get<unknown>({ url, networkRequest })
+          .then(({ data }) => OzRelayerResponseSchema.parse(data)),
+        this.networkService
+          .get<unknown>({ url: `${url}/balance`, networkRequest })
+          .then(({ data }) => OzBalanceResponseSchema.parse(data)),
+      ]);
+      if (
+        !relayer.success ||
+        !relayer.data ||
+        !balance.success ||
+        !balance.data
+      ) {
+        return false;
+      }
+      const minBalance = relayer.data.policies?.min_balance ?? 0;
+      return (
+        !relayer.data.paused &&
+        !relayer.data.system_disabled &&
+        balance.data.balance >= minBalance
+      );
+    } catch {
+      return false;
+    }
   }
 
   async getRelayStatus(args: {

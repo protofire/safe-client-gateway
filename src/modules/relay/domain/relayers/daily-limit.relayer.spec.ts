@@ -27,7 +27,10 @@ const mockLogging = {
 const mockMapper = {
   getLimitAddresses: jest.fn(),
 } as unknown as jest.Mocked<LimitAddressesMapper>;
-const mockRelayApi = { relay: jest.fn() } as unknown as jest.Mocked<IRelayApi>;
+const mockRelayApi = {
+  relay: jest.fn(),
+  isAvailable: jest.fn(),
+} as unknown as jest.Mocked<IRelayApi>;
 const mockChains = {
   getChain: jest.fn(),
 } as unknown as jest.Mocked<IChainsRepository>;
@@ -93,6 +96,7 @@ describe('DailyLimitRelayer (sponsored)', () => {
     mockRelayApi.relay.mockResolvedValue(
       rawify({ taskId: faker.string.uuid() }),
     );
+    mockRelayApi.isAvailable.mockResolvedValue(true);
     target = build();
   });
 
@@ -247,6 +251,14 @@ describe('DailyLimitRelayer (sponsored)', () => {
       await expect(
         target.getRelaysRemaining({ chainId, address: safe }),
       ).resolves.toEqual({ remaining: 0, limit: 0 });
+    });
+
+    it('returns {0,0} when the chain relayer is unavailable', async () => {
+      mockRelayApi.isAvailable.mockResolvedValue(false);
+      await expect(
+        target.getRelaysRemaining({ chainId, address: safe }),
+      ).resolves.toEqual({ remaining: 0, limit: 0 });
+      expect(mockRelayApi.isAvailable).toHaveBeenCalledWith(chainId);
     });
 
     it('returns {0,0} when today’s budget is used', async () => {

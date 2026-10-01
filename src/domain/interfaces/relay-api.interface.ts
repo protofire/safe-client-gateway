@@ -18,6 +18,9 @@ export interface IRelayApi {
     taskId: string;
   }): Promise<Raw<RelayStatus>>;
 
+  /** Whether the chain's executor can take a transaction now (not paused, disabled or underfunded). */
+  isAvailable(chainId: string): Promise<boolean>;
+
   getRelayCount(args: { chainId: string; address: Address }): Promise<number>;
 
   setRelayCount(args: {
