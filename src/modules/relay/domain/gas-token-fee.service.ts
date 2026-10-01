@@ -10,6 +10,7 @@ import {
   parseAbi,
   size,
   slice,
+  zeroAddress,
   type Address,
   type Hex,
 } from 'viem';
@@ -106,6 +107,11 @@ export class GasTokenFeeService {
       });
     }
     this.disabled = disabled;
+  }
+
+  /** The zero address as gasToken: the Safe refunds in the chain's native coin. */
+  static isNative(gasToken: Address): boolean {
+    return isAddressEqual(gasToken, zeroAddress);
   }
 
   getRefundReceiver(chainId: string): Address | null {
@@ -221,26 +227,46 @@ export class GasTokenFeeService {
         GasTokenFeeService.BPS +
       GasTokenFeeService.SAFE_TX_GAS_MARGIN_FIXED;
 
-    const baseGas =
+    const configuredBaseGas =
       BigInt(this.configuration.baseGas) +
       BigInt(this.configuration.baseGasPerSignature) *
         BigInt(args.numberSignatures);
     // Quote the outer gas budget, but collect it through the Safe's inner-gas refund.
     // The signed execution is still simulated and checked against its actual estimate.
     const outerGasBudget =
-      safeTxGas + baseGas + BigInt(this.configuration.gasLimitBuffer);
-    if (innerGas + baseGas === BigInt(0)) {
+      safeTxGas + configuredBaseGas + BigInt(this.configuration.gasLimitBuffer);
+    if (innerGas + configuredBaseGas === BigInt(0)) {
       throw new GasTokenRelayError(
         'Cannot quote a transaction with zero refundable gas',
       );
     }
-    const gasPrice = GasTokenFeeService.toTokenGasPrice(
-      market,
-      token.decimals,
-      this.configuration.marginBps,
-      outerGasBudget,
-      innerGas + baseGas,
-    );
+    let baseGas = configuredBaseGas;
+    let gasPrice: bigint;
+    if (GasTokenFeeService.isNative(token.address)) {
+      // handlePayment refunds native at min(gasPrice, tx.gasprice): a margin in gasPrice never
+      // arrives. Sign gasPrice as a ceiling with headroom and carry the margin in baseGas instead.
+      const marginFactor =
+        GasTokenFeeService.BPS + BigInt(this.configuration.marginBps);
+      gasPrice = GasTokenFeeService.ceilDiv(
+        market.gasPriceWei * marginFactor,
+        GasTokenFeeService.BPS,
+      );
+      const refundGas = GasTokenFeeService.ceilDiv(
+        outerGasBudget * marginFactor,
+        GasTokenFeeService.BPS,
+      );
+      if (refundGas - innerGas > baseGas) {
+        baseGas = refundGas - innerGas;
+      }
+    } else {
+      gasPrice = GasTokenFeeService.toTokenGasPrice(
+        market,
+        token.decimals,
+        this.configuration.marginBps,
+        outerGasBudget,
+        innerGas + baseGas,
+      );
+    }
     const nativeCostWei = outerGasBudget * market.gasPriceWei;
 
     return {
@@ -266,7 +292,9 @@ export class GasTokenFeeService {
         phase: GasTokenFeeService.PRICING_PHASE,
         priceSource: GasTokenFeeService.getPriceSource(
           this.configuration.nativeUsdPrices[args.chainId] !== undefined,
-          token.usdPrice !== undefined,
+          GasTokenFeeService.isNative(token.address)
+            ? this.configuration.nativeUsdPrices[args.chainId] !== undefined
+            : token.usdPrice !== undefined,
         ),
         priceTimestamp: Math.floor(
           (market.nativePriceTimestamp ?? Date.now()) / 1_000,
@@ -382,6 +410,9 @@ export class GasTokenFeeService {
     outerGasLimit: bigint;
   }): Promise<void> {
     const market = await this.getMarket(args.chainId, args.token);
+    if (GasTokenFeeService.isNative(args.token.address)) {
+      return this.assertNativeRefundCovers(args, market.gasPriceWei);
+    }
     const refund = (args.innerGasEstimate + args.baseGas) * args.gasPrice;
     const cost = args.outerGasLimit * market.gasPriceWei;
 
@@ -402,6 +433,45 @@ export class GasTokenFeeService {
         'The fee signed into this transaction no longer covers the gas cost. Propose it again to refresh the fee.',
       );
     }
+  }
+
+  /**
+   * Native refund is `(gasUsed + baseGas) × min(gasPrice, tx.gasprice)` (handlePayment), so the
+   * signed gasPrice must reach today's price and the margin has to come from the gas units.
+   */
+  private assertNativeRefundCovers(
+    args: {
+      gasPrice: bigint;
+      baseGas: bigint;
+      innerGasEstimate: bigint;
+      outerGasLimit: bigint;
+    },
+    currentGasPrice: bigint,
+  ): void {
+    if (args.gasPrice < currentGasPrice) {
+      throw new GasTokenRelayError(
+        'The gas price signed into this transaction is below the current network gas price, so the refund would not cover the gas cost. Propose it again to refresh the fee.',
+      );
+    }
+    const paidGasPrice =
+      args.gasPrice < currentGasPrice ? args.gasPrice : currentGasPrice;
+    const covered =
+      (args.innerGasEstimate + args.baseGas) *
+      paidGasPrice *
+      GasTokenFeeService.BPS;
+    const required =
+      args.outerGasLimit *
+      currentGasPrice *
+      (GasTokenFeeService.BPS + BigInt(this.configuration.minMarginBps));
+    if (covered < required) {
+      throw new GasTokenRelayError(
+        'The fee signed into this transaction no longer covers the gas cost. Propose it again to refresh the fee.',
+      );
+    }
+  }
+
+  private static ceilDiv(numerator: bigint, denominator: bigint): bigint {
+    return (numerator + denominator - BigInt(1)) / denominator;
   }
 
   /** Token units per gas: gasWei × nativeUsd × 10^decimals × (1 + margin) / (tokenUsd × 10^18), rounded up. */
@@ -538,7 +608,8 @@ export class GasTokenFeeService {
       this.chainsRepository.getChain(chainId),
       this.blockchainApiManager.getApi(chainId),
     ]);
-    const [gasPriceWei, nativePrice, tokenUsd] = await Promise.all([
+    const isNative = GasTokenFeeService.isNative(token.address);
+    const [gasPriceWei, nativePrice, erc20Usd] = await Promise.all([
       client.getGasPrice(),
       this.configuration.nativeUsdPrices[chainId] !== undefined
         ? {
@@ -546,10 +617,13 @@ export class GasTokenFeeService {
             fetchedAt: Date.now(),
           }
         : this.nativePrices.getPrice(chain),
-      token.usdPrice ?? this.getTokenUsdPrice(chain, token.address),
+      isNative
+        ? null
+        : (token.usdPrice ?? this.getTokenUsdPrice(chain, token.address)),
     ]);
 
     const nativeUsd = nativePrice?.usd ?? null;
+    const tokenUsd = isNative ? nativeUsd : erc20Usd;
     if (
       nativeUsd === null ||
       tokenUsd === null ||
