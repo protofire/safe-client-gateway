@@ -332,8 +332,8 @@ describe('GasTokenRelayer', () => {
     const value = parseEther('1');
     const gasPrice = parseGwei('24');
     const baseGas = BigInt(191_600);
-    // value + (50k inner + 191.6k baseGas) × 24 gwei
-    const required = value + (BigInt(50_000) + baseGas) * gasPrice;
+    // value + (120k safeTxGas + 191.6k baseGas) × 24 gwei: the contract may charge up to safeTxGas
+    const required = value + (BigInt(120_000) + baseGas) * gasPrice;
     const nativeData = (): ReturnType<
       ReturnType<typeof execTransactionEncoder>['encode']
     > =>

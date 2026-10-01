@@ -193,7 +193,6 @@ export class GasTokenRelayer implements IRelayer {
         chainId: args.chainId,
         safeAddress: args.to,
         fee,
-        innerGas,
       });
     }
     await this.feeService.reserveNativeSpend(args.chainId, gasLimit);
@@ -222,7 +221,6 @@ export class GasTokenRelayer implements IRelayer {
     chainId: string;
     safeAddress: Address;
     fee: SafePaysFee;
-    innerGas: bigint;
   }): Promise<void> {
     const client = await this.blockchainApiManager.getApi(args.chainId);
     const [code, balance] = await Promise.all([
@@ -235,8 +233,10 @@ export class GasTokenRelayer implements IRelayer {
         'The refund receiver is a contract and cannot receive a native refund (GS011)',
       );
     }
+    // The contract charges the measured gasUsed, which may exceed the estimate up to safeTxGas
     const required =
-      args.fee.value + (args.innerGas + args.fee.baseGas) * args.fee.gasPrice;
+      args.fee.value +
+      (args.fee.safeTxGas + args.fee.baseGas) * args.fee.gasPrice;
     if (balance < required) {
       throw new GasTokenRelayError(
         `The Safe holds ${balance} wei of the native coin but needs ${required} for the transaction value and the fee`,
