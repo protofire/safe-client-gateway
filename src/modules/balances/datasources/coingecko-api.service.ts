@@ -31,6 +31,32 @@ import { CacheDir } from '@/datasources/cache/entities/cache-dir.entity';
 import { LogType } from '@/domain/common/entities/log-type.entity';
 import chunk from 'lodash/chunk';
 import merge from 'lodash/merge';
+import { createHash } from 'crypto';
+
+// Tron uses base58check addresses with 0x41 prefix for CoinGecko lookups
+const TRON_CHAIN_NAME = 'tron';
+const BASE58_ALPHABET =
+  '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+
+function hexToBase58Check(hexAddress: string): string {
+  const addressHex = '41' + hexAddress.replace(/^0x/i, '');
+  const addressBytes = Buffer.from(addressHex, 'hex');
+  const hash1 = createHash('sha256').update(addressBytes).digest();
+  const hash2 = createHash('sha256').update(hash1).digest();
+  const checksum = hash2.subarray(0, 4);
+  const payload = Buffer.concat([addressBytes, checksum]);
+  let num = BigInt('0x' + payload.toString('hex'));
+  let encoded = '';
+  while (num > 0n) {
+    encoded = BASE58_ALPHABET[Number(num % 58n)] + encoded;
+    num = num / 58n;
+  }
+  for (const byte of payload) {
+    if (byte === 0) encoded = '1' + encoded;
+    else break;
+  }
+  return encoded;
+}
 
 /**
  * TODO: Refactor away the return of currency codes from public methods, e.g.
@@ -412,9 +438,22 @@ export class CoingeckoApi implements IPricesApi {
       new Set(args.tokenAddresses.map((address) => address.toLowerCase())),
     );
 
+    // For Tron, convert 0x addresses to base58check format for CoinGecko
+    const isTron = args.chainName === TRON_CHAIN_NAME;
+    const base58ToHexMap: Record<string, string> = {};
+    let queryAddresses = uniqueTokenAddresses;
+
+    if (isTron) {
+      queryAddresses = uniqueTokenAddresses.map((addr) => {
+        const base58 = hexToBase58Check(addr);
+        base58ToHexMap[base58.toLowerCase()] = addr;
+        return base58;
+      });
+    }
+
     // CoinGecko limits the number of token addresses that can be queried at once
     const tokenAddressBatches = chunk(
-      uniqueTokenAddresses,
+      queryAddresses,
       CoingeckoApi.MAX_BATCH_SIZE,
     );
 
@@ -447,6 +486,18 @@ export class CoingeckoApi implements IPricesApi {
       const fulfilled = res
         .filter((item) => item.status === 'fulfilled')
         .map((item) => item.value.data);
+
+      const merged: AssetPrice = merge({}, ...fulfilled);
+
+      // For Tron, remap base58 keys back to 0x format
+      if (isTron) {
+        const remapped: AssetPrice = {};
+        for (const [key, value] of Object.entries(merged)) {
+          const hexAddr = base58ToHexMap[key.toLowerCase()];
+          remapped[hexAddr ?? key] = value;
+        }
+        return rawify(remapped) as Raw<AssetPrice>;
+      }
 
       return merge({}, ...fulfilled);
     } catch (error) {
