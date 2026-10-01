@@ -34,8 +34,13 @@ export class FeePreviewRelayCost {
   @ApiProperty()
   fiatCode!: string;
 
-  @ApiProperty({ description: 'Native gas cost at quote time, for display' })
-  fiatValue!: string;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      'Native gas cost at quote time, for display; null when the native coin has no USD price',
+  })
+  fiatValue!: string | null;
 }
 
 export class FeePreviewPricingContext {

@@ -46,6 +46,13 @@ type Market = {
   nativePriceTimestamp?: number;
 };
 
+/** A native refund is priced in wei; the USD price is for display only and may be missing. */
+type NativeMarket = {
+  gasPriceWei: bigint;
+  nativeUsd: bigint | null;
+  nativePriceTimestamp?: number;
+};
+
 /**
  * Prices "the Safe pays the relayer in a token" using the Safe contract's own refund:
  * `handlePayment` sends `(gasUsed + baseGas) × gasPrice` of `gasToken` to `refundReceiver`.
@@ -220,7 +227,9 @@ export class GasTokenFeeService {
 
     const [innerGas, market] = await Promise.all([
       this.estimateSafeTxGas(args),
-      this.getMarket(args.chainId, token),
+      GasTokenFeeService.isNative(token.address)
+        ? this.getNativeMarket(args.chainId)
+        : this.getMarket(args.chainId, token),
     ]);
     // With gasPrice > 0 the Safe gives the inner call exactly safeTxGas, so it must carry a margin
     const safeTxGas =
@@ -262,7 +271,8 @@ export class GasTokenFeeService {
       }
     } else {
       gasPrice = GasTokenFeeService.toTokenGasPrice(
-        market,
+        // A non-native token always gets the fully priced market from getMarket
+        market as Market,
         token.decimals,
         this.configuration.marginBps,
         outerGasBudget,
@@ -284,20 +294,23 @@ export class GasTokenFeeService {
       },
       relayCost: {
         fiatCode: GasTokenFeeService.FIAT_CODE,
-        fiatValue: GasTokenFeeService.toUsd(
-          nativeCostWei,
-          18,
-          market.nativeUsd,
-        ),
+        fiatValue:
+          market.nativeUsd === null
+            ? null
+            : GasTokenFeeService.toUsd(nativeCostWei, 18, market.nativeUsd),
       },
       pricingContextSnapshot: {
         phase: GasTokenFeeService.PRICING_PHASE,
-        priceSource: GasTokenFeeService.getPriceSource(
-          this.configuration.nativeUsdPrices[args.chainId] !== undefined,
-          GasTokenFeeService.isNative(token.address)
-            ? this.configuration.nativeUsdPrices[args.chainId] !== undefined
-            : token.usdPrice !== undefined,
-        ),
+        priceSource:
+          market.nativeUsd === null
+            ? 'unavailable'
+            : GasTokenFeeService.getPriceSource(
+                this.configuration.nativeUsdPrices[args.chainId] !== undefined,
+                GasTokenFeeService.isNative(token.address)
+                  ? this.configuration.nativeUsdPrices[args.chainId] !==
+                      undefined
+                  : token.usdPrice !== undefined,
+              ),
         priceTimestamp: Math.floor(
           (market.nativePriceTimestamp ?? Date.now()) / 1_000,
         ),
@@ -421,10 +434,11 @@ export class GasTokenFeeService {
     innerGasEstimate: bigint;
     outerGasLimit: bigint;
   }): Promise<void> {
-    const market = await this.getMarket(args.chainId, args.token);
     if (GasTokenFeeService.isNative(args.token.address)) {
-      return this.assertNativeRefundCovers(args, market.gasPriceWei);
+      const { gasPriceWei } = await this.getNativeMarket(args.chainId);
+      return this.assertNativeRefundCovers(args, gasPriceWei);
     }
+    const market = await this.getMarket(args.chainId, args.token);
     const refund = (args.innerGasEstimate + args.baseGas) * args.gasPrice;
     const cost = args.outerGasLimit * market.gasPriceWei;
 
@@ -624,22 +638,13 @@ export class GasTokenFeeService {
       this.chainsRepository.getChain(chainId),
       this.blockchainApiManager.getApi(chainId),
     ]);
-    const isNative = GasTokenFeeService.isNative(token.address);
-    const [gasPriceWei, nativePrice, erc20Usd] = await Promise.all([
+    const [gasPriceWei, nativePrice, tokenUsd] = await Promise.all([
       client.getGasPrice(),
-      this.configuration.nativeUsdPrices[chainId] !== undefined
-        ? {
-            usd: this.configuration.nativeUsdPrices[chainId],
-            fetchedAt: Date.now(),
-          }
-        : this.nativePrices.getPrice(chain),
-      isNative
-        ? null
-        : (token.usdPrice ?? this.getTokenUsdPrice(chain, token.address)),
+      this.getNativeUsdPrice(chain),
+      token.usdPrice ?? this.getTokenUsdPrice(chain, token.address),
     ]);
 
     const nativeUsd = nativePrice?.usd ?? null;
-    const tokenUsd = isNative ? nativeUsd : erc20Usd;
     if (
       nativeUsd === null ||
       tokenUsd === null ||
@@ -659,6 +664,33 @@ export class GasTokenFeeService {
       nativeUsd: GasTokenFeeService.toScaled(nativeUsd),
       tokenUsd: GasTokenFeeService.toScaled(tokenUsd),
     };
+  }
+
+  private async getNativeMarket(chainId: string): Promise<NativeMarket> {
+    const [chain, client] = await Promise.all([
+      this.chainsRepository.getChain(chainId),
+      this.blockchainApiManager.getApi(chainId),
+    ]);
+    const [gasPriceWei, nativePrice] = await Promise.all([
+      client.getGasPrice(),
+      this.getNativeUsdPrice(chain),
+    ]);
+    const usd = nativePrice?.usd;
+    const priced = usd !== undefined && Number.isFinite(usd) && usd > 0;
+    return {
+      gasPriceWei,
+      nativeUsd: priced ? GasTokenFeeService.toScaled(usd) : null,
+      nativePriceTimestamp: priced ? nativePrice?.fetchedAt : undefined,
+    };
+  }
+
+  private getNativeUsdPrice(
+    chain: Chain,
+  ): Promise<{ usd: number; fetchedAt: number } | null> {
+    const fixed = this.configuration.nativeUsdPrices[chain.chainId];
+    return fixed !== undefined
+      ? Promise.resolve({ usd: fixed, fetchedAt: Date.now() })
+      : this.nativePrices.getPrice(chain);
   }
 
   private async getTokenUsdPrice(

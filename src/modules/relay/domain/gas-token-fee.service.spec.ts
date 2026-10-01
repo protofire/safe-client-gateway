@@ -624,6 +624,44 @@ describe('GasTokenFeeService', () => {
       expect(mockPricesApi.getTokenPrices).not.toHaveBeenCalled();
     });
 
+    it('quotes a native fee without a USD price and leaves the display value null', async () => {
+      const config = new FakeConfigurationService();
+      config.set('relay.gasToken', {
+        ...nativeConfiguration,
+        nativeUsdPrices: {},
+      });
+      service = buildService(config);
+      mockNativePrices.getPrice.mockResolvedValue(null);
+      mockSimulation({ estimate: BigInt(100_000), success: true });
+
+      const result = await service.preview({
+        chainId,
+        safeAddress: getAddress(faker.finance.ethereumAddress()),
+        to: getAddress(faker.finance.ethereumAddress()),
+        value: '0',
+        data: '0x',
+        operation: Operation.CALL,
+        gasToken: zeroAddress,
+        numberSignatures: 2,
+      });
+
+      expect(result.relayCost).toEqual({ fiatCode: 'USD', fiatValue: null });
+      expect(result.pricingContextSnapshot.priceSource).toBe('unavailable');
+      expect(BigInt(result.txData.gasPrice)).toBeGreaterThanOrEqual(
+        parseGwei('20'),
+      );
+      await expect(
+        service.assertRefundCovers({
+          chainId,
+          token: native,
+          gasPrice: BigInt(result.txData.gasPrice),
+          baseGas: BigInt(result.txData.baseGas),
+          innerGasEstimate: BigInt(100_000),
+          outerGasLimit: BigInt(243_000),
+        }),
+      ).resolves.toBeUndefined();
+    });
+
     describe('assertRefundCovers', () => {
       const args = {
         chainId,
