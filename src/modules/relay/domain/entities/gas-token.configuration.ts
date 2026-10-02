@@ -1,20 +1,78 @@
-import { isAddress, isAddressEqual, zeroAddress } from 'viem';
+import { getAddress, isAddress, isAddressEqual, zeroAddress } from 'viem';
 import { z } from 'zod';
 import type { Address } from 'viem';
+import { CoercedNumberSchema } from '@/validation/entities/schemas/coerced-number.schema';
 
-const AddressSchema = z.string().refine(isAddress, 'must be an address');
+const AddressSchema = z
+  .string()
+  .refine(isAddress, 'must be an address')
+  .transform((value) => getAddress(value));
 const NonZeroAddressSchema = AddressSchema.refine(
   (value) => !isAddressEqual(value, zeroAddress),
   'must be non-zero',
 );
 const PositivePriceSchema = z.number().positive();
+/** config-service renders DecimalField as a string, e.g. "2500.00000000" */
+const DecimalPriceSchema = CoercedNumberSchema.pipe(PositivePriceSchema);
+/** A positive wei amount as a decimal string (uint256 does not fit a JSON number) */
+const WeiStringSchema = z
+  .string()
+  .regex(/^\d+$/)
+  .refine((value) => BigInt(value) > 0, 'must be positive');
 const NativeSpendBudgetSchema = z.object({
   dailyLimitGwei: z.number().int().positive(),
-  maxGasPriceWei: z
-    .string()
-    .regex(/^\d+$/)
-    .refine((value) => BigInt(value) > 0),
+  maxGasPriceWei: WeiStringSchema,
 });
+
+const FeeTokenSchema = z.object({
+  // The zero address stands for the chain's native coin
+  address: AddressSchema,
+  symbol: z.string().trim().min(1),
+  decimals: z.number().int().nonnegative().max(255),
+  usdPrice: PositivePriceSchema.optional(),
+});
+
+function rejectDuplicateAddresses(
+  entries: Array<{ address: string }>,
+  ctx: z.RefinementCtx,
+): void {
+  const seen = new Set<string>();
+  entries.forEach((entry, index) => {
+    const address = entry.address.toLowerCase();
+    if (seen.has(address)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [index, 'address'],
+        message: 'duplicate token address',
+      });
+    }
+    seen.add(address);
+  });
+}
+
+/** `GET {safeConfig.baseUri}/api/v1/relay/chains/{chainId}/` — per-chain relay settings edited in the config-service admin. */
+export const RelayChainSchema = z.object({
+  relayerId: z.string().trim().min(1),
+  nativeUsdPrice: DecimalPriceSchema.nullable(),
+  refundReceiver: NonZeroAddressSchema.nullable(),
+  payFromSafeDailyBudgetWei: WeiStringSchema.nullable(),
+  sponsoringDailyBudgetWei: WeiStringSchema.nullable(),
+  sponsoringPerSafePerDay: z.number().int().positive().nullable(),
+  sponsoringPerOwnerCreationsPerDay: z.number().int().nonnegative().nullable(),
+  sponsoringMaxGasLimit: z.number().int().positive().nullable(),
+  tokens: z
+    .array(
+      FeeTokenSchema.extend({
+        // null = priced by the market
+        usdPrice: DecimalPriceSchema.nullable().transform(
+          (value) => value ?? undefined,
+        ),
+      }),
+    )
+    .superRefine(rejectDuplicateAddresses),
+});
+
+export type RelayChain = z.infer<typeof RelayChainSchema>;
 
 export const GasTokenConfigurationSchema = z.object({
   refundReceivers: z.record(z.string(), NonZeroAddressSchema),
