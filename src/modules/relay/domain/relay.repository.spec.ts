@@ -13,7 +13,7 @@ import type { GasTokenRelayer } from '@/modules/relay/domain/relayers/gas-token.
 import type { RelayScreeningService } from '@/modules/relay/domain/sanctions/relay-screening.service';
 
 describe('RelayRepository gas token capability', () => {
-  it('returns an empty capability when GAS_TOKEN is disabled', async () => {
+  it('returns an empty capability when PAY_FROM_SAFE is disabled', async () => {
     const relayManager = {} as IRelayManager;
     const relayApi = {} as IRelayApi;
     const gasTokenRelayer = {} as GasTokenRelayer;

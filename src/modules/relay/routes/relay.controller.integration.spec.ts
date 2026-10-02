@@ -2373,7 +2373,7 @@ describe('Relay controller', () => {
         .expect({ remaining: 0, limit: 0 });
     });
 
-    it('routes a Safe-pays execTransaction (gasPrice > 0, no GAS_TOKEN) to the existing refusal, never reaching DailyLimitRelayer', async () => {
+    it('routes a Safe-pays execTransaction (gasPrice > 0, no PAY_FROM_SAFE) to the existing refusal, never reaching DailyLimitRelayer', async () => {
       const chain = chainBuilder()
         .with('chainId', chainId)
         .with('features', ['RELAYING'])

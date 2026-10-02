@@ -104,7 +104,7 @@ describe('GasTokenRelayer', () => {
   });
 
   describe('relay', () => {
-    it('should refuse Safe-pays when GAS_TOKEN is disabled without outbound writes', async () => {
+    it('should refuse Safe-pays when PAY_FROM_SAFE is disabled without outbound writes', async () => {
       mockFeeService.isEnabled.mockResolvedValue(false);
 
       await expect(
