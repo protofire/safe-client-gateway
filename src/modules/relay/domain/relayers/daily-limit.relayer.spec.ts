@@ -19,10 +19,12 @@ import { DailyLimitRelayer } from '@/modules/relay/domain/relayers/daily-limit.r
 import { RelayLimitReachedError } from '@/modules/relay/domain/errors/relay-limit-reached.error';
 import { ExceedsMaxGasLimitError } from '@/modules/relay/domain/errors/exceeds-max-gas-limit';
 import { rawify } from '@/validation/entities/raw.entity';
+import { relayChainBuilder } from '@/modules/relay/domain/entities/__tests__/relay-chain.builder';
 
 const mockLogging = {
   info: jest.fn(),
   warn: jest.fn(),
+  error: jest.fn(),
 } as unknown as jest.Mocked<ILoggingService>;
 const mockMapper = {
   getLimitAddresses: jest.fn(),
@@ -30,9 +32,11 @@ const mockMapper = {
 const mockRelayApi = {
   relay: jest.fn(),
   isAvailable: jest.fn(),
+  getGasPriceCap: jest.fn(),
 } as unknown as jest.Mocked<IRelayApi>;
 const mockChains = {
   getChain: jest.fn(),
+  getRelayChain: jest.fn(),
 } as unknown as jest.Mocked<IChainsRepository>;
 const mockClient = { getCode: jest.fn() };
 const mockBlockchain = {
@@ -45,6 +49,7 @@ const mockFee = {
 
 describe('DailyLimitRelayer (sponsored)', () => {
   const chainId = '84532';
+  /** What the relayer derives from the settings below: budget in gwei, OZ cap as the price bound */
   const entry = {
     perSafePerDay: 3,
     perOwnerCreationsPerDay: 2,
@@ -52,16 +57,19 @@ describe('DailyLimitRelayer (sponsored)', () => {
     dailyBudgetGwei: 100_000_000,
     maxGasPriceWei: '500000000',
   };
+  const relayChain = relayChainBuilder()
+    .with('sponsoringPerSafePerDay', entry.perSafePerDay)
+    .with('sponsoringPerOwnerCreationsPerDay', entry.perOwnerCreationsPerDay)
+    .with('sponsoringMaxGasLimit', entry.maxGasLimit)
+    .with('sponsoringDailyBudgetWei', '100000000000000000')
+    .build();
   const safe = getAddress(faker.finance.ethereumAddress());
   const execData = execTransactionEncoder().encode();
   let cache: FakeCacheService;
   let target: DailyLimitRelayer;
 
-  const build = (
-    sponsoredChains: Record<string, typeof entry> = { [chainId]: entry },
-  ): DailyLimitRelayer => {
+  const build = (): DailyLimitRelayer => {
     const config = new FakeConfigurationService();
-    config.set('relay.sponsoredChains', sponsoredChains);
     config.set('relay.gasToken', { gasLimitBuffer: 50_000 });
     return new DailyLimitRelayer(
       mockLogging,
@@ -97,6 +105,8 @@ describe('DailyLimitRelayer (sponsored)', () => {
       rawify({ taskId: faker.string.uuid() }),
     );
     mockRelayApi.isAvailable.mockResolvedValue(true);
+    mockChains.getRelayChain.mockResolvedValue(relayChain);
+    mockRelayApi.getGasPriceCap.mockResolvedValue(BigInt(entry.maxGasPriceWei));
     target = build();
   });
 
@@ -117,12 +127,52 @@ describe('DailyLimitRelayer (sponsored)', () => {
     expect(mockRelayApi.relay).not.toHaveBeenCalled();
   });
 
-  it('refuses a RELAYING chain without an env entry', async () => {
-    target = build({});
+  it('refuses a RELAYING chain without relay settings and logs it', async () => {
+    mockChains.getRelayChain.mockResolvedValue(null);
     await expect(relay()).rejects.toMatchObject({
       response: { code: 'CHAIN_NOT_SPONSORED' },
     });
     expect(mockRelayApi.relay).not.toHaveBeenCalled();
+    expect(mockLogging.error).toHaveBeenCalledWith(
+      expect.stringContaining('RELAYING is on for chain 84532'),
+    );
+  });
+
+  it.each([
+    'sponsoringDailyBudgetWei',
+    'sponsoringPerSafePerDay',
+    'sponsoringPerOwnerCreationsPerDay',
+    'sponsoringMaxGasLimit',
+  ] as const)('refuses with %s missing', async (field) => {
+    mockChains.getRelayChain.mockResolvedValue({
+      ...relayChain,
+      [field]: null,
+    });
+    await expect(relay()).rejects.toMatchObject({
+      response: { code: 'CHAIN_NOT_SPONSORED' },
+    });
+    await expect(
+      target.getRelaysRemaining({ chainId, address: safe }),
+    ).resolves.toEqual({ remaining: 0, limit: 0 });
+    expect(mockRelayApi.relay).not.toHaveBeenCalled();
+  });
+
+  it('refuses while the relayer has no gas price cap', async () => {
+    mockRelayApi.getGasPriceCap.mockResolvedValue(null);
+    await expect(relay()).rejects.toMatchObject({
+      response: { code: 'CHAIN_NOT_SPONSORED' },
+    });
+  });
+
+  it('does not log a chain without RELAYING', async () => {
+    mockChains.getChain.mockResolvedValue(
+      chainBuilder().with('chainId', chainId).with('features', []).build(),
+    );
+    mockChains.getRelayChain.mockResolvedValue(null);
+    await expect(relay()).rejects.toMatchObject({
+      response: { code: 'CHAIN_NOT_SPONSORED' },
+    });
+    expect(mockLogging.error).not.toHaveBeenCalled();
   });
 
   it('checks the Safe result for execTransaction and relays with estimate + buffer', async () => {
@@ -247,7 +297,17 @@ describe('DailyLimitRelayer (sponsored)', () => {
 
   describe('getRelaysRemaining', () => {
     it('returns {0,0} on a chain that is not sponsored', async () => {
-      target = build({});
+      mockChains.getRelayChain.mockResolvedValue(null);
+      await expect(
+        target.getRelaysRemaining({ chainId, address: safe }),
+      ).resolves.toEqual({ remaining: 0, limit: 0 });
+    });
+
+    it('returns {0,0} with a budget below one gwei', async () => {
+      mockChains.getRelayChain.mockResolvedValue({
+        ...relayChain,
+        sponsoringDailyBudgetWei: '999999999',
+      });
       await expect(
         target.getRelaysRemaining({ chainId, address: safe }),
       ).resolves.toEqual({ remaining: 0, limit: 0 });

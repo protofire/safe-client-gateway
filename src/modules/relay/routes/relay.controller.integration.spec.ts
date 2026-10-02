@@ -47,8 +47,9 @@ import {
 } from '@/modules/alerts/domain/contracts/__tests__/encoders/delay-modifier-encoder.builder';
 import { rawify } from '@/validation/entities/raw.entity';
 import { createTestModule } from '@/__tests__/testing-module';
-import { BalancesService } from '@/modules/balances/routes/balances.service';
-import type { NoFeeCampaignConfiguration } from '@/modules/relay/domain/entities/relay.configuration';
+import { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
+import { IRelayApi } from '@/domain/interfaces/relay-api.interface';
+import { relayChainBuilder } from '@/modules/relay/domain/entities/__tests__/relay-chain.builder';
 
 const allSupportedChainIds = Object.keys(configuration().relay.apiKey);
 const noFeeCampaignChains = Object.keys(
@@ -94,16 +95,10 @@ const PROXY_FACTORY_VERSIONS = getDeploymentVersionsByChainIds(
   supportedChainIds,
 );
 
-const getScaledBalance = (
-  tokens: bigint | number,
-  decimals: number = 18,
-): bigint => BigInt(tokens) * BigInt(10) ** BigInt(decimals);
-
 describe('Relay controller', () => {
   let app: INestApplication<Server>;
   let configurationService: jest.MockedObjectDeep<IConfigurationService>;
   let networkService: jest.MockedObjectDeep<INetworkService>;
-  let balancesService: jest.MockedObjectDeep<BalancesService>;
   let safeConfigUrl: string;
   let relayUrl: string;
   let getCode: jest.Mock;
@@ -117,20 +112,6 @@ describe('Relay controller', () => {
       relay: {
         ...defaultConfiguration.relay,
         limit: 5,
-        // all non-campaign API-key chains: some upstream cases (e.g. 'different chains') use chains
-        // outside supportedChainIds; a sponsored entry would route campaign chains to the DailyLimitRelayer
-        sponsoredChains: Object.fromEntries(
-          nonnoFeeCampaignChainIds.map((id) => [
-            id,
-            {
-              perSafePerDay: 5,
-              perOwnerCreationsPerDay: 5,
-              maxGasLimit: 30_000_000,
-              dailyBudgetGwei: Number.MAX_SAFE_INTEGER,
-              maxGasPriceWei: '1',
-            },
-          ]),
-        ),
       },
     });
 
@@ -142,7 +123,28 @@ describe('Relay controller', () => {
     safeConfigUrl = configurationService.getOrThrow('safeConfig.baseUri');
     relayUrl = configurationService.getOrThrow('relay.baseUri');
     networkService = moduleFixture.get(NetworkService);
-    balancesService = moduleFixture.get(BalancesService);
+    // Sponsoring limits that never bind in these suites; Gelato has no gas price cap, so pin one
+    jest
+      .spyOn(
+        moduleFixture.get<IChainsRepository>(IChainsRepository),
+        'getRelayChain',
+      )
+      .mockResolvedValue(
+        relayChainBuilder()
+          .with('sponsoringPerSafePerDay', 5)
+          .with('sponsoringPerOwnerCreationsPerDay', 5)
+          .with('sponsoringMaxGasLimit', 30_000_000)
+          .with(
+            'sponsoringDailyBudgetWei',
+            (
+              BigInt(Number.MAX_SAFE_INTEGER) * BigInt(1_000_000_000)
+            ).toString(),
+          )
+          .build(),
+      );
+    jest
+      .spyOn(moduleFixture.get<IRelayApi>(IRelayApi), 'getGasPriceCap')
+      .mockResolvedValue(BigInt(1));
 
     const blockchainApiManager = moduleFixture.get<IBlockchainApiManager>(
       IBlockchainApiManager,
@@ -164,32 +166,8 @@ describe('Relay controller', () => {
     await app.close();
   });
 
-  // Regular relay tests for chains without no-fee campaign configuration
+  // Campaign chains (1 / 11155111) included: every chain uses the DailyLimitRelayer
   describe.each(supportedChainIds)('Common Tests: Chain %s', (chainId) => {
-    beforeEach(() => {
-      if (noFeeCampaignSupportedChainIds.includes(chainId)) {
-        const noFeeConfig = configurationService.get(
-          'relay.noFeeCampaign',
-        ) as NoFeeCampaignConfiguration;
-
-        const tokenBalance = {
-          tokenAddress: noFeeConfig[parseInt(chainId)]
-            ?.safeTokenAddress as string,
-          balance: (BigInt(100) * BigInt(10 ** 18)).toString(),
-          fiatBalance: '1000',
-          fiatConversion: '1',
-          tokenInfo: {
-            decimals: 18, // Required for token balance calculation
-            symbol: 'SAFE',
-            name: 'Safe Token',
-          },
-        };
-        balancesService.getTokenBalance = jest
-          .fn()
-          .mockResolvedValue(tokenBalance);
-      }
-    });
-
     describe('POST /v1/chains/:chainId/relay', () => {
       describe('Relayer', () => {
         describe('Recovery', () => {
@@ -421,8 +399,7 @@ describe('Relay controller', () => {
                 const safe = safeBuilder().build();
                 const safeAddress = getAddress(safe.address);
                 // Above twice the simulated limit (estimate 100_000 + buffer 50_000):
-                // the DailyLimitRelayer caps it at 300_000. NoFeeCampaignRelayer passes
-                // the manual value through. Gelato adds its own 150_000 buffer on top.
+                // the DailyLimitRelayer caps it at 300_000. Gelato adds its own 150_000 buffer on top.
                 const gasLimit = '400000';
                 const data = execTransactionEncoder().encode();
                 const taskId = faker.string.uuid();
@@ -469,9 +446,7 @@ describe('Relay controller', () => {
                   });
 
                 const expectedGasLimit = (
-                  (noFeeCampaignSupportedChainIds.includes(chainId)
-                    ? BigInt(gasLimit)
-                    : BigInt(300_000)) + BigInt(150_000)
+                  BigInt(300_000) + BigInt(150_000)
                 ).toString();
                 expect(networkService.post).toHaveBeenCalledWith({
                   url: `${relayUrl}/relays/v2/sponsored-call`,
@@ -489,9 +464,7 @@ describe('Relay controller', () => {
                 const safe = safeBuilder().build();
                 const safeAddress = getAddress(safe.address);
                 // Below the simulated floor (estimate 100_000 + buffer 50_000 = 150_000):
-                // the DailyLimitRelayer uses the floor. NoFeeCampaignRelayer (no-fee-campaign
-                // chains) does not simulate and passes the manual value through unchanged.
-                // Either way Gelato adds its own 150_000 buffer on top.
+                // the DailyLimitRelayer uses the floor. Gelato adds its own 150_000 buffer on top.
                 const gasLimit = '7';
                 const data = execTransactionEncoder().encode();
                 const taskId = faker.string.uuid();
@@ -537,12 +510,8 @@ describe('Relay controller', () => {
                     taskId,
                   });
 
-                const expectedFlooredGasLimit =
-                  noFeeCampaignSupportedChainIds.includes(chainId)
-                    ? // NoFeeCampaignRelayer does not floor: manual value + Gelato's buffer
-                      (BigInt(gasLimit) + BigInt(150_000)).toString()
-                    : // DailyLimitRelayer floors at estimate (100_000) + buffer (50_000)
-                      '300000';
+                // DailyLimitRelayer floors at estimate (100_000) + buffer (50_000)
+                const expectedFlooredGasLimit = '300000';
                 expect(networkService.post).toHaveBeenCalledWith({
                   url: `${relayUrl}/relays/v2/sponsored-call`,
                   data: expect.objectContaining({
@@ -2906,10 +2875,7 @@ describe('Relay controller', () => {
       });
 
       it('should not rate limit the same address on different chains', async () => {
-        // Use a different chain from non-no-fee-campaign chains to ensure DailyLimitRelayer is used
-        const otherChains = nonnoFeeCampaignChainIds.filter(
-          (id) => id !== chainId,
-        );
+        const otherChains = allSupportedChainIds.filter((id) => id !== chainId);
         const differentChainId = faker.helpers.arrayElement(otherChains);
         const chain = chainBuilder()
           .with('chainId', chainId)
@@ -3105,681 +3071,5 @@ describe('Relay controller', () => {
           });
       });
     });
-  });
-
-  describe('No-fee campaign tests', () => {
-    describe.each(noFeeCampaignSupportedChainIds)(
-      'No-fee campaign tests [%s]',
-      (chainId) => {
-        const version = '1.3.0';
-
-        it('should not relay when current time is less than no-fee campaign start', async () => {
-          const chain = chainBuilder()
-            .with('chainId', chainId)
-            .with('features', ['RELAYING'])
-            .build();
-          const safe = safeBuilder().build();
-          const safeAddress = getAddress(safe.address);
-          const data = execTransactionEncoder()
-            .with(
-              'value',
-              faker.number.bigInt({ min: BigInt(0), max: BigInt(1000000) }),
-            )
-            .encode();
-
-          const noFeeConfig = configurationService.get(
-            'relay.noFeeCampaign',
-          ) as NoFeeCampaignConfiguration;
-          const startsAtTimeStamp =
-            noFeeConfig[parseInt(chainId)]?.startsAtTimeStamp;
-
-          const beforeStartTime = startsAtTimeStamp - 100_000;
-          jest
-            .spyOn(Date.prototype, 'getTime')
-            .mockReturnValue(beforeStartTime);
-
-          // Mock BalancesService to return sufficient token balance
-          const tokenBalance = {
-            tokenAddress: noFeeConfig[parseInt(chainId)]
-              ?.safeTokenAddress as string,
-            balance: '100000000000000000000', // 100 tokens in wei
-            fiatBalance: '100',
-            fiatConversion: '1',
-          };
-          balancesService.getTokenBalance = jest
-            .fn()
-            .mockResolvedValue(tokenBalance);
-
-          networkService.get.mockImplementation(({ url }) => {
-            switch (url) {
-              case `${safeConfigUrl}/api/v1/chains/${chainId}`:
-                return Promise.resolve({ data: rawify(chain), status: 200 });
-              case `${chain.transactionService}/api/v1/safes/${safeAddress}`:
-                return Promise.resolve({ data: rawify(safe), status: 200 });
-              default:
-                return Promise.reject(`No matching rule for url: ${url}`);
-            }
-          });
-
-          await request(app.getHttpServer())
-            .post(`/v1/chains/${chainId}/relay`)
-            .send({
-              to: safeAddress,
-              data,
-              version,
-            })
-            .expect(429)
-            .expect({
-              message: `Relay limit reached for ${safeAddress}`,
-              statusCode: 429,
-            });
-
-          // Verify that BalancesService was is not called as we are before no-fee campaign
-          expect(balancesService.getTokenBalance).toHaveBeenCalledTimes(0);
-
-          // Restore Date.now mock
-          jest.restoreAllMocks();
-        });
-
-        it('should not relay when current time is greater than no-fee campaign end', async () => {
-          const chain = chainBuilder()
-            .with('chainId', chainId)
-            .with('features', ['RELAYING'])
-            .build();
-          const safe = safeBuilder().build();
-          const safeAddress = getAddress(safe.address);
-          const data = execTransactionEncoder()
-            .with('value', faker.number.bigInt())
-            .encode();
-
-          const noFeeConfig = configurationService.get(
-            'relay.noFeeCampaign',
-          ) as NoFeeCampaignConfiguration;
-          const endsAtTimeStamp =
-            noFeeConfig[parseInt(chainId)]?.endsAtTimeStamp;
-
-          const afterEndTime = endsAtTimeStamp + 100_000;
-          jest.spyOn(Date.prototype, 'getTime').mockReturnValue(afterEndTime);
-
-          // Mock BalancesService to return sufficient token balance
-          const tokenBalance = {
-            tokenAddress: noFeeConfig[parseInt(chainId)]
-              ?.safeTokenAddress as string,
-            balance: '100000000000000000000', // 100 tokens in wei
-            fiatBalance: '100',
-            fiatConversion: '1',
-          };
-          balancesService.getTokenBalance = jest
-            .fn()
-            .mockResolvedValue(tokenBalance);
-
-          networkService.get.mockImplementation(({ url }) => {
-            switch (url) {
-              case `${safeConfigUrl}/api/v1/chains/${chainId}`:
-                return Promise.resolve({ data: rawify(chain), status: 200 });
-              case `${chain.transactionService}/api/v1/safes/${safeAddress}`:
-                return Promise.resolve({ data: rawify(safe), status: 200 });
-              default:
-                return Promise.reject(`No matching rule for url: ${url}`);
-            }
-          });
-
-          await request(app.getHttpServer())
-            .post(`/v1/chains/${chainId}/relay`)
-            .send({
-              to: safeAddress,
-              data,
-              version,
-            })
-            .expect(429)
-            .expect({
-              message: `Relay limit reached for ${safeAddress}`,
-              statusCode: 429,
-            });
-
-          // Verify that BalancesService was called to get token balance
-          expect(balancesService.getTokenBalance).toHaveBeenCalledTimes(0);
-
-          await request(app.getHttpServer())
-            .get(`/v1/chains/${chainId}/relay/${safeAddress}`)
-            .expect(200)
-            .expect({ remaining: 0, limit: 0 });
-
-          // Restore Date.now mock
-          jest.restoreAllMocks();
-        });
-
-        it('should not relay transaction when token balance is zero', async () => {
-          const chain = chainBuilder()
-            .with('chainId', chainId)
-            .with('features', ['RELAYING'])
-            .build();
-          const safe = safeBuilder().build();
-          const safeAddress = getAddress(safe.address);
-          const data = execTransactionEncoder()
-            .with('value', faker.number.bigInt())
-            .encode();
-
-          // Mock BalancesService to return null balance (zero)
-          balancesService.getTokenBalance = jest.fn().mockResolvedValue(null);
-
-          networkService.get.mockImplementation(({ url }) => {
-            switch (url) {
-              case `${safeConfigUrl}/api/v1/chains/${chainId}`:
-                return Promise.resolve({ data: rawify(chain), status: 200 });
-              case `${chain.transactionService}/api/v1/safes/${safeAddress}`:
-                return Promise.resolve({ data: rawify(safe), status: 200 });
-              default:
-                return Promise.reject(`No matching rule for url: ${url}`);
-            }
-          });
-
-          await request(app.getHttpServer())
-            .post(`/v1/chains/${chainId}/relay`)
-            .send({
-              to: safeAddress,
-              data,
-              version,
-            })
-            .expect(429)
-            .expect({
-              message: `Relay limit reached for ${safeAddress}`,
-              statusCode: 429,
-            });
-
-          const noFeeConfig = configurationService.get(
-            'relay.noFeeCampaign',
-          ) as NoFeeCampaignConfiguration;
-          const tokenAddress = noFeeConfig[parseInt(chainId)]
-            ?.safeTokenAddress as string;
-
-          // Verify that BalancesService was called to get token balance
-          expect(balancesService.getTokenBalance).toHaveBeenCalledWith({
-            chainId,
-            safeAddress,
-            fiatCode: 'USD',
-            tokenAddress,
-          });
-
-          await request(app.getHttpServer())
-            .get(`/v1/chains/${chainId}/relay/${safeAddress}`)
-            .expect(200)
-            .expect({ remaining: 0, limit: 0 });
-        });
-
-        describe('Token balance-based relay limits', () => {
-          const tokenBalanceScenarios = [
-            {
-              tokens: faker.number.bigInt({
-                min: 0,
-                max: getScaledBalance(99),
-              }),
-              expectedLimit: 0,
-            },
-            {
-              tokens: faker.number.bigInt({
-                min: getScaledBalance(100),
-                max: getScaledBalance(500),
-              }),
-              expectedLimit: 1,
-            },
-            {
-              tokens: faker.number.bigInt({
-                min: getScaledBalance(502),
-                max: getScaledBalance(999),
-              }),
-              expectedLimit: 1,
-            },
-            {
-              tokens: faker.number.bigInt({
-                min: getScaledBalance(1000),
-                max: getScaledBalance(5000),
-              }),
-              expectedLimit: 10,
-            },
-            {
-              tokens: faker.number.bigInt({
-                min: getScaledBalance(5001),
-                max: getScaledBalance(9999),
-              }),
-              expectedLimit: 10,
-            },
-            {
-              tokens: faker.number.bigInt({
-                min: getScaledBalance(10000),
-                max: getScaledBalance(Number.MAX_SAFE_INTEGER),
-              }),
-              expectedLimit: 100,
-            },
-
-            // Edge cases
-            {
-              tokens: getScaledBalance(100) - BigInt(1),
-              expectedLimit: 0,
-            },
-            {
-              tokens: getScaledBalance(100),
-              expectedLimit: 1,
-            },
-            {
-              tokens: getScaledBalance(1000) - BigInt(1),
-              expectedLimit: 1,
-            },
-            {
-              tokens: getScaledBalance(1000),
-              expectedLimit: 10,
-            },
-
-            {
-              tokens: getScaledBalance(10000) - BigInt(1),
-              expectedLimit: 10,
-            },
-
-            {
-              tokens: getScaledBalance(10000),
-              expectedLimit: 100,
-            },
-          ];
-
-          describe.each(tokenBalanceScenarios)(
-            'Token balance scenarios',
-            ({ tokens, expectedLimit }) => {
-              it(`should set relay limit to ${expectedLimit} for ${tokens} tokens`, async () => {
-                const chain = chainBuilder()
-                  .with('chainId', chainId)
-                  .with('features', ['RELAYING'])
-                  .build();
-                const safe = safeBuilder().build();
-                const safeAddress = getAddress(safe.address);
-
-                const noFeeConfig = configurationService.get(
-                  'relay.noFeeCampaign',
-                ) as NoFeeCampaignConfiguration;
-                const tokenAddress = noFeeConfig[parseInt(chainId)]
-                  ?.safeTokenAddress as string;
-
-                // Mock BalancesService based on token amount
-                const tokenBalance =
-                  tokens > 0
-                    ? {
-                        tokenAddress,
-                        balance: tokens.toString(),
-                        fiatBalance: tokens.toString(),
-                        fiatConversion: '1',
-                        tokenInfo: {
-                          decimals: 18,
-                          symbol: 'SAFE',
-                          name: 'Safe Token',
-                        },
-                      }
-                    : null;
-
-                balancesService.getTokenBalance = jest
-                  .fn()
-                  .mockResolvedValue(tokenBalance);
-
-                networkService.get.mockImplementation(({ url }) => {
-                  switch (url) {
-                    case `${safeConfigUrl}/api/v1/chains/${chainId}`:
-                      return Promise.resolve({
-                        data: rawify(chain),
-                        status: 200,
-                      });
-                    case `${chain.transactionService}/api/v1/safes/${safeAddress}`:
-                      return Promise.resolve({
-                        data: rawify(safe),
-                        status: 200,
-                      });
-                    default:
-                      return Promise.reject(`No matching rule for url: ${url}`);
-                  }
-                });
-
-                // Check relay limits endpoint
-                await request(app.getHttpServer())
-                  .get(`/v1/chains/${chainId}/relay/${safeAddress}`)
-                  .expect(200)
-                  .expect({
-                    remaining: expectedLimit,
-                    limit: expectedLimit,
-                  });
-
-                // Verify that BalancesService was called to get token balance
-                expect(balancesService.getTokenBalance).toHaveBeenCalledWith({
-                  chainId,
-                  safeAddress,
-                  fiatCode: 'USD',
-                  tokenAddress,
-                });
-              });
-            },
-          );
-        });
-
-        describe('Relay count based on token balance', () => {
-          const values = [
-            {
-              balanceMin: 100,
-              balanceMax: 999,
-              expectedLimit: 1,
-              expectedRemaining: 0,
-            },
-            {
-              balanceMin: 1000,
-              balanceMax: 9999,
-              expectedLimit: 10,
-              expectedRemaining: 9,
-            },
-            {
-              balanceMin: 10000,
-              balanceMax: Number.MAX_SAFE_INTEGER,
-              expectedLimit: 100,
-              expectedRemaining: 99,
-            },
-          ];
-
-          describe.each(values)(
-            'should set relay limits based on token balance',
-            ({ balanceMin, balanceMax, expectedLimit, expectedRemaining }) => {
-              it(`should relay a transaction when token between [${balanceMin}] and [${balanceMax}]`, async () => {
-                const chain = chainBuilder()
-                  .with('chainId', chainId)
-                  .with('features', ['RELAYING'])
-                  .build();
-                const safe = safeBuilder().build();
-                const safeAddress = getAddress(safe.address);
-                const data = execTransactionEncoder()
-                  .with('value', faker.number.bigInt())
-                  .encode();
-
-                const noFeeConfig = configurationService.get(
-                  'relay.noFeeCampaign',
-                ) as NoFeeCampaignConfiguration;
-                // Mock BalancesService to return sufficient token balance
-                const tokenBalance = {
-                  tokenAddress: noFeeConfig[parseInt(chainId)]
-                    ?.safeTokenAddress as string,
-                  balance: (
-                    faker.number.bigInt({ min: balanceMin, max: balanceMax }) *
-                    BigInt(10 ** 18)
-                  ).toString(),
-                  fiatBalance: '100',
-                  fiatConversion: '1',
-                  tokenInfo: {
-                    decimals: 18, // Required for token balance calculation
-                    symbol: 'SAFE',
-                    name: 'Safe Token',
-                  },
-                };
-
-                balancesService.getTokenBalance = jest
-                  .fn()
-                  .mockResolvedValue(tokenBalance);
-
-                const taskId = faker.string.uuid();
-
-                networkService.get.mockImplementation(({ url }) => {
-                  switch (url) {
-                    case `${safeConfigUrl}/api/v1/chains/${chainId}`:
-                      return Promise.resolve({
-                        data: rawify(chain),
-                        status: 200,
-                      });
-                    case `${chain.transactionService}/api/v1/safes/${safeAddress}`:
-                      return Promise.resolve({
-                        data: rawify(safe),
-                        status: 200,
-                      });
-                    default:
-                      return Promise.reject(`No matching rule for url: ${url}`);
-                  }
-                });
-
-                // Mock the relay API call
-                networkService.post.mockImplementation(({ url }) => {
-                  switch (url) {
-                    case `${relayUrl}/relays/v2/sponsored-call`:
-                      return Promise.resolve({
-                        data: rawify({ taskId }),
-                        status: 200,
-                      });
-                    default:
-                      return Promise.reject(`No matching rule for url: ${url}`);
-                  }
-                });
-
-                await request(app.getHttpServer())
-                  .post(`/v1/chains/${chainId}/relay`)
-                  .send({
-                    to: safeAddress,
-                    data,
-                    version,
-                  })
-                  .expect(201)
-                  .expect({ taskId });
-
-                const tokenAddress = noFeeConfig[parseInt(chainId)]
-                  ?.safeTokenAddress as string;
-
-                // Verify that BalancesService was called to get token balance
-                expect(balancesService.getTokenBalance).toHaveBeenCalledWith({
-                  chainId,
-                  safeAddress,
-                  fiatCode: 'USD',
-                  tokenAddress,
-                });
-
-                await request(app.getHttpServer())
-                  .get(`/v1/chains/${chainId}/relay/${safeAddress}`)
-                  .expect(200)
-                  .expect({
-                    remaining: expectedRemaining,
-                    limit: expectedLimit,
-                  });
-
-                // Restore mocks
-                jest.restoreAllMocks();
-              });
-            },
-          );
-        });
-
-        describe('Gas limit handling', () => {
-          const gasLimitScenarios = [
-            {
-              description: 'should relay with undefined gasLimit',
-              gasLimit: undefined,
-              expectedGasLimit: (maxGasLimit: number): number =>
-                maxGasLimit + 150_000,
-            },
-            {
-              description:
-                'should use provided gasLimit when it is less than maxGasLimit',
-              gasLimit: (maxGasLimit: number): number =>
-                Math.max(1, maxGasLimit - 50000), // Below max by 50k, ensure it's positive
-              expectedGasLimit: (maxGasLimit: number): number =>
-                Math.max(1, maxGasLimit - 50000) + 150_000, // original + buffer
-            },
-          ];
-
-          describe.each(gasLimitScenarios)(
-            '$description',
-            ({ gasLimit, expectedGasLimit }) => {
-              it('should handle gas limit correctly', async () => {
-                const chain = chainBuilder()
-                  .with('chainId', chainId)
-                  .with('features', ['RELAYING'])
-                  .build();
-                const safe = safeBuilder().build();
-                const safeAddress = getAddress(safe.address);
-                const data = execTransactionEncoder()
-                  .with('value', faker.number.bigInt())
-                  .encode();
-
-                const noFeeConfig = configurationService.get(
-                  'relay.noFeeCampaign',
-                ) as NoFeeCampaignConfiguration;
-
-                const maxGasLimit = noFeeConfig[parseInt(chainId)]?.maxGasLimit;
-                const actualGasLimit =
-                  typeof gasLimit === 'function'
-                    ? gasLimit(maxGasLimit)
-                    : gasLimit;
-                const expectedActualGasLimit =
-                  typeof expectedGasLimit === 'function'
-                    ? expectedGasLimit(maxGasLimit)
-                    : expectedGasLimit;
-
-                // Mock BalancesService to return sufficient token balance
-                const tokenBalance = {
-                  tokenAddress: noFeeConfig[parseInt(chainId)]
-                    ?.safeTokenAddress as string,
-                  balance: getScaledBalance(1000).toString(), // 1000 tokens
-                  fiatBalance: '1000',
-                  fiatConversion: '1',
-                  tokenInfo: {
-                    decimals: 18,
-                    symbol: 'SAFE',
-                    name: 'Safe Token',
-                  },
-                };
-
-                balancesService.getTokenBalance = jest
-                  .fn()
-                  .mockResolvedValue(tokenBalance);
-
-                const taskId = faker.string.uuid();
-
-                networkService.get.mockImplementation(({ url }) => {
-                  switch (url) {
-                    case `${safeConfigUrl}/api/v1/chains/${chainId}`:
-                      return Promise.resolve({
-                        data: rawify(chain),
-                        status: 200,
-                      });
-                    case `${chain.transactionService}/api/v1/safes/${safeAddress}`:
-                      return Promise.resolve({
-                        data: rawify(safe),
-                        status: 200,
-                      });
-                    default:
-                      return Promise.reject(`No matching rule for url: ${url}`);
-                  }
-                });
-
-                // Mock the relay API call and capture the request
-                let relayApiCall: Record<string, unknown> = {};
-                networkService.post.mockImplementation(
-                  ({ url, data: postData }) => {
-                    switch (url) {
-                      case `${relayUrl}/relays/v2/sponsored-call`:
-                        relayApiCall = (postData ?? {}) as Record<
-                          string,
-                          unknown
-                        >;
-                        return Promise.resolve({
-                          data: rawify({ taskId }),
-                          status: 200,
-                        });
-                      default:
-                        return Promise.reject(
-                          `No matching rule for url: ${url}`,
-                        );
-                    }
-                  },
-                );
-
-                const requestBody: Record<string, string> = {
-                  to: safeAddress,
-                  data,
-                  version,
-                };
-
-                // Only add gasLimit to request if it's defined
-                if (actualGasLimit !== undefined) {
-                  requestBody.gasLimit = actualGasLimit.toString();
-                }
-
-                await request(app.getHttpServer())
-                  .post(`/v1/chains/${chainId}/relay`)
-                  .send(requestBody)
-                  .expect(201)
-                  .expect({ taskId });
-
-                // Verify that relay API was called with the expected gasLimit
-                expect(relayApiCall.gasLimit).toBe(
-                  expectedActualGasLimit.toString(),
-                );
-              });
-            },
-          );
-
-          it('reject tx exceeding maxGasLimit', async () => {
-            const chain = chainBuilder()
-              .with('chainId', chainId)
-              .with('features', ['RELAYING'])
-              .build();
-            const safe = safeBuilder().build();
-            const safeAddress = getAddress(safe.address);
-            const data = execTransactionEncoder()
-              .with('value', faker.number.bigInt())
-              .encode();
-
-            const noFeeConfig = configurationService.get(
-              'relay.noFeeCampaign',
-            ) as NoFeeCampaignConfiguration;
-
-            // Mock BalancesService to return sufficient token balance
-            const tokenBalance = {
-              tokenAddress: noFeeConfig[parseInt(chainId)]
-                ?.safeTokenAddress as string,
-              balance: getScaledBalance(1000).toString(), // 1000 tokens
-              fiatBalance: '1000',
-              fiatConversion: '1',
-              tokenInfo: {
-                decimals: 18,
-                symbol: 'SAFE',
-                name: 'Safe Token',
-              },
-            };
-
-            balancesService.getTokenBalance = jest
-              .fn()
-              .mockResolvedValue(tokenBalance);
-
-            networkService.get.mockImplementation(({ url }) => {
-              switch (url) {
-                case `${safeConfigUrl}/api/v1/chains/${chainId}`:
-                  return Promise.resolve({
-                    data: rawify(chain),
-                    status: 200,
-                  });
-                case `${chain.transactionService}/api/v1/safes/${safeAddress}`:
-                  return Promise.resolve({
-                    data: rawify(safe),
-                    status: 200,
-                  });
-                default:
-                  return Promise.reject(`No matching rule for url: ${url}`);
-              }
-            });
-
-            const requestBody: Record<string, string> = {
-              to: safeAddress,
-              data,
-              version,
-              gasLimit: (
-                noFeeConfig[parseInt(chainId)]?.maxGasLimit + 100_000
-              ).toString(),
-            };
-
-            await request(app.getHttpServer())
-              .post(`/v1/chains/${chainId}/relay`)
-              .send(requestBody)
-              .expect(422);
-          });
-        });
-      },
-    );
   });
 });

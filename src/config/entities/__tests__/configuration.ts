@@ -262,7 +262,6 @@ export default (): ReturnType<typeof configuration> => ({
       baseGasPerSignature: 1_500,
       gasLimitBuffer: 50_000,
     },
-    sponsoredChains: {},
     sanctions: {
       listUrl: undefined,
       maxStalenessHours: 48,

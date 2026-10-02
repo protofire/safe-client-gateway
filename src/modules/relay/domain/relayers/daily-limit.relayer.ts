@@ -14,10 +14,6 @@ import {
   RelaySchema,
 } from '@/modules/relay/domain/entities/relay.entity';
 import type { GasTokenConfiguration } from '@/modules/relay/domain/entities/gas-token.configuration';
-import type {
-  SponsoredChainConfiguration,
-  SponsoredChainsConfiguration,
-} from '@/modules/relay/domain/entities/sponsored-chains.configuration';
 import { GasTokenFeeService } from '@/modules/relay/domain/gas-token-fee.service';
 import { RelayLimitReachedError } from '@/modules/relay/domain/errors/relay-limit-reached.error';
 import { ExceedsMaxGasLimitError } from '@/modules/relay/domain/errors/exceeds-max-gas-limit';
@@ -29,16 +25,24 @@ import { ProxyFactoryDecoder } from '@/modules/relay/domain/contracts/decoders/p
 // ponytail: ceiling is 2x the estimate from the Safe's view; upgrade: simulate from the relayer's own address
 const MAX_CLIENT_GAS_LIMIT_FACTOR = 2n;
 
+/** Sponsoring limits of one chain: its config-service relay settings plus the relayer's gas price cap. */
+type SponsoredChain = {
+  perSafePerDay: number;
+  perOwnerCreationsPerDay: number;
+  maxGasLimit: number;
+  dailyBudgetGwei: number;
+  maxGasPriceWei: string;
+};
+
 /**
  * Relays `gasPrice == 0` transactions paid by the relayer ("sponsored").
- * Only chains carrying RELAYING and listed in `relay.sponsoredChains` are sponsored; each relay
+ * Only chains carrying RELAYING with complete sponsoring settings in config-service are sponsored; each relay
  * is simulated, capped in gas, counted per limited address and reserved on the chain's daily budget.
  */
 @Injectable()
 export class DailyLimitRelayer implements IRelayer {
   static readonly FEATURE = 'RELAYING';
   private static readonly COUNT_TTL_SECONDS = 48 * 60 * 60;
-  private readonly sponsoredChains: SponsoredChainsConfiguration;
   private readonly gasLimitBuffer: bigint;
 
   constructor(
@@ -56,9 +60,6 @@ export class DailyLimitRelayer implements IRelayer {
     private readonly multiSendDecoder: MultiSendDecoder,
     private readonly proxyFactoryDecoder: ProxyFactoryDecoder,
   ) {
-    this.sponsoredChains = configurationService.getOrThrow(
-      'relay.sponsoredChains',
-    );
     this.gasLimitBuffer = BigInt(
       configurationService.getOrThrow<GasTokenConfiguration>('relay.gasToken')
         .gasLimitBuffer,
@@ -179,11 +180,37 @@ export class DailyLimitRelayer implements IRelayer {
 
   private async getSponsoredChain(
     chainId: string,
-  ): Promise<SponsoredChainConfiguration | null> {
-    const config = this.sponsoredChains[chainId];
-    if (!config) return null;
+  ): Promise<SponsoredChain | null> {
     const chain = await this.chainsRepository.getChain(chainId);
-    return chain.features.includes(DailyLimitRelayer.FEATURE) ? config : null;
+    if (!chain.features.includes(DailyLimitRelayer.FEATURE)) {
+      return null;
+    }
+    const [settings, gasPriceCap] = await Promise.all([
+      this.chainsRepository.getRelayChain(chainId),
+      this.relayApi.getGasPriceCap(chainId),
+    ]);
+    if (
+      !settings ||
+      settings.sponsoringDailyBudgetWei === null ||
+      settings.sponsoringPerSafePerDay === null ||
+      settings.sponsoringPerOwnerCreationsPerDay === null ||
+      settings.sponsoringMaxGasLimit === null ||
+      !gasPriceCap
+    ) {
+      this.loggingService.error(
+        `${DailyLimitRelayer.FEATURE} is on for chain ${chainId} without complete sponsoring settings or a relayer gas price cap; sponsoring is off`,
+      );
+      return null;
+    }
+    return {
+      perSafePerDay: settings.sponsoringPerSafePerDay,
+      perOwnerCreationsPerDay: settings.sponsoringPerOwnerCreationsPerDay,
+      maxGasLimit: settings.sponsoringMaxGasLimit,
+      dailyBudgetGwei: GasTokenFeeService.toDailyLimitGwei(
+        settings.sponsoringDailyBudgetWei,
+      ),
+      maxGasPriceWei: gasPriceCap.toString(),
+    };
   }
 
   private countKey(
