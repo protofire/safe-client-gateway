@@ -24,6 +24,11 @@ import {
   GasPriceResponse,
   GasPriceResponseSchema,
 } from '@/modules/chains/domain/entities/gas-price-response.entity';
+import { DataSourceError } from '@/domain/errors/data-source.error';
+import {
+  RelayChain,
+  RelayChainSchema,
+} from '@/modules/relay/domain/entities/gas-token.configuration';
 
 @Injectable()
 export class ChainsRepository implements IChainsRepository {
@@ -54,6 +59,27 @@ export class ChainsRepository implements IChainsRepository {
 
   async clearChain(chainId: string): Promise<void> {
     return this.configApi.clearChain(chainId);
+  }
+
+  async getRelayChain(chainId: string): Promise<RelayChain | null> {
+    let raw: unknown;
+    try {
+      raw = await this.configApi.getRelayChain(chainId);
+    } catch (error) {
+      if (error instanceof DataSourceError && error.code === 404) {
+        return null;
+      }
+      throw error;
+    }
+    const result = RelayChainSchema.safeParse(raw);
+    if (!result.success) {
+      this.loggingService.error({
+        message: `Invalid relay settings for chain ${chainId}; relay modes are off`,
+        errors: result.error.issues,
+      });
+      return null;
+    }
+    return result.data;
   }
 
   async getChains(limit?: number, offset?: number): Promise<Page<Chain>> {
