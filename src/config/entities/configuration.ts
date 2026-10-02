@@ -418,29 +418,6 @@ export default () => ({
     },
     // "Safe pays": the Safe refunds the relayer in a token via execTransaction's gasToken/refundReceiver
     gasToken: GasTokenConfigurationSchema.parse({
-      // JSON: { "<chainId>": "<address receiving the token refund>" }
-      refundReceivers: parseJsonRecord<string>(
-        process.env.RELAY_GAS_TOKEN_REFUND_RECEIVERS,
-      ),
-      // JSON: { "<chainId>": <usd price of the native coin> } for chains without a price feed (testnets)
-      nativeUsdPrices: parseJsonRecord<number>(
-        process.env.RELAY_GAS_TOKEN_NATIVE_USD_PRICES,
-      ),
-      nativeSpendBudgets: parseJsonRecord<{
-        dailyLimitGwei: number;
-        maxGasPriceWei: string;
-      }>(process.env.RELAY_GAS_TOKEN_NATIVE_SPEND_BUDGETS),
-      // JSON: { "<chainId>": [{ "address": "0x…", "symbol": "USDC", "decimals": 6, "usdPrice": 1 }] } (usdPrice optional)
-      // The zero address is the native coin, priced by nativeUsdPrices or the native feed (usdPrice ignored):
-      // { "5042": [{ "address": "0x0000000000000000000000000000000000000000", "symbol": "USDC", "decimals": 18 }] }
-      allowlist: parseJsonRecord<
-        Array<{
-          address: string;
-          symbol: string;
-          decimals: number;
-          usdPrice?: number;
-        }>
-      >(process.env.RELAY_GAS_TOKEN_ALLOWLIST),
       marginBps: parseSafeNonNegativeInteger(
         process.env.RELAY_GAS_TOKEN_MARGIN_BPS,
         2_000,

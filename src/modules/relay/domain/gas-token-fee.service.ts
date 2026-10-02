@@ -19,6 +19,7 @@ import { IConfigurationService } from '@/config/configuration.service.interface'
 import { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
 import { IPricesApi } from '@/modules/balances/datasources/prices-api.interface';
 import { getAssetPricesSchema } from '@/modules/balances/datasources/entities/asset-price.entity';
+import { IRelayApi } from '@/domain/interfaces/relay-api.interface';
 import { IBlockchainApiManager } from '@/domain/interfaces/blockchain-api.manager.interface';
 import { IEstimationsRepository } from '@/modules/estimations/domain/estimations.repository.interface';
 import { GetEstimationDto } from '@/modules/estimations/domain/entities/get-estimation.dto.entity';
@@ -60,7 +61,7 @@ type NativeMarket = {
  */
 @Injectable()
 export class GasTokenFeeService {
-  static readonly FEATURE = 'GAS_TOKEN';
+  static readonly FEATURE = 'PAY_FROM_SAFE';
   private static readonly FIAT_CODE = 'USD';
   private static readonly PRICE_SCALE = BigInt(100_000_000);
   private static readonly BPS = BigInt(10_000);
@@ -104,6 +105,7 @@ export class GasTokenFeeService {
     @Inject(CacheService) private readonly cacheService: ICacheService,
     private readonly nativePrices: RelayNativePriceService,
     @Inject(LoggingService) private readonly loggingService: ILoggingService,
+    @Inject(IRelayApi) private readonly relayApi: IRelayApi,
   ) {
     this.configuration =
       configurationService.getOrThrow<GasTokenConfiguration>('relay.gasToken');
@@ -123,8 +125,9 @@ export class GasTokenFeeService {
     return isAddressEqual(gasToken, zeroAddress);
   }
 
-  getRefundReceiver(chainId: string): Address | null {
-    return this.configuration.refundReceivers[chainId] ?? null;
+  async getRefundReceiver(chainId: string): Promise<Address | null> {
+    const relayChain = await this.chainsRepository.getRelayChain(chainId);
+    return relayChain?.refundReceiver ?? null;
   }
 
   async isEnabled(chainId: string): Promise<boolean> {
@@ -132,7 +135,29 @@ export class GasTokenFeeService {
       return false;
     }
     const chain = await this.chainsRepository.getChain(chainId);
-    return chain.features.includes(GasTokenFeeService.FEATURE);
+    if (!chain.features.includes(GasTokenFeeService.FEATURE)) {
+      return false;
+    }
+    const relayChain = await this.chainsRepository.getRelayChain(chainId);
+    if (!relayChain) {
+      this.loggingService.error({
+        type: LogType.GasTokenFeeMisconfigured,
+        error: `${GasTokenFeeService.FEATURE} is on for chain ${chainId} without relay settings; Pay from Safe is off`,
+      });
+      return false;
+    }
+    // A budget is reserved at the relayer's gas price cap; without a cap it cannot be enforced
+    if (
+      relayChain.payFromSafeDailyBudgetWei !== null &&
+      !(await this.relayApi.getGasPriceCap(chainId))
+    ) {
+      this.loggingService.error({
+        type: LogType.GasTokenFeeMisconfigured,
+        error: `${GasTokenFeeService.FEATURE} on chain ${chainId} has a daily budget but the relayer has no gas price cap; Pay from Safe is off`,
+      });
+      return false;
+    }
+    return true;
   }
 
   static dayKey(prefix: string, chainId: string): string {
@@ -183,15 +208,21 @@ export class GasTokenFeeService {
         `Paying fees from the Safe is not enabled on chain ${chainId}`,
       );
     }
-    const budget = this.configuration.nativeSpendBudgets[chainId];
-    if (!budget) {
+    const relayChain = await this.chainsRepository.getRelayChain(chainId);
+    const budgetWei = relayChain?.payFromSafeDailyBudgetWei ?? null;
+    if (budgetWei === null) {
       return;
+    }
+    const maxGasPriceWei = await this.relayApi.getGasPriceCap(chainId);
+    // isEnabled already required a cap; it can only vanish between the two reads
+    if (!maxGasPriceWei) {
+      throw new GasTokenRelayError('Unable to reserve Safe-pays gas budget');
     }
     const result = await this.reserveGasBudget({
       key: GasTokenFeeService.dayKey('gas-token-spend', chainId),
       outerGasLimit,
-      dailyLimitGwei: budget.dailyLimitGwei,
-      maxGasPriceWei: budget.maxGasPriceWei,
+      dailyLimitGwei: GasTokenFeeService.toDailyLimitGwei(budgetWei),
+      maxGasPriceWei: maxGasPriceWei.toString(),
     });
     if (result === 'unavailable') {
       throw new GasTokenRelayError('Unable to reserve Safe-pays gas budget');
@@ -201,28 +232,45 @@ export class GasTokenFeeService {
     }
   }
 
-  getConfiguration(chainId: string): {
+  /** A daily budget in wei as the gwei limit `reserveGasBudget` counts in, capped at the largest safe integer. */
+  static toDailyLimitGwei(budgetWei: string): number {
+    const gwei = BigInt(budgetWei) / BigInt(1_000_000_000);
+    return gwei > BigInt(Number.MAX_SAFE_INTEGER)
+      ? Number.MAX_SAFE_INTEGER
+      : Number(gwei);
+  }
+
+  async getConfiguration(chainId: string): Promise<{
     gasTokens: Array<
       Pick<GasTokenAllowlistEntry, 'address' | 'symbol' | 'decimals'>
     >;
     refundReceiver: Address | null;
-  } {
+  }> {
+    const relayChain = await this.chainsRepository.getRelayChain(chainId);
     return {
-      gasTokens: (this.configuration.allowlist[chainId] ?? []).map(
+      gasTokens: (relayChain?.tokens ?? []).map(
         ({ address, symbol, decimals }) => ({ address, symbol, decimals }),
       ),
-      refundReceiver: this.getRefundReceiver(chainId),
+      refundReceiver: relayChain?.refundReceiver ?? null,
     };
   }
 
-  getAllowlistedToken(
+  async getAllowlistedToken(
     chainId: string,
     token: Address,
-  ): GasTokenAllowlistEntry | null {
-    const entries = this.configuration.allowlist[chainId] ?? [];
+  ): Promise<GasTokenAllowlistEntry | null> {
+    const relayChain = await this.chainsRepository.getRelayChain(chainId);
     return (
-      entries.find((entry) => isAddressEqual(entry.address, token)) ?? null
+      relayChain?.tokens.find((entry) =>
+        isAddressEqual(entry.address, token),
+      ) ?? null
     );
+  }
+
+  /** Fixed native USD price from the relay settings (testnets without a feed), else null. */
+  private async getFixedNativeUsd(chainId: string): Promise<number | null> {
+    const relayChain = await this.chainsRepository.getRelayChain(chainId);
+    return relayChain?.nativeUsdPrice ?? null;
   }
 
   async preview(args: {
@@ -240,24 +288,25 @@ export class GasTokenFeeService {
         `Paying fees from the Safe is not enabled on chain ${args.chainId}`,
       );
     }
-    const refundReceiver = this.getRefundReceiver(args.chainId);
+    const refundReceiver = await this.getRefundReceiver(args.chainId);
     if (!refundReceiver) {
       throw new GasTokenRelayError(
         `Paying fees from the Safe is not available on chain ${args.chainId}`,
       );
     }
-    const token = this.getAllowlistedToken(args.chainId, args.gasToken);
+    const token = await this.getAllowlistedToken(args.chainId, args.gasToken);
     if (!token) {
       throw new GasTokenRelayError(
         `${args.gasToken} is not an accepted fee token on chain ${args.chainId}`,
       );
     }
 
+    const fixedNativeUsd = await this.getFixedNativeUsd(args.chainId);
     const [innerGas, market] = await Promise.all([
       this.estimateSafeTxGas(args),
       GasTokenFeeService.isNative(token.address)
-        ? this.getNativeMarket(args.chainId)
-        : this.getMarket(args.chainId, token),
+        ? this.getNativeMarket(args.chainId, fixedNativeUsd)
+        : this.getMarket(args.chainId, token, fixedNativeUsd),
     ]);
     // With gasPrice > 0 the Safe gives the inner call exactly safeTxGas, so it must carry a margin
     const safeTxGas =
@@ -333,10 +382,9 @@ export class GasTokenFeeService {
           market.nativeUsd === null
             ? 'unavailable'
             : GasTokenFeeService.getPriceSource(
-                this.configuration.nativeUsdPrices[args.chainId] !== undefined,
+                fixedNativeUsd !== null,
                 GasTokenFeeService.isNative(token.address)
-                  ? this.configuration.nativeUsdPrices[args.chainId] !==
-                      undefined
+                  ? fixedNativeUsd !== null
                   : token.usdPrice !== undefined,
               ),
         priceTimestamp: Math.floor(
@@ -466,11 +514,19 @@ export class GasTokenFeeService {
     innerGasEstimate: bigint;
     outerGasLimit: bigint;
   }): Promise<void> {
+    const fixedNativeUsd = await this.getFixedNativeUsd(args.chainId);
     if (GasTokenFeeService.isNative(args.token.address)) {
-      const { gasPriceWei } = await this.getNativeMarket(args.chainId);
+      const { gasPriceWei } = await this.getNativeMarket(
+        args.chainId,
+        fixedNativeUsd,
+      );
       return this.assertNativeRefundCovers(args, gasPriceWei);
     }
-    const market = await this.getMarket(args.chainId, args.token);
+    const market = await this.getMarket(
+      args.chainId,
+      args.token,
+      fixedNativeUsd,
+    );
     const refund = (args.innerGasEstimate + args.baseGas) * args.gasPrice;
     const cost = args.outerGasLimit * market.gasPriceWei;
 
@@ -665,6 +721,7 @@ export class GasTokenFeeService {
   private async getMarket(
     chainId: string,
     token: GasTokenAllowlistEntry,
+    fixedNativeUsd: number | null,
   ): Promise<Market> {
     const [chain, client] = await Promise.all([
       this.chainsRepository.getChain(chainId),
@@ -672,7 +729,7 @@ export class GasTokenFeeService {
     ]);
     const [gasPriceWei, nativePrice, tokenUsd] = await Promise.all([
       client.getGasPrice(),
-      this.getNativeUsdPrice(chain),
+      this.getNativeUsdPrice(chain, fixedNativeUsd),
       token.usdPrice ?? this.getTokenUsdPrice(chain, token.address),
     ]);
 
@@ -698,14 +755,17 @@ export class GasTokenFeeService {
     };
   }
 
-  private async getNativeMarket(chainId: string): Promise<NativeMarket> {
+  private async getNativeMarket(
+    chainId: string,
+    fixedNativeUsd: number | null,
+  ): Promise<NativeMarket> {
     const [chain, client] = await Promise.all([
       this.chainsRepository.getChain(chainId),
       this.blockchainApiManager.getApi(chainId),
     ]);
     const [gasPriceWei, nativePrice] = await Promise.all([
       client.getGasPrice(),
-      this.getNativeUsdPrice(chain),
+      this.getNativeUsdPrice(chain, fixedNativeUsd),
     ]);
     const usd = nativePrice?.usd;
     const priced = usd !== undefined && Number.isFinite(usd) && usd > 0;
@@ -718,10 +778,10 @@ export class GasTokenFeeService {
 
   private getNativeUsdPrice(
     chain: Chain,
+    fixedNativeUsd: number | null,
   ): Promise<{ usd: number; fetchedAt: number } | null> {
-    const fixed = this.configuration.nativeUsdPrices[chain.chainId];
-    return fixed !== undefined
-      ? Promise.resolve({ usd: fixed, fetchedAt: Date.now() })
+    return fixedNativeUsd !== null
+      ? Promise.resolve({ usd: fixedNativeUsd, fetchedAt: Date.now() })
       : this.nativePrices.getPrice(chain);
   }
 

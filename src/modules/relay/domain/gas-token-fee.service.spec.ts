@@ -20,16 +20,25 @@ import type { ICacheService } from '@/datasources/cache/cache.service.interface'
 import type { ILoggingService } from '@/logging/logging.interface';
 import { GasTokenFeeService } from '@/modules/relay/domain/gas-token-fee.service';
 import { GasTokenRelayError } from '@/modules/relay/domain/errors/gas-token-relay.error';
+import type { GasTokenConfiguration } from '@/modules/relay/domain/entities/gas-token.configuration';
 import {
-  GasTokenConfigurationSchema,
-  type GasTokenConfiguration,
+  RelayChainSchema,
+  type RelayChain,
 } from '@/modules/relay/domain/entities/gas-token.configuration';
+import { relayChainBuilder } from '@/modules/relay/domain/entities/__tests__/relay-chain.builder';
+import relayChainContract from '@/modules/relay/domain/entities/__tests__/relay-chain-84532.contract.json';
+import type { IRelayApi } from '@/domain/interfaces/relay-api.interface';
 import { Operation } from '@/modules/safe/domain/entities/operation.entity';
 import { rawify } from '@/validation/entities/raw.entity';
 
 const mockChainsRepository = jest.mocked({
   getChain: jest.fn(),
+  getRelayChain: jest.fn(),
 } as jest.MockedObjectDeep<IChainsRepository>);
+
+const mockRelayApi = jest.mocked({
+  getGasPriceCap: jest.fn(),
+} as jest.MockedObjectDeep<IRelayApi>);
 
 const mockNativePrices = {
   getPrice: jest.fn(),
@@ -104,6 +113,7 @@ function buildService(
     mockCacheService,
     mockNativePrices,
     loggingService,
+    mockRelayApi,
   );
 }
 
@@ -116,20 +126,21 @@ describe('GasTokenFeeService', () => {
   const refundReceiver = getAddress(faker.finance.ethereumAddress());
   const usdc = getAddress(faker.finance.ethereumAddress());
   const configuration: GasTokenConfiguration = {
-    refundReceivers: { [chainId]: refundReceiver },
-    nativeUsdPrices: {},
-    allowlist: {
-      [chainId]: [{ address: usdc, symbol: 'USDC', decimals: 6, usdPrice: 1 }],
-    },
     marginBps: 2_000,
     minMarginBps: 500,
     baseGas: 70_000,
     baseGasPerSignature: 1_500,
     gasLimitBuffer: 50_000,
-    nativeSpendBudgets: {
-      [chainId]: { dailyLimitGwei: 10_000_000, maxGasPriceWei: '30000000000' },
-    },
   };
+  const relayChain: RelayChain = relayChainBuilder()
+    .with('refundReceiver', refundReceiver)
+    .with('nativeUsdPrice', null)
+    // 10,000,000 gwei; reservations price gas at the relayer cap below (30 gwei)
+    .with('payFromSafeDailyBudgetWei', '10000000000000000')
+    .with('tokens', [
+      { address: usdc, symbol: 'USDC', decimals: 6, usdPrice: 1 },
+    ])
+    .build();
   // 20 gwei gas, ETH at $2,500, USDC at $1
   const market = {
     gasPriceWei: parseGwei('20'),
@@ -143,6 +154,8 @@ describe('GasTokenFeeService', () => {
     const fakeConfigurationService = new FakeConfigurationService();
     fakeConfigurationService.set('relay.gasToken', configuration);
     mockChainsRepository.getChain.mockResolvedValue(chain);
+    mockChainsRepository.getRelayChain.mockResolvedValue(relayChain);
+    mockRelayApi.getGasPriceCap.mockResolvedValue(parseGwei('30'));
     mockBlockchainApiManager.getApi.mockResolvedValue(mockPublicClient);
     mockPublicClient.getGasPrice.mockResolvedValue(parseGwei('20'));
     mockPublicClient.call.mockResolvedValue({
@@ -177,7 +190,7 @@ describe('GasTokenFeeService', () => {
   });
 
   describe('preview', () => {
-    it('should refuse a chain without the GAS_TOKEN feature', async () => {
+    it('should refuse a chain without the PAY_FROM_SAFE feature', async () => {
       mockChainsRepository.getChain.mockResolvedValue(
         chainBuilder().with('chainId', chainId).with('features', []).build(),
       );
@@ -201,16 +214,16 @@ describe('GasTokenFeeService', () => {
       'rejects a missing or blank token symbol: %s',
       (symbol) => {
         expect(() =>
-          GasTokenConfigurationSchema.parse({
-            ...configuration,
-            allowlist: { [chainId]: [{ address: usdc, symbol, decimals: 6 }] },
+          RelayChainSchema.parse({
+            ...relayChainContract,
+            tokens: [{ ...relayChainContract.tokens[0], symbol }],
           }),
         ).toThrow();
       },
     );
 
-    it('should expose enabled token configuration', () => {
-      expect(target.getConfiguration(chainId)).toStrictEqual({
+    it('should expose enabled token configuration', async () => {
+      await expect(target.getConfiguration(chainId)).resolves.toStrictEqual({
         gasTokens: [{ address: usdc, symbol: 'USDC', decimals: 6 }],
         refundReceiver,
       });
@@ -309,14 +322,12 @@ describe('GasTokenFeeService', () => {
 
     it('should price the token from the market when no fixed price is configured', async () => {
       const dai = getAddress(faker.finance.ethereumAddress());
-      const fakeConfigurationService = new FakeConfigurationService();
-      fakeConfigurationService.set('relay.gasToken', {
-        ...configuration,
-        allowlist: {
-          [chainId]: [{ address: dai, symbol: 'DAI', decimals: 18 }],
-        },
+      mockChainsRepository.getRelayChain.mockResolvedValue({
+        ...relayChain,
+        tokens: [
+          { address: dai, symbol: 'DAI', decimals: 18, usdPrice: undefined },
+        ],
       });
-      target = buildService(fakeConfigurationService);
       mockSimulation({ estimate: BigInt(0), success: true });
       mockPricesApi.getTokenPrices.mockResolvedValue(
         rawify([{ [dai.toLowerCase()]: { usd: 0.5, usd_24h_change: null } }]),
@@ -338,12 +349,10 @@ describe('GasTokenFeeService', () => {
     });
 
     it('should use a fixed native price when configured', async () => {
-      const fakeConfigurationService = new FakeConfigurationService();
-      fakeConfigurationService.set('relay.gasToken', {
-        ...configuration,
-        nativeUsdPrices: { [chainId]: 5_000 },
+      mockChainsRepository.getRelayChain.mockResolvedValue({
+        ...relayChain,
+        nativeUsdPrice: 5_000,
       });
-      target = buildService(fakeConfigurationService);
       mockSimulation({ estimate: BigInt(0), success: true });
 
       const result = await target.preview({
@@ -379,6 +388,10 @@ describe('GasTokenFeeService', () => {
     });
 
     it('should refuse a chain without a refund receiver', async () => {
+      mockChainsRepository.getRelayChain.mockResolvedValue({
+        ...relayChain,
+        refundReceiver: null,
+      });
       await expect(
         target.preview({
           chainId: '1',
@@ -416,13 +429,12 @@ describe('GasTokenFeeService', () => {
     it.each([6, 18])(
       'covers the Base transfer with %i token decimals and rejects a gas spike',
       async (decimals) => {
-        const config = new FakeConfigurationService();
         const token = { address: usdc, symbol: 'USD', decimals, usdPrice: 1 };
-        config.set('relay.gasToken', {
-          ...configuration,
-          allowlist: { [chainId]: [token] },
+        mockChainsRepository.getRelayChain.mockResolvedValue({
+          ...relayChain,
+          tokens: [token],
         });
-        const service = buildService(config);
+        const service = target;
         mockSimulation({ estimate: BigInt(43_546), success: true });
         mockPublicClient.getGasPrice.mockResolvedValue(BigInt(6_000_000));
         const preview = await service.preview({
@@ -455,7 +467,7 @@ describe('GasTokenFeeService', () => {
   });
 
   describe('assertRefundCovers', () => {
-    const token = configuration.allowlist[chainId][0];
+    const token = relayChain.tokens[0];
     // refund = (50k + 70k) × 60 = 7.2 USDC; cost = 120k × 20 gwei = 0.0024 ETH = $6, +5 % = $6.30
     const args = {
       chainId,
@@ -491,40 +503,49 @@ describe('GasTokenFeeService', () => {
   });
 
   describe('native gas token', () => {
-    const native = { address: zeroAddress, symbol: 'USDC', decimals: 18 };
-    const nativeConfiguration: GasTokenConfiguration = {
-      ...configuration,
-      nativeUsdPrices: { [chainId]: 1 },
-      allowlist: { [chainId]: [native] },
+    const native = {
+      address: zeroAddress,
+      symbol: 'USDC',
+      decimals: 18,
+      usdPrice: undefined,
+    };
+    const nativeRelayChain: RelayChain = {
+      ...relayChain,
+      nativeUsdPrice: 1,
+      tokens: [native],
     };
     let service: GasTokenFeeService;
 
     beforeEach(() => {
-      const config = new FakeConfigurationService();
-      config.set('relay.gasToken', nativeConfiguration);
-      service = buildService(config);
+      mockChainsRepository.getRelayChain.mockResolvedValue(nativeRelayChain);
+      service = target;
     });
 
-    it('accepts the zero address in the allowlist', () => {
-      expect(() =>
-        GasTokenConfigurationSchema.parse(nativeConfiguration),
-      ).not.toThrow();
+    const nativeContract = {
+      ...relayChainContract,
+      tokens: [
+        { address: zeroAddress, symbol: 'USDC', decimals: 18, usdPrice: null },
+      ],
+    };
+
+    it('accepts the zero address as a fee token', () => {
+      expect(() => RelayChainSchema.parse(nativeContract)).not.toThrow();
     });
 
     it('still rejects a duplicate native entry', () => {
       expect(() =>
-        GasTokenConfigurationSchema.parse({
-          ...nativeConfiguration,
-          allowlist: { [chainId]: [native, native] },
+        RelayChainSchema.parse({
+          ...nativeContract,
+          tokens: [...nativeContract.tokens, ...nativeContract.tokens],
         }),
       ).toThrow('duplicate token address');
     });
 
     it('still rejects the zero address as a refund receiver', () => {
       expect(() =>
-        GasTokenConfigurationSchema.parse({
-          ...nativeConfiguration,
-          refundReceivers: { [chainId]: zeroAddress },
+        RelayChainSchema.parse({
+          ...nativeContract,
+          refundReceiver: zeroAddress,
         }),
       ).toThrow('must be non-zero');
     });
@@ -574,7 +595,7 @@ describe('GasTokenFeeService', () => {
     it('makes inner + baseGas equal the outer budget with a zero margin', async () => {
       const config = new FakeConfigurationService();
       config.set('relay.gasToken', {
-        ...nativeConfiguration,
+        ...configuration,
         marginBps: 0,
         gasLimitBuffer: 0,
       });
@@ -598,12 +619,10 @@ describe('GasTokenFeeService', () => {
     });
 
     it('prices the native coin as the token without asking the prices API', async () => {
-      const config = new FakeConfigurationService();
-      config.set('relay.gasToken', {
-        ...nativeConfiguration,
-        nativeUsdPrices: {},
+      mockChainsRepository.getRelayChain.mockResolvedValue({
+        ...nativeRelayChain,
+        nativeUsdPrice: null,
       });
-      service = buildService(config);
       mockSimulation({ estimate: BigInt(100_000), success: true });
 
       const result = await service.preview({
@@ -625,12 +644,10 @@ describe('GasTokenFeeService', () => {
     });
 
     it('quotes a native fee without a USD price and leaves the display value null', async () => {
-      const config = new FakeConfigurationService();
-      config.set('relay.gasToken', {
-        ...nativeConfiguration,
-        nativeUsdPrices: {},
+      mockChainsRepository.getRelayChain.mockResolvedValue({
+        ...nativeRelayChain,
+        nativeUsdPrice: null,
       });
-      service = buildService(config);
       mockNativePrices.getPrice.mockResolvedValue(null);
       mockSimulation({ estimate: BigInt(100_000), success: true });
 
@@ -717,39 +734,39 @@ describe('GasTokenFeeService', () => {
 
   describe('reserveNativeSpend', () => {
     it('allows quoting and relay without a per-chain budget and skips the counter', async () => {
-      const budgets = configuration.nativeSpendBudgets;
-      configuration.nativeSpendBudgets = {};
+      mockChainsRepository.getRelayChain.mockResolvedValue({
+        ...relayChain,
+        payFromSafeDailyBudgetWei: null,
+      });
       mockSimulation({ estimate: BigInt(100_000), success: true });
-      try {
-        await expect(target.isEnabled(chainId)).resolves.toBe(true);
-        await expect(
-          target.preview({
-            chainId,
-            safeAddress: getAddress(faker.finance.ethereumAddress()),
-            to: getAddress(faker.finance.ethereumAddress()),
-            value: '0',
-            data: null,
-            operation: Operation.CALL,
-            gasToken: usdc,
-            numberSignatures: 1,
-          }),
-        ).resolves.toMatchObject({
-          txData: { gasToken: usdc, refundReceiver },
-        });
-        await expect(
-          target.reserveNativeSpend(chainId, BigInt(200_000)),
-        ).resolves.toBeUndefined();
-        expect(mockCacheService.increment).not.toHaveBeenCalled();
-        mockChainsRepository.getChain.mockResolvedValue({
-          ...chain,
-          features: [],
-        });
-        await expect(
-          target.reserveNativeSpend(chainId, BigInt(200_000)),
-        ).rejects.toThrow('not enabled');
-      } finally {
-        configuration.nativeSpendBudgets = budgets;
-      }
+
+      await expect(target.isEnabled(chainId)).resolves.toBe(true);
+      await expect(
+        target.preview({
+          chainId,
+          safeAddress: getAddress(faker.finance.ethereumAddress()),
+          to: getAddress(faker.finance.ethereumAddress()),
+          value: '0',
+          data: null,
+          operation: Operation.CALL,
+          gasToken: usdc,
+          numberSignatures: 1,
+        }),
+      ).resolves.toMatchObject({
+        txData: { gasToken: usdc, refundReceiver },
+      });
+      await expect(
+        target.reserveNativeSpend(chainId, BigInt(200_000)),
+      ).resolves.toBeUndefined();
+      expect(mockCacheService.increment).not.toHaveBeenCalled();
+      expect(mockRelayApi.getGasPriceCap).not.toHaveBeenCalled();
+      mockChainsRepository.getChain.mockResolvedValue({
+        ...chain,
+        features: [],
+      });
+      await expect(
+        target.reserveNativeSpend(chainId, BigInt(200_000)),
+      ).rejects.toThrow('not enabled');
     });
 
     it('atomically reserves selected gas at configured max price with a UTC date key', async () => {
@@ -816,6 +833,44 @@ describe('GasTokenFeeService', () => {
         target.reserveNativeSpend(chainId, BigInt(200_000)),
       ).rejects.toThrow('not enabled');
       expect(mockCacheService.increment).not.toHaveBeenCalled();
+    });
+
+    it('turns Pay from Safe off on a budgeted chain while the relayer has no gas price cap', async () => {
+      mockRelayApi.getGasPriceCap.mockResolvedValue(null);
+
+      await expect(target.isEnabled(chainId)).resolves.toBe(false);
+      await expect(
+        target.preview({
+          chainId,
+          safeAddress: getAddress(faker.finance.ethereumAddress()),
+          to: getAddress(faker.finance.ethereumAddress()),
+          value: '0',
+          data: '0x',
+          operation: Operation.CALL,
+          gasToken: usdc,
+          numberSignatures: 1,
+        }),
+      ).rejects.toThrow('not enabled on chain');
+      await expect(
+        target.reserveNativeSpend(chainId, BigInt(200_000)),
+      ).rejects.toThrow('not enabled on chain');
+      expect(mockCacheService.increment).not.toHaveBeenCalled();
+      expect(mockLoggingService.error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.stringContaining('no gas price cap'),
+        }),
+      );
+    });
+
+    it('does not consult the relayer cap without a budget', async () => {
+      mockChainsRepository.getRelayChain.mockResolvedValue({
+        ...relayChain,
+        payFromSafeDailyBudgetWei: null,
+      });
+      mockRelayApi.getGasPriceCap.mockResolvedValue(null);
+
+      await expect(target.isEnabled(chainId)).resolves.toBe(true);
+      expect(mockRelayApi.getGasPriceCap).not.toHaveBeenCalled();
     });
   });
 
@@ -957,6 +1012,54 @@ describe('GasTokenFeeService', () => {
     });
   });
 
+  describe('relay settings from config-service', () => {
+    it('is off and logs an error with PAY_FROM_SAFE but no relay settings', async () => {
+      mockChainsRepository.getRelayChain.mockResolvedValue(null);
+
+      await expect(target.isEnabled(chainId)).resolves.toBe(false);
+      expect(mockLoggingService.error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.stringContaining(
+            `chain ${chainId} without relay settings`,
+          ),
+        }),
+      );
+    });
+
+    it('is off without logging when the flag is off', async () => {
+      mockChainsRepository.getChain.mockResolvedValue({
+        ...chain,
+        features: [],
+      });
+      mockChainsRepository.getRelayChain.mockResolvedValue(null);
+
+      await expect(target.isEnabled(chainId)).resolves.toBe(false);
+      expect(mockLoggingService.error).not.toHaveBeenCalled();
+    });
+
+    it('matches a lowercase fee token and keeps the configured checksum', async () => {
+      await expect(
+        target.getAllowlistedToken(
+          chainId,
+          usdc.toLowerCase() as `0x${string}`,
+        ),
+      ).resolves.toMatchObject({ address: usdc, symbol: 'USDC' });
+    });
+
+    it.each([
+      ['1000000000', 1],
+      ['999999999', 0],
+      ['1000000000000000000', 1_000_000_000],
+      ['100000000000000000', 100_000_000],
+      [
+        '115792089237316195423570985008687907853269984665640564039457584007913129639935',
+        Number.MAX_SAFE_INTEGER,
+      ],
+    ])('converts a %s wei budget to %i gwei', (budgetWei, gwei) => {
+      expect(GasTokenFeeService.toDailyLimitGwei(budgetWei)).toBe(gwei);
+    });
+  });
+
   describe('simulate without the Safe result check', () => {
     it('returns the estimate without calling eth_call', async () => {
       mockPublicClient.estimateGas.mockResolvedValue(BigInt(250_000));
@@ -995,7 +1098,7 @@ describe('GasTokenFeeService', () => {
       maxGasPriceWei: '500000000',
     };
 
-    it('reserves ceil(gas × price / 1e9) gwei atomically and does not check GAS_TOKEN', async () => {
+    it('reserves ceil(gas × price / 1e9) gwei atomically and does not check PAY_FROM_SAFE', async () => {
       mockChainsRepository.getChain.mockResolvedValue({
         ...chain,
         features: [],

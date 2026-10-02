@@ -256,10 +256,6 @@ export default (): ReturnType<typeof configuration> => ({
       apiKey: faker.string.hexadecimal({ length: 32 }),
     },
     gasToken: {
-      refundReceivers: {},
-      nativeUsdPrices: {},
-      nativeSpendBudgets: {},
-      allowlist: {},
       marginBps: 2_000,
       minMarginBps: 500,
       baseGas: 70_000,
