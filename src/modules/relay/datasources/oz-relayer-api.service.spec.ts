@@ -443,15 +443,22 @@ describe('OzRelayerApi', () => {
       });
     });
 
-    it.each(['a/b:x', '../x:y', ':x', `${'a'.repeat(65)}:x`, 'abc:'])(
-      'refuses the malformed task id %s',
-      async (taskId) => {
-        await expect(
-          target.getRelayStatus({ chainId, taskId }),
-        ).rejects.toMatchObject({ status: 422, message: 'Invalid task id' });
-        expect(mockNetworkService.get).not.toHaveBeenCalled();
-      },
-    );
+    it.each([
+      'a/b:x',
+      '../x:y',
+      ':x',
+      `${'a'.repeat(65)}:x`,
+      'abc:',
+      'sepolia:..%2F..%2Fx',
+      'sepolia:a/b',
+      '../x',
+      'a/b',
+    ])('refuses the malformed task id %s', async (taskId) => {
+      await expect(
+        target.getRelayStatus({ chainId, taskId }),
+      ).rejects.toMatchObject({ status: 422, message: 'Invalid task id' });
+      expect(mockNetworkService.get).not.toHaveBeenCalled();
+    });
 
     it.each([
       ['pending', null, RelayStatusCode.Pending],

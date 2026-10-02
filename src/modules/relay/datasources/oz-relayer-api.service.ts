@@ -90,6 +90,7 @@ export class OzRelayerApi extends RelayCountCache implements IRelayApi {
   private static readonly SPEED = 'fast';
   private static readonly AVAILABILITY_TTL_MS = 45_000;
   private static readonly RELAYER_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+  private static readonly OZ_ID_PATTERN = /^[A-Za-z0-9-]{1,128}$/;
 
   private static readonly UNAVAILABLE: RelayerState = {
     available: false,
@@ -320,12 +321,16 @@ export class OzRelayerApi extends RelayCountCache implements IRelayApi {
     taskId: string;
   }): Promise<string> {
     const separator = args.taskId.indexOf(':');
+    // Without ':' (separator -1) this is the whole id
+    const ozId = args.taskId.slice(separator + 1);
+    if (!OzRelayerApi.OZ_ID_PATTERN.test(ozId)) {
+      throw new UnprocessableEntityException('Invalid task id');
+    }
     if (separator === -1) {
-      return `${await this.getRelayerUrl(args.chainId)}/transactions/${args.taskId}`;
+      return `${await this.getRelayerUrl(args.chainId)}/transactions/${ozId}`;
     }
     const relayerId = args.taskId.slice(0, separator);
-    const ozId = args.taskId.slice(separator + 1);
-    if (!OzRelayerApi.RELAYER_ID_PATTERN.test(relayerId) || !ozId) {
+    if (!OzRelayerApi.RELAYER_ID_PATTERN.test(relayerId)) {
       throw new UnprocessableEntityException('Invalid task id');
     }
     return `${this.toRelayerUrl(relayerId)}/transactions/${ozId}`;
