@@ -22,6 +22,9 @@ import { getDeploymentVersionsByChainIds } from '@/__tests__/deployments.helper'
 import type { Server } from 'net';
 import { encodeAbiParameters } from 'viem';
 import { IBlockchainApiManager } from '@/domain/interfaces/blockchain-api.manager.interface';
+import { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
+import { IRelayApi } from '@/domain/interfaces/relay-api.interface';
+import { relayChainBuilder } from '@/modules/relay/domain/entities/__tests__/relay-chain.builder';
 
 const listUrl = 'https://lists.example/sanctioned-evm/latest.json';
 const noFeeCampaignChains = Object.keys(
@@ -75,15 +78,6 @@ describe('Relay controller - sanctions screening', () => {
           relay: {
             ...configuration().relay,
             limit: 5,
-            sponsoredChains: {
-              [supportedChainId]: {
-                perSafePerDay: 5,
-                perOwnerCreationsPerDay: 5,
-                maxGasLimit: 30_000_000,
-                dailyBudgetGwei: Number.MAX_SAFE_INTEGER,
-                maxGasPriceWei: '1',
-              },
-            },
             sanctions: {
               listUrl,
               maxStalenessHours: 48,
@@ -97,6 +91,28 @@ describe('Relay controller - sanctions screening', () => {
       safeConfigUrl = configurationService.getOrThrow('safeConfig.baseUri');
       relayUrl = configurationService.getOrThrow('relay.baseUri');
       networkService = moduleFixture.get(NetworkService);
+      // Sponsoring limits that never bind in these suites; Gelato has no gas price cap, so pin one
+      jest
+        .spyOn(
+          moduleFixture.get<IChainsRepository>(IChainsRepository),
+          'getRelayChain',
+        )
+        .mockResolvedValue(
+          relayChainBuilder()
+            .with('sponsoringPerSafePerDay', 5)
+            .with('sponsoringPerOwnerCreationsPerDay', 5)
+            .with('sponsoringMaxGasLimit', 30_000_000)
+            .with(
+              'sponsoringDailyBudgetWei',
+              (
+                BigInt(Number.MAX_SAFE_INTEGER) * BigInt(1_000_000_000)
+              ).toString(),
+            )
+            .build(),
+        );
+      jest
+        .spyOn(moduleFixture.get<IRelayApi>(IRelayApi), 'getGasPriceCap')
+        .mockResolvedValue(BigInt(1));
       networkService.get.mockImplementation(({ url }) => {
         if (url === listUrl) {
           return Promise.resolve({ status: 200, data: rawify(listPayload) });

@@ -9,6 +9,7 @@ import { DataSourceError } from '@/domain/errors/data-source.error';
 import { safeAppBuilder } from '@/modules/safe-apps/domain/entities/__tests__/safe-app.builder';
 import type { ILoggingService } from '@/logging/logging.interface';
 import { rawify } from '@/validation/entities/raw.entity';
+import relayChainContract from '@/modules/relay/domain/entities/__tests__/relay-chain-84532.contract.json';
 import { faker } from '@faker-js/faker';
 
 const dataSource = {
@@ -111,6 +112,34 @@ describe('ConfigApi', () => {
       expireTimeSeconds: expirationTimeInSeconds,
     });
     expect(mockHttpErrorFactory.from).toHaveBeenCalledTimes(0);
+  });
+
+  it('should return the relay chain settings retrieved', async () => {
+    const chainId = faker.string.numeric();
+    const data = rawify(relayChainContract);
+    mockDataSource.get.mockResolvedValue(data);
+
+    const actual = await service.getRelayChain(chainId);
+
+    expect(actual).toBe(data);
+    expect(mockDataSource.get).toHaveBeenCalledTimes(1);
+    expect(mockDataSource.get).toHaveBeenCalledWith({
+      cacheDir: new CacheDir(`${chainId}_relay_chain`, ''),
+      url: `${baseUri}/api/v1/relay/chains/${chainId}/`,
+      notFoundExpireTimeSeconds: notFoundExpirationTimeInSeconds,
+      networkRequest: undefined,
+      expireTimeSeconds: expirationTimeInSeconds,
+    });
+    expect(mockHttpErrorFactory.from).toHaveBeenCalledTimes(0);
+  });
+
+  it('should forward a relay chain error, e.g. 404 without a settings row', async () => {
+    const expected = new DataSourceError('Not Found', 404);
+    mockHttpErrorFactory.from.mockReturnValue(expected);
+    mockDataSource.get.mockRejectedValueOnce(new Error('Not Found'));
+
+    await expect(service.getRelayChain('1')).rejects.toThrow(expected);
+    expect(mockHttpErrorFactory.from).toHaveBeenCalledTimes(1);
   });
 
   it('should return the safe apps retrieved by chainId', async () => {
@@ -231,6 +260,20 @@ describe('ConfigApi', () => {
 
     afterAll(() => {
       jest.useRealTimers();
+    });
+
+    it('clear chain deletes the chain, the chains list and the relay chain settings', async () => {
+      const chainId = faker.string.numeric();
+      await service.clearChain(chainId);
+
+      expect(mockCacheService.deleteByKey).toHaveBeenCalledTimes(3);
+      expect(mockCacheService.deleteByKey).toHaveBeenCalledWith(
+        `${chainId}_chain`,
+      );
+      expect(mockCacheService.deleteByKey).toHaveBeenCalledWith('chains');
+      expect(mockCacheService.deleteByKey).toHaveBeenCalledWith(
+        `${chainId}_relay_chain`,
+      );
     });
 
     it('clear safe apps for a given chain should trigger delete on cache service', async () => {

@@ -62,8 +62,8 @@ describe('GasTokenRelayer', () => {
     mockSafeRepository.getSafe.mockResolvedValue(safeBuilder().build());
     mockFeeService.isEnabled.mockResolvedValue(true);
     mockFeeService.reserveNativeSpend.mockResolvedValue();
-    mockFeeService.getRefundReceiver.mockReturnValue(refundReceiver);
-    mockFeeService.getAllowlistedToken.mockReturnValue(token);
+    mockFeeService.getRefundReceiver.mockResolvedValue(refundReceiver);
+    mockFeeService.getAllowlistedToken.mockResolvedValue(token);
     mockFeeService.estimateSafeTxGas.mockResolvedValue(BigInt(50_000));
     mockFeeService.simulate.mockResolvedValue(BigInt(150_000));
     mockFeeService.assertRefundCovers.mockResolvedValue();
@@ -104,7 +104,7 @@ describe('GasTokenRelayer', () => {
   });
 
   describe('relay', () => {
-    it('should refuse Safe-pays when GAS_TOKEN is disabled without outbound writes', async () => {
+    it('should refuse Safe-pays when PAY_FROM_SAFE is disabled without outbound writes', async () => {
       mockFeeService.isEnabled.mockResolvedValue(false);
 
       await expect(
@@ -219,7 +219,7 @@ describe('GasTokenRelayer', () => {
     });
 
     it('should refuse a foreign refund receiver', async () => {
-      mockFeeService.getRefundReceiver.mockReturnValue(
+      mockFeeService.getRefundReceiver.mockResolvedValue(
         getAddress(faker.finance.ethereumAddress()),
       );
 
@@ -236,7 +236,7 @@ describe('GasTokenRelayer', () => {
     });
 
     it('should refuse a token that is not allowlisted', async () => {
-      mockFeeService.getAllowlistedToken.mockReturnValue(null);
+      mockFeeService.getAllowlistedToken.mockResolvedValue(null);
 
       await expect(
         target.relay({
@@ -329,7 +329,7 @@ describe('GasTokenRelayer', () => {
         .encode();
 
     beforeEach(() => {
-      mockFeeService.getAllowlistedToken.mockReturnValue(native);
+      mockFeeService.getAllowlistedToken.mockResolvedValue(native);
     });
 
     it('should simulate at the signed gas price, then relay', async () => {

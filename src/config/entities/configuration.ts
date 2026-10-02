@@ -1,6 +1,5 @@
 import type { RelayRules } from '@/modules/relay/domain/entities/relay.configuration';
 import { GasTokenConfigurationSchema } from '@/modules/relay/domain/entities/gas-token.configuration';
-import { SponsoredChainsConfigurationSchema } from '@/modules/relay/domain/entities/sponsored-chains.configuration';
 
 // Custom configuration for the application
 // eslint-disable-next-line @typescript-eslint/explicit-function-return-type
@@ -415,34 +414,9 @@ export default () => ({
     ozRelayer: {
       baseUri: process.env.RELAY_OZ_BASE_URI ?? 'http://localhost:8080',
       apiKey: process.env.RELAY_OZ_API_KEY,
-      // JSON: { "<chainId>": "<relayer id>" }
-      relayerIds: parseJsonRecord<string>(process.env.RELAY_OZ_RELAYER_IDS),
     },
     // "Safe pays": the Safe refunds the relayer in a token via execTransaction's gasToken/refundReceiver
     gasToken: GasTokenConfigurationSchema.parse({
-      // JSON: { "<chainId>": "<address receiving the token refund>" }
-      refundReceivers: parseJsonRecord<string>(
-        process.env.RELAY_GAS_TOKEN_REFUND_RECEIVERS,
-      ),
-      // JSON: { "<chainId>": <usd price of the native coin> } for chains without a price feed (testnets)
-      nativeUsdPrices: parseJsonRecord<number>(
-        process.env.RELAY_GAS_TOKEN_NATIVE_USD_PRICES,
-      ),
-      nativeSpendBudgets: parseJsonRecord<{
-        dailyLimitGwei: number;
-        maxGasPriceWei: string;
-      }>(process.env.RELAY_GAS_TOKEN_NATIVE_SPEND_BUDGETS),
-      // JSON: { "<chainId>": [{ "address": "0x…", "symbol": "USDC", "decimals": 6, "usdPrice": 1 }] } (usdPrice optional)
-      // The zero address is the native coin, priced by nativeUsdPrices or the native feed (usdPrice ignored):
-      // { "5042": [{ "address": "0x0000000000000000000000000000000000000000", "symbol": "USDC", "decimals": 18 }] }
-      allowlist: parseJsonRecord<
-        Array<{
-          address: string;
-          symbol: string;
-          decimals: number;
-          usdPrice?: number;
-        }>
-      >(process.env.RELAY_GAS_TOKEN_ALLOWLIST),
       marginBps: parseSafeNonNegativeInteger(
         process.env.RELAY_GAS_TOKEN_MARGIN_BPS,
         2_000,
@@ -464,11 +438,6 @@ export default () => ({
         50_000,
       ),
     }),
-    // Sponsored relays (`gasPrice == 0`, the relayer pays):
-    // JSON: { "<chainId>": { "perSafePerDay": 100, "perOwnerCreationsPerDay": 20, "maxGasLimit": 1500000, "dailyBudgetGwei": 100000000, "maxGasPriceWei": "500000000" } }
-    sponsoredChains: SponsoredChainsConfigurationSchema.parse(
-      parseJsonRecord(process.env.RELAY_SPONSORED_CHAINS),
-    ),
     // OFAC screening of every relay, mandatory in every environment; see
     // SanctionsListService for what happens without a URL.
     sanctions: {
@@ -746,10 +715,6 @@ export default () => ({
     ),
   },
 });
-
-// Parses a JSON object keyed by chain id from an environment variable
-const parseJsonRecord = <T>(envValue: string | undefined): Record<string, T> =>
-  envValue ? (JSON.parse(envValue) as Record<string, T>) : {};
 
 const parseSafeNonNegativeInteger = (
   value: string | undefined,

@@ -11,6 +11,8 @@ import { DataSourceError } from '@/domain/errors/data-source.error';
 import { OzRelayerApi } from '@/modules/relay/datasources/oz-relayer-api.service';
 import { RelayStatusCode } from '@/modules/relay/domain/entities/relay-status.entity';
 import { rawify } from '@/validation/entities/raw.entity';
+import type { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
+import { relayChainBuilder } from '@/modules/relay/domain/entities/__tests__/relay-chain.builder';
 
 const mockNetworkService = jest.mocked({
   get: jest.fn(),
@@ -19,6 +21,9 @@ const mockNetworkService = jest.mocked({
 const mockBlockchainApiManager = jest.mocked({
   getApi: jest.fn(),
 } as jest.MockedObjectDeep<IBlockchainApiManager>);
+const mockChainsRepository = jest.mocked({
+  getRelayChain: jest.fn(),
+} as jest.MockedObjectDeep<IChainsRepository>);
 
 describe('OzRelayerApi', () => {
   let target: OzRelayerApi;
@@ -36,12 +41,16 @@ describe('OzRelayerApi', () => {
     apiKey = faker.string.uuid();
     fakeConfigurationService.set('relay.ozRelayer.baseUri', baseUri);
     fakeConfigurationService.set('relay.ozRelayer.apiKey', apiKey);
-    fakeConfigurationService.set('relay.ozRelayer.relayerIds', {
-      [chainId]: relayerId,
-    });
     mockBlockchainApiManager.getApi.mockResolvedValue({
       getTransactionReceipt: jest.fn().mockResolvedValue({ status: 'success' }),
     } as never);
+    mockChainsRepository.getRelayChain.mockImplementation((id) =>
+      Promise.resolve(
+        id === chainId
+          ? relayChainBuilder().with('relayerId', relayerId).build()
+          : null,
+      ),
+    );
 
     target = new OzRelayerApi(
       mockNetworkService,
@@ -49,6 +58,7 @@ describe('OzRelayerApi', () => {
       new HttpErrorFactory(),
       new FakeCacheService(),
       mockBlockchainApiManager,
+      mockChainsRepository,
     );
   });
 
@@ -61,6 +71,7 @@ describe('OzRelayerApi', () => {
           new HttpErrorFactory(),
           new FakeCacheService(),
           mockBlockchainApiManager,
+          mockChainsRepository,
         ),
     ).toThrow();
   });
@@ -85,7 +96,7 @@ describe('OzRelayerApi', () => {
         gasLimit: BigInt(250_000),
       });
 
-      expect(result).toStrictEqual({ taskId });
+      expect(result).toStrictEqual({ taskId: `${relayerId}:${taskId}` });
       expect(mockNetworkService.post).toHaveBeenCalledWith({
         url: `${baseUri}/api/v1/relayers/${relayerId}/transactions`,
         data: {
@@ -187,7 +198,7 @@ describe('OzRelayerApi', () => {
           id: relayerId,
           paused: false,
           system_disabled: false,
-          policies: { min_balance: 100 },
+          policies: { min_balance: 100, gas_price_cap: 500_000_000 },
           ...overrides,
         },
       });
@@ -246,9 +257,209 @@ describe('OzRelayerApi', () => {
 
       expect(mockNetworkService.get).toHaveBeenCalledTimes(2);
     });
+
+    it('fails closed when the relay settings cannot be read', async () => {
+      mockChainsRepository.getRelayChain.mockRejectedValue(
+        new Error('config-service down'),
+      );
+
+      await expect(target.isAvailable(chainId)).resolves.toBe(false);
+      await expect(target.getGasPriceCap(chainId)).resolves.toBeNull();
+      expect(mockNetworkService.get).not.toHaveBeenCalled();
+    });
+
+    it('uses the relayer id from the relay settings', async () => {
+      mockChainsRepository.getRelayChain.mockResolvedValue(
+        relayChainBuilder().with('relayerId', 'hoodi').build(),
+      );
+      respond(relayer(), balance(101));
+
+      await target.isAvailable(chainId);
+
+      expect(mockNetworkService.get).toHaveBeenCalledWith({
+        url: `${baseUri}/api/v1/relayers/hoodi`,
+        networkRequest: { headers: { Authorization: `Bearer ${apiKey}` } },
+      });
+    });
+  });
+
+  describe('getGasPriceCap', () => {
+    const respondWithPolicies = (policies: unknown): void => {
+      mockNetworkService.get.mockImplementation(({ url }) =>
+        Promise.resolve({
+          status: 200,
+          data: rawify(
+            url.endsWith('/balance')
+              ? { success: true, data: { balance: 1000, unit: 'wei' } }
+              : {
+                  success: true,
+                  data: { id: relayerId, paused: false, policies },
+                },
+          ) as never,
+        }),
+      );
+    };
+
+    it('returns the relayer gas_price_cap in wei', async () => {
+      respondWithPolicies({ min_balance: 100, gas_price_cap: 500_000_000 });
+
+      await expect(target.getGasPriceCap(chainId)).resolves.toBe(
+        BigInt(500_000_000),
+      );
+    });
+
+    it.each([
+      ['no policies', undefined],
+      ['no cap', { min_balance: 100 }],
+      ['a zero cap', { min_balance: 100, gas_price_cap: 0 }],
+    ])('returns null with %s', async (_, policies) => {
+      respondWithPolicies(policies);
+
+      await expect(target.getGasPriceCap(chainId)).resolves.toBeNull();
+    });
+
+    it.each([
+      ['above 2^53', 2 ** 60],
+      ['a string', '500000000'],
+      ['negative', -1],
+    ])(
+      'returns null for a cap %s and keeps the relayer available',
+      async (_, gasPriceCap) => {
+        respondWithPolicies({ min_balance: 100, gas_price_cap: gasPriceCap });
+
+        await expect(target.isAvailable(chainId)).resolves.toBe(true);
+        await expect(target.getGasPriceCap(chainId)).resolves.toBeNull();
+      },
+    );
+
+    it('switches to the new relayer within the TTL when the relayer id changes', async () => {
+      mockNetworkService.get.mockImplementation(({ url }) =>
+        Promise.resolve({
+          status: 200,
+          data: rawify(
+            url.endsWith('/balance')
+              ? { success: true, data: { balance: 1000, unit: 'wei' } }
+              : {
+                  success: true,
+                  data: {
+                    paused: false,
+                    policies: {
+                      min_balance: 100,
+                      gas_price_cap: url.endsWith('/relayers/hoodi')
+                        ? 20_000_000_000
+                        : 500_000_000,
+                    },
+                  },
+                },
+          ) as never,
+        }),
+      );
+      await expect(target.getGasPriceCap(chainId)).resolves.toBe(
+        BigInt(500_000_000),
+      );
+
+      mockChainsRepository.getRelayChain.mockResolvedValue(
+        relayChainBuilder().with('relayerId', 'hoodi').build(),
+      );
+
+      await expect(target.getGasPriceCap(chainId)).resolves.toBe(
+        BigInt(20_000_000_000),
+      );
+      expect(mockNetworkService.get).toHaveBeenCalledWith(
+        expect.objectContaining({ url: `${baseUri}/api/v1/relayers/hoodi` }),
+      );
+    });
+
+    it('shares the cached relayer state with isAvailable', async () => {
+      respondWithPolicies({ min_balance: 100, gas_price_cap: 1 });
+
+      await target.isAvailable(chainId);
+      await target.getGasPriceCap(chainId);
+
+      expect(mockNetworkService.get).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe('getRelayStatus', () => {
+    const ozId = faker.string.uuid();
+    const mockPendingStatus = (): void => {
+      mockNetworkService.get.mockResolvedValueOnce({
+        status: 200,
+        data: rawify({ success: true, data: { id: ozId, status: 'pending' } }),
+      });
+    };
+
+    it.each([
+      [
+        'the relay settings were deleted',
+        (): void => {
+          mockChainsRepository.getRelayChain.mockResolvedValue(null);
+        },
+      ],
+      [
+        'config-service fails',
+        (): void => {
+          mockChainsRepository.getRelayChain.mockRejectedValue(
+            new DataSourceError('Service unavailable', 503),
+          );
+        },
+      ],
+      [
+        'the relayer id changed in the settings',
+        (): void => {
+          mockChainsRepository.getRelayChain.mockResolvedValue(
+            relayChainBuilder().with('relayerId', 'hoodi').build(),
+          );
+        },
+      ],
+    ])(
+      'polls the relayer encoded in the task id when %s',
+      async (_, arrange) => {
+        arrange();
+        mockPendingStatus();
+
+        const result = await target.getRelayStatus({
+          chainId,
+          taskId: `${relayerId}:${ozId}`,
+        });
+
+        expect(result).toStrictEqual({ status: RelayStatusCode.Pending });
+        expect(mockNetworkService.get).toHaveBeenCalledWith({
+          url: `${baseUri}/api/v1/relayers/${relayerId}/transactions/${ozId}`,
+          networkRequest: { headers: { Authorization: `Bearer ${apiKey}` } },
+        });
+        expect(mockChainsRepository.getRelayChain).not.toHaveBeenCalled();
+      },
+    );
+
+    it('falls back to the current relayer for a legacy task id', async () => {
+      mockPendingStatus();
+
+      await target.getRelayStatus({ chainId, taskId: ozId });
+
+      expect(mockNetworkService.get).toHaveBeenCalledWith({
+        url: `${baseUri}/api/v1/relayers/${relayerId}/transactions/${ozId}`,
+        networkRequest: { headers: { Authorization: `Bearer ${apiKey}` } },
+      });
+    });
+
+    it.each([
+      'a/b:x',
+      '../x:y',
+      ':x',
+      `${'a'.repeat(65)}:x`,
+      'abc:',
+      'sepolia:..%2F..%2Fx',
+      'sepolia:a/b',
+      '../x',
+      'a/b',
+    ])('refuses the malformed task id %s', async (taskId) => {
+      await expect(
+        target.getRelayStatus({ chainId, taskId }),
+      ).rejects.toMatchObject({ status: 422, message: 'Invalid task id' });
+      expect(mockNetworkService.get).not.toHaveBeenCalled();
+    });
+
     it.each([
       ['pending', null, RelayStatusCode.Pending],
       ['sent', null, RelayStatusCode.Pending],

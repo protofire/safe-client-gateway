@@ -74,7 +74,7 @@ export class RelayRepository {
     // A paused or underfunded relayer would refuse the relay: hide Safe-pays instead of offering it
     return (await this.feeService.isEnabled(chainId)) &&
       (await this.relayApi.isAvailable(chainId))
-      ? this.feeService.getConfiguration(chainId)
+      ? await this.feeService.getConfiguration(chainId)
       : { gasTokens: [], refundReceiver: null };
   }
 }

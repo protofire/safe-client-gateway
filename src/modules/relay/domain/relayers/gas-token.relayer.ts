@@ -129,7 +129,9 @@ export class GasTokenRelayer implements IRelayer {
       throw new UnofficialMasterCopyError();
     }
 
-    const refundReceiver = this.feeService.getRefundReceiver(args.chainId);
+    const refundReceiver = await this.feeService.getRefundReceiver(
+      args.chainId,
+    );
     if (!refundReceiver) {
       throw new GasTokenRelayError(
         `Paying fees from the Safe is not available on chain ${args.chainId}`,
@@ -141,7 +143,7 @@ export class GasTokenRelayer implements IRelayer {
       );
     }
 
-    const token = this.feeService.getAllowlistedToken(
+    const token = await this.feeService.getAllowlistedToken(
       args.chainId,
       fee.gasToken,
     );
