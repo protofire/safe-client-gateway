@@ -96,7 +96,7 @@ describe('OzRelayerApi', () => {
         gasLimit: BigInt(250_000),
       });
 
-      expect(result).toStrictEqual({ taskId });
+      expect(result).toStrictEqual({ taskId: `${relayerId}:${taskId}` });
       expect(mockNetworkService.post).toHaveBeenCalledWith({
         url: `${baseUri}/api/v1/relayers/${relayerId}/transactions`,
         data: {
@@ -381,6 +381,78 @@ describe('OzRelayerApi', () => {
   });
 
   describe('getRelayStatus', () => {
+    const ozId = faker.string.uuid();
+    const mockPendingStatus = (): void => {
+      mockNetworkService.get.mockResolvedValueOnce({
+        status: 200,
+        data: rawify({ success: true, data: { id: ozId, status: 'pending' } }),
+      });
+    };
+
+    it.each([
+      [
+        'the relay settings were deleted',
+        (): void => {
+          mockChainsRepository.getRelayChain.mockResolvedValue(null);
+        },
+      ],
+      [
+        'config-service fails',
+        (): void => {
+          mockChainsRepository.getRelayChain.mockRejectedValue(
+            new DataSourceError('Service unavailable', 503),
+          );
+        },
+      ],
+      [
+        'the relayer id changed in the settings',
+        (): void => {
+          mockChainsRepository.getRelayChain.mockResolvedValue(
+            relayChainBuilder().with('relayerId', 'hoodi').build(),
+          );
+        },
+      ],
+    ])(
+      'polls the relayer encoded in the task id when %s',
+      async (_, arrange) => {
+        arrange();
+        mockPendingStatus();
+
+        const result = await target.getRelayStatus({
+          chainId,
+          taskId: `${relayerId}:${ozId}`,
+        });
+
+        expect(result).toStrictEqual({ status: RelayStatusCode.Pending });
+        expect(mockNetworkService.get).toHaveBeenCalledWith({
+          url: `${baseUri}/api/v1/relayers/${relayerId}/transactions/${ozId}`,
+          networkRequest: { headers: { Authorization: `Bearer ${apiKey}` } },
+        });
+        expect(mockChainsRepository.getRelayChain).not.toHaveBeenCalled();
+      },
+    );
+
+    it('falls back to the current relayer for a legacy task id', async () => {
+      mockPendingStatus();
+
+      await target.getRelayStatus({ chainId, taskId: ozId });
+
+      expect(mockNetworkService.get).toHaveBeenCalledWith({
+        url: `${baseUri}/api/v1/relayers/${relayerId}/transactions/${ozId}`,
+        networkRequest: { headers: { Authorization: `Bearer ${apiKey}` } },
+      });
+    });
+
+    it.each(['a/b:x', '../x:y', ':x', `${'a'.repeat(65)}:x`, 'abc:'])(
+      'refuses the malformed task id %s',
+      async (taskId) => {
+        await expect(
+          target.getRelayStatus({ chainId, taskId }),
+        ).rejects.toMatchObject({ status: 422, message: 'Invalid task id' });
+        expect(mockNetworkService.get).not.toHaveBeenCalled();
+      },
+    );
+
     it.each([
       ['pending', null, RelayStatusCode.Pending],
       ['sent', null, RelayStatusCode.Pending],

@@ -89,6 +89,7 @@ type RelayerState = { available: boolean; gasPriceCap: bigint | null };
 export class OzRelayerApi extends RelayCountCache implements IRelayApi {
   private static readonly SPEED = 'fast';
   private static readonly AVAILABILITY_TTL_MS = 45_000;
+  private static readonly RELAYER_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
   private static readonly UNAVAILABLE: RelayerState = {
     available: false,
@@ -131,7 +132,11 @@ export class OzRelayerApi extends RelayCountCache implements IRelayApi {
     data: string;
     gasLimit: bigint | null;
   }): Promise<Raw<Relay>> {
-    const url = `${await this.getRelayerUrl(args.chainId)}/transactions`;
+    const relayerId = await this.getRelayerId(args.chainId);
+    if (!relayerId) {
+      throw OzRelayerApi.notAvailable(args.chainId);
+    }
+    const url = `${this.toRelayerUrl(relayerId)}/transactions`;
     const response = await this.networkService
       .post<unknown>({
         url,
@@ -155,7 +160,8 @@ export class OzRelayerApi extends RelayCountCache implements IRelayApi {
         response.error ?? 'Relayer rejected the transaction',
       );
     }
-    return rawify({ taskId: response.data.id });
+    // The relayer travels in the task id so status polling does not depend on the settings at poll time
+    return rawify({ taskId: `${relayerId}:${response.data.id}` });
   }
 
   async isAvailable(chainId: string): Promise<boolean> {
@@ -229,7 +235,7 @@ export class OzRelayerApi extends RelayCountCache implements IRelayApi {
     chainId: string;
     taskId: string;
   }): Promise<Raw<RelayStatus>> {
-    const url = `${await this.getRelayerUrl(args.chainId)}/transactions/${args.taskId}`;
+    const url = await this.getTransactionUrl(args);
     const response = await this.networkService
       .get<unknown>({
         url,
@@ -308,14 +314,35 @@ export class OzRelayerApi extends RelayCountCache implements IRelayApi {
     return relayChain?.relayerId ?? null;
   }
 
+  /** `<relayerId>:<ozId>` from relay(); a task id without ':' predates that format and uses the chain's current relayer. */
+  private async getTransactionUrl(args: {
+    chainId: string;
+    taskId: string;
+  }): Promise<string> {
+    const separator = args.taskId.indexOf(':');
+    if (separator === -1) {
+      return `${await this.getRelayerUrl(args.chainId)}/transactions/${args.taskId}`;
+    }
+    const relayerId = args.taskId.slice(0, separator);
+    const ozId = args.taskId.slice(separator + 1);
+    if (!OzRelayerApi.RELAYER_ID_PATTERN.test(relayerId) || !ozId) {
+      throw new UnprocessableEntityException('Invalid task id');
+    }
+    return `${this.toRelayerUrl(relayerId)}/transactions/${ozId}`;
+  }
+
   private async getRelayerUrl(chainId: string): Promise<string> {
     const relayerId = await this.getRelayerId(chainId);
     if (!relayerId) {
-      throw new UnprocessableEntityException(
-        `Relaying is not available on chain ${chainId}`,
-      );
+      throw OzRelayerApi.notAvailable(chainId);
     }
     return this.toRelayerUrl(relayerId);
+  }
+
+  private static notAvailable(chainId: string): UnprocessableEntityException {
+    return new UnprocessableEntityException(
+      `Relaying is not available on chain ${chainId}`,
+    );
   }
 
   private toRelayerUrl(relayerId: string): string {
