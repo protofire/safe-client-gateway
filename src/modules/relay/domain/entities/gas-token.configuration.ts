@@ -46,9 +46,12 @@ function rejectDuplicateAddresses(
   });
 }
 
+/** OZ relayer ids go into URL paths and prefix OZ task ids (`<relayerId>:<ozId>`), so they must be URL-safe and colon-free. */
+export const RELAYER_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
 /** `GET {safeConfig.baseUri}/api/v1/relay/chains/{chainId}/` — per-chain relay settings edited in the config-service admin. */
 export const RelayChainSchema = z.object({
-  relayerId: z.string().trim().min(1),
+  relayerId: z.string().regex(RELAYER_ID_PATTERN),
   nativeUsdPrice: DecimalPriceSchema.nullable(),
   refundReceiver: NonZeroAddressSchema.nullable(),
   payFromSafeDailyBudgetWei: WeiStringSchema.nullable(),

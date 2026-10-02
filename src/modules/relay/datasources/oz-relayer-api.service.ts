@@ -25,6 +25,7 @@ import { rawify, type Raw } from '@/validation/entities/raw.entity';
 import type { Address, Hash } from 'viem';
 import { IBlockchainApiManager } from '@/domain/interfaces/blockchain-api.manager.interface';
 import { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
+import { RELAYER_ID_PATTERN } from '@/modules/relay/domain/entities/gas-token.configuration';
 
 /**
  * Subset of OpenZeppelin Relayer's `ApiResponse<EvmTransactionResponse>`.
@@ -89,7 +90,6 @@ type RelayerState = { available: boolean; gasPriceCap: bigint | null };
 export class OzRelayerApi extends RelayCountCache implements IRelayApi {
   private static readonly SPEED = 'fast';
   private static readonly AVAILABILITY_TTL_MS = 45_000;
-  private static readonly RELAYER_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
   private static readonly OZ_ID_PATTERN = /^[A-Za-z0-9-]{1,128}$/;
 
   private static readonly UNAVAILABLE: RelayerState = {
@@ -330,7 +330,7 @@ export class OzRelayerApi extends RelayCountCache implements IRelayApi {
       return `${await this.getRelayerUrl(args.chainId)}/transactions/${ozId}`;
     }
     const relayerId = args.taskId.slice(0, separator);
-    if (!OzRelayerApi.RELAYER_ID_PATTERN.test(relayerId)) {
+    if (!RELAYER_ID_PATTERN.test(relayerId)) {
       throw new UnprocessableEntityException('Invalid task id');
     }
     return `${this.toRelayerUrl(relayerId)}/transactions/${ozId}`;

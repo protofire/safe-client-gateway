@@ -64,6 +64,10 @@ describe('RelayChainSchema', () => {
 
   it.each([
     ['an empty relayer id', { relayerId: '' }],
+    ['a relayer id with a dot', { relayerId: 'base.sepolia' }],
+    ['a relayer id with a space', { relayerId: 'a b' }],
+    ['a relayer id with a colon', { relayerId: 'a:b' }],
+    ['a 65-char relayer id', { relayerId: 'a'.repeat(65) }],
     ['a zero refund receiver', { refundReceiver: zeroAddress }],
     ['a zero budget', { sponsoringDailyBudgetWei: '0' }],
     ['a non-integer budget', { payFromSafeDailyBudgetWei: '1.5' }],

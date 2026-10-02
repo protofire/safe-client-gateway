@@ -350,19 +350,22 @@ describe('ChainsRepository', () => {
       expect(mockLoggingService.error).not.toHaveBeenCalled();
     });
 
-    it('returns null and logs an error for invalid settings', async () => {
-      mockConfigApi.getRelayChain.mockResolvedValue(
-        rawify({ ...relayChainContract, relayerId: '' }),
-      );
+    it.each(['', 'base.sepolia'])(
+      'returns null and logs an error for invalid settings (relayerId %j)',
+      async (relayerId) => {
+        mockConfigApi.getRelayChain.mockResolvedValue(
+          rawify({ ...relayChainContract, relayerId }),
+        );
 
-      await expect(target.getRelayChain('84532')).resolves.toBeNull();
-      expect(mockLoggingService.error).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message:
-            'Invalid relay settings for chain 84532; relay modes are off',
-        }),
-      );
-    });
+        await expect(target.getRelayChain('84532')).resolves.toBeNull();
+        expect(mockLoggingService.error).toHaveBeenCalledWith(
+          expect.objectContaining({
+            message:
+              'Invalid relay settings for chain 84532; relay modes are off',
+          }),
+        );
+      },
+    );
 
     it('rethrows other errors', async () => {
       const error = new DataSourceError('Service unavailable', 503);
