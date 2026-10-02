@@ -415,8 +415,6 @@ export default () => ({
     ozRelayer: {
       baseUri: process.env.RELAY_OZ_BASE_URI ?? 'http://localhost:8080',
       apiKey: process.env.RELAY_OZ_API_KEY,
-      // JSON: { "<chainId>": "<relayer id>" }
-      relayerIds: parseJsonRecord<string>(process.env.RELAY_OZ_RELAYER_IDS),
     },
     // "Safe pays": the Safe refunds the relayer in a token via execTransaction's gasToken/refundReceiver
     gasToken: GasTokenConfigurationSchema.parse({
