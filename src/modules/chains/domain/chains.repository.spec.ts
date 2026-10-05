@@ -15,12 +15,15 @@ import type { ITransactionApiManager } from '@/domain/interfaces/transaction-api
 import type { Page } from '@/domain/entities/page.entity';
 import type { ILoggingService } from '@/logging/logging.interface';
 import { type Raw, rawify } from '@/validation/entities/raw.entity';
+import { DataSourceError } from '@/domain/errors/data-source.error';
+import relayChainContract from '@/modules/relay/domain/entities/__tests__/relay-chain-84532.contract.json';
 
 const mockLoggingService = {
   error: jest.fn(),
 } as jest.MockedObjectDeep<ILoggingService>;
 const mockConfigApi = {
   getChains: jest.fn(),
+  getRelayChain: jest.fn(),
 } as jest.MockedObjectDeep<IConfigApi>;
 const mockEtherscanApi = {
   getGasPrice: jest.fn(),
@@ -311,5 +314,64 @@ describe('ChainsRepository', () => {
       1,
       'More chains available despite request limit reached',
     );
+  });
+
+  describe('getRelayChain', () => {
+    it('parses the config-service contract', async () => {
+      mockConfigApi.getRelayChain.mockResolvedValue(rawify(relayChainContract));
+
+      await expect(target.getRelayChain('84532')).resolves.toEqual({
+        relayerId: 'base-sepolia',
+        nativeUsdPrice: 2500,
+        refundReceiver: '0x798D0d04E1c52020d298b6246D9A87ceb4C08b36',
+        payFromSafeDailyBudgetWei: null,
+        sponsoringDailyBudgetWei: '100000000000000000',
+        sponsoringPerSafePerDay: 100,
+        sponsoringPerOwnerCreationsPerDay: 20,
+        sponsoringMaxGasLimit: 1_500_000,
+        tokens: [
+          {
+            address: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+            symbol: 'USDC',
+            decimals: 6,
+            usdPrice: 1,
+          },
+        ],
+      });
+      expect(mockConfigApi.getRelayChain).toHaveBeenCalledWith('84532');
+    });
+
+    it('returns null without logging when the chain has no settings row (404)', async () => {
+      mockConfigApi.getRelayChain.mockRejectedValue(
+        new DataSourceError('Not Found', 404),
+      );
+
+      await expect(target.getRelayChain('1')).resolves.toBeNull();
+      expect(mockLoggingService.error).not.toHaveBeenCalled();
+    });
+
+    it.each(['', 'base.sepolia'])(
+      'returns null and logs an error for invalid settings (relayerId %j)',
+      async (relayerId) => {
+        mockConfigApi.getRelayChain.mockResolvedValue(
+          rawify({ ...relayChainContract, relayerId }),
+        );
+
+        await expect(target.getRelayChain('84532')).resolves.toBeNull();
+        expect(mockLoggingService.error).toHaveBeenCalledWith(
+          expect.objectContaining({
+            message:
+              'Invalid relay settings for chain 84532; relay modes are off',
+          }),
+        );
+      },
+    );
+
+    it('rethrows other errors', async () => {
+      const error = new DataSourceError('Service unavailable', 503);
+      mockConfigApi.getRelayChain.mockRejectedValue(error);
+
+      await expect(target.getRelayChain('84532')).rejects.toBe(error);
+    });
   });
 });

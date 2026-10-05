@@ -20,6 +20,11 @@ import { rawify } from '@/validation/entities/raw.entity';
 import { createTestModule } from '@/__tests__/testing-module';
 import { getDeploymentVersionsByChainIds } from '@/__tests__/deployments.helper';
 import type { Server } from 'net';
+import { encodeAbiParameters } from 'viem';
+import { IBlockchainApiManager } from '@/domain/interfaces/blockchain-api.manager.interface';
+import { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
+import { IRelayApi } from '@/domain/interfaces/relay-api.interface';
+import { relayChainBuilder } from '@/modules/relay/domain/entities/__tests__/relay-chain.builder';
 
 const listUrl = 'https://lists.example/sanctioned-evm/latest.json';
 const noFeeCampaignChains = Object.keys(
@@ -86,6 +91,28 @@ describe('Relay controller - sanctions screening', () => {
       safeConfigUrl = configurationService.getOrThrow('safeConfig.baseUri');
       relayUrl = configurationService.getOrThrow('relay.baseUri');
       networkService = moduleFixture.get(NetworkService);
+      // Sponsoring limits that never bind in these suites; Gelato has no gas price cap, so pin one
+      jest
+        .spyOn(
+          moduleFixture.get<IChainsRepository>(IChainsRepository),
+          'getRelayChain',
+        )
+        .mockResolvedValue(
+          relayChainBuilder()
+            .with('sponsoringPerSafePerDay', 5)
+            .with('sponsoringPerOwnerCreationsPerDay', 5)
+            .with('sponsoringMaxGasLimit', 30_000_000)
+            .with(
+              'sponsoringDailyBudgetWei',
+              (
+                BigInt(Number.MAX_SAFE_INTEGER) * BigInt(1_000_000_000)
+              ).toString(),
+            )
+            .build(),
+        );
+      jest
+        .spyOn(moduleFixture.get<IRelayApi>(IRelayApi), 'getGasPriceCap')
+        .mockResolvedValue(BigInt(1));
       networkService.get.mockImplementation(({ url }) => {
         if (url === listUrl) {
           return Promise.resolve({ status: 200, data: rawify(listPayload) });
@@ -93,12 +120,26 @@ describe('Relay controller - sanctions screening', () => {
         return Promise.reject(`No matching rule for url: ${url}`);
       });
 
+      const blockchainApiManager = moduleFixture.get<IBlockchainApiManager>(
+        IBlockchainApiManager,
+      );
+      jest.spyOn(blockchainApiManager, 'getApi').mockResolvedValue({
+        estimateGas: jest.fn().mockResolvedValue(BigInt(100_000)),
+        call: jest.fn().mockResolvedValue({
+          data: encodeAbiParameters([{ type: 'bool' }], [true]),
+        }),
+        getCode: jest.fn().mockResolvedValue('0x6080'),
+      } as never);
+
       app = await new TestAppProvider().provide(moduleFixture);
       await app.init();
     });
 
     it('relays a clean execTransaction (201)', async () => {
-      const chain = chainBuilder().with('chainId', supportedChainId).build();
+      const chain = chainBuilder()
+        .with('chainId', supportedChainId)
+        .with('features', ['RELAYING'])
+        .build();
       const safe = safeBuilder().build();
       const safeAddress = getAddress(safe.address);
       const data = execTransactionEncoder().encode();

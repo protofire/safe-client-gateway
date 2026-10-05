@@ -1,0 +1,18 @@
+{
+  "relayerId": "base-sepolia",
+  "nativeUsdPrice": "2500.00000000",
+  "refundReceiver": "0x798D0d04E1c52020d298b6246D9A87ceb4C08b36",
+  "payFromSafeDailyBudgetWei": null,
+  "sponsoringDailyBudgetWei": "100000000000000000",
+  "sponsoringPerSafePerDay": 100,
+  "sponsoringPerOwnerCreationsPerDay": 20,
+  "sponsoringMaxGasLimit": 1500000,
+  "tokens": [
+    {
+      "address": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+      "symbol": "USDC",
+      "decimals": 6,
+      "usdPrice": "1.00000000"
+    }
+  ]
+}

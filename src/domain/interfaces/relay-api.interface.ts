@@ -18,6 +18,12 @@ export interface IRelayApi {
     taskId: string;
   }): Promise<Raw<RelayStatus>>;
 
+  /** Whether the chain's executor can take a transaction now (not paused, disabled or underfunded). */
+  isAvailable(chainId: string): Promise<boolean>;
+
+  /** The executor's gas price ceiling in wei for the chain, or null when it has none. */
+  getGasPriceCap(chainId: string): Promise<bigint | null>;
+
   getRelayCount(args: { chainId: string; address: Address }): Promise<number>;
 
   setRelayCount(args: {

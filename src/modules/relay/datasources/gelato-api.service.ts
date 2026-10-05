@@ -91,6 +91,16 @@ export class GelatoApi extends RelayCountCache implements IRelayApi {
     }
   }
 
+  // Gelato exposes no per-chain executor state; availability shows only as a relay error
+  isAvailable(): Promise<boolean> {
+    return Promise.resolve(true);
+  }
+
+  // Gelato exposes no gas price policy, so budgeted relay modes (sponsoring) stay off on it
+  getGasPriceCap(): Promise<bigint | null> {
+    return Promise.resolve(null);
+  }
+
   async getRelayStatus(args: {
     chainId: string;
     taskId: string;

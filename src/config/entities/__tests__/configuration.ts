@@ -254,13 +254,8 @@ export default (): ReturnType<typeof configuration> => ({
     ozRelayer: {
       baseUri: faker.internet.url({ appendSlash: false }),
       apiKey: faker.string.hexadecimal({ length: 32 }),
-      relayerIds: { 11155111: 'sepolia' },
     },
     gasToken: {
-      refundReceivers: {},
-      nativeUsdPrices: {},
-      nativeSpendBudgets: {},
-      allowlist: {},
       marginBps: 2_000,
       minMarginBps: 500,
       baseGas: 70_000,
