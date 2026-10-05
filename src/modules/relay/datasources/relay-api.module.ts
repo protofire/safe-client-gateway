@@ -5,11 +5,12 @@ import { IRelayApi } from '@/domain/interfaces/relay-api.interface';
 import { HttpErrorFactory } from '@/datasources/errors/http-error-factory';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import { BlockchainModule } from '@/modules/blockchain/blockchain.module';
+import { ChainsModule } from '@/modules/chains/chains.module';
 
 export type RelayProvider = 'gelato' | 'oz-relayer';
 
 @Module({
-  imports: [BlockchainModule],
+  imports: [BlockchainModule, ChainsModule],
   providers: [
     HttpErrorFactory,
     GelatoApi,

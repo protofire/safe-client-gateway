@@ -14,6 +14,7 @@ export class CacheRouter {
   private static readonly BRIDGE_CHAINS_KEY = 'bridge_chains';
   private static readonly CHAIN_KEY = 'chain';
   private static readonly CHAINS_KEY = 'chains';
+  private static readonly RELAY_CHAIN_KEY = 'relay_chain';
   private static readonly CONTRACTS_KEY = 'contracts';
   private static readonly COUNTERFACTUAL_SAFE_KEY = 'counterfactual_safe';
   private static readonly COUNTERFACTUAL_SAFES_KEY = 'counterfactual_safes';
@@ -565,6 +566,14 @@ export class CacheRouter {
 
   static getChainCacheDir(chainId: string): CacheDir {
     return new CacheDir(CacheRouter.getChainCacheKey(chainId), '');
+  }
+
+  static getRelayChainCacheKey(chainId: string): string {
+    return `${chainId}_${CacheRouter.RELAY_CHAIN_KEY}`;
+  }
+
+  static getRelayChainCacheDir(chainId: string): CacheDir {
+    return new CacheDir(CacheRouter.getRelayChainCacheKey(chainId), '');
   }
 
   static getRelayKey(args: { chainId: string; address: Address }): string {

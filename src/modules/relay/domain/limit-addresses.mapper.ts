@@ -109,8 +109,12 @@ export class LimitAddressesMapper {
       ) {
         throw new UnofficialProxyFactoryError();
       }
-      // Owners of safe-to-be-created will be limited
-      return this.getOwnersFromCreateProxyWithNonce(args.data);
+      // Owners of safe-to-be-created will be limited; none would leave the relay unlimited
+      const owners = this.getOwnersFromCreateProxyWithNonce(args.data);
+      if (owners.length === 0) {
+        throw new InvalidTransferError();
+      }
+      return owners;
     }
 
     throw new InvalidTransferError();
