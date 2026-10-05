@@ -51,6 +51,7 @@ const mockPricesApi = jest.mocked({
 
 const mockPublicClient = jest.mocked({
   getGasPrice: jest.fn(),
+  getCode: jest.fn(),
   estimateGas: jest.fn(),
   call: jest.fn(),
   request: jest.fn(),
@@ -158,6 +159,8 @@ describe('GasTokenFeeService', () => {
     mockRelayApi.getGasPriceCap.mockResolvedValue(parseGwei('30'));
     mockBlockchainApiManager.getApi.mockResolvedValue(mockPublicClient);
     mockPublicClient.getGasPrice.mockResolvedValue(parseGwei('20'));
+    // The refund receiver is an EOA unless a test says otherwise
+    mockPublicClient.getCode.mockResolvedValue(undefined);
     mockPublicClient.call.mockResolvedValue({
       data: encodeAbiParameters([{ type: 'bool' }], [true]),
     });
@@ -677,6 +680,140 @@ describe('GasTokenFeeService', () => {
           outerGasLimit: BigInt(243_000),
         }),
       ).resolves.toBeUndefined();
+    });
+
+    // The Safe refunds native with send() (2300 gas): a receiver with code reverts it (GS011)
+    describe('refund receiver that cannot take a native refund', () => {
+      const usdcToken = relayChain.tokens[0];
+      const previewArgs = {
+        chainId,
+        safeAddress: getAddress(faker.finance.ethereumAddress()),
+        to: getAddress(faker.finance.ethereumAddress()),
+        value: '0',
+        data: '0x' as const,
+        operation: Operation.CALL,
+        numberSignatures: 1,
+      };
+
+      beforeEach(() => {
+        mockChainsRepository.getRelayChain.mockResolvedValue({
+          ...nativeRelayChain,
+          tokens: [native, usdcToken],
+        });
+      });
+
+      it.each([
+        ['a contract', '0x6080604052' as const],
+        ['an EIP-7702 delegated EOA', `0xef0100${'ab'.repeat(20)}` as const],
+      ])('drops the native coin when it is %s', async (_, code) => {
+        mockPublicClient.getCode.mockResolvedValue(code);
+
+        await expect(service.getConfiguration(chainId)).resolves.toStrictEqual({
+          gasTokens: [{ address: usdc, symbol: 'USDC', decimals: 6 }],
+          refundReceiver,
+        });
+        expect(mockPublicClient.getCode).toHaveBeenCalledWith({
+          address: refundReceiver,
+        });
+        expect(mockLoggingService.error).toHaveBeenCalledTimes(1);
+        expect(mockLoggingService.error).toHaveBeenCalledWith(
+          expect.objectContaining({
+            error: expect.stringMatching(
+              new RegExp(`${refundReceiver} on chain ${chainId} has code`),
+            ),
+          }),
+        );
+      });
+
+      it.each([undefined, '0x' as const])(
+        'offers the native coin when the receiver has no code: %s',
+        async (code) => {
+          mockPublicClient.getCode.mockResolvedValue(code);
+
+          await expect(
+            service.getConfiguration(chainId),
+          ).resolves.toStrictEqual({
+            gasTokens: [
+              { address: zeroAddress, symbol: 'USDC', decimals: 18 },
+              { address: usdc, symbol: 'USDC', decimals: 6 },
+            ],
+            refundReceiver,
+          });
+          expect(mockLoggingService.error).not.toHaveBeenCalled();
+        },
+      );
+
+      it('refuses the native coin as an unaccepted fee token and keeps ERC-20', async () => {
+        mockPublicClient.getCode.mockResolvedValue('0x6080604052');
+        mockSimulation({ estimate: BigInt(100_000), success: true });
+
+        await expect(
+          service.preview({ ...previewArgs, gasToken: zeroAddress }),
+        ).rejects.toThrow(
+          new GasTokenRelayError(
+            `${zeroAddress} is not an accepted fee token on chain ${chainId}`,
+          ),
+        );
+        // The relay validates the gas token through the same lookup
+        await expect(
+          service.getAllowlistedToken(chainId, zeroAddress),
+        ).resolves.toBeNull();
+        await expect(
+          service.preview({ ...previewArgs, gasToken: usdc }),
+        ).resolves.toMatchObject({ txData: { gasToken: usdc } });
+      });
+
+      it('drops only the native coin when the code lookup fails', async () => {
+        mockPublicClient.getCode.mockRejectedValue(new Error('rpc down'));
+
+        await expect(service.getConfiguration(chainId)).resolves.toStrictEqual({
+          gasTokens: [{ address: usdc, symbol: 'USDC', decimals: 6 }],
+          refundReceiver,
+        });
+        await expect(
+          service.getAllowlistedToken(chainId, zeroAddress),
+        ).resolves.toBeNull();
+        await expect(
+          service.getAllowlistedToken(chainId, usdc),
+        ).resolves.toMatchObject({ address: usdc });
+        expect(mockLoggingService.error).toHaveBeenCalledWith(
+          expect.objectContaining({
+            error: expect.stringContaining('rpc down'),
+          }),
+        );
+      });
+
+      it('does not cache a failed lookup', async () => {
+        mockPublicClient.getCode
+          .mockRejectedValueOnce(new Error('rpc down'))
+          .mockResolvedValue(undefined);
+
+        await expect(
+          service.getAllowlistedToken(chainId, zeroAddress),
+        ).resolves.toBeNull();
+        await expect(
+          service.getAllowlistedToken(chainId, zeroAddress),
+        ).resolves.toMatchObject({ address: zeroAddress });
+      });
+
+      it('looks the code up once per TTL and logs once', async () => {
+        mockPublicClient.getCode.mockResolvedValue('0x6080604052');
+
+        await service.getConfiguration(chainId);
+        await service.getAllowlistedToken(chainId, zeroAddress);
+
+        expect(mockPublicClient.getCode).toHaveBeenCalledTimes(1);
+        expect(mockLoggingService.error).toHaveBeenCalledTimes(1);
+      });
+
+      it('does not look the code up without a native fee token', async () => {
+        mockChainsRepository.getRelayChain.mockResolvedValue(relayChain);
+
+        await service.getConfiguration(chainId);
+        await service.getAllowlistedToken(chainId, usdc);
+
+        expect(mockPublicClient.getCode).not.toHaveBeenCalled();
+      });
     });
 
     describe('assertRefundCovers', () => {

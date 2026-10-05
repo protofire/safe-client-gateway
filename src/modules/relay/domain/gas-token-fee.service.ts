@@ -78,6 +78,7 @@ export class GasTokenFeeService {
   /** `simulateAndRevert` measures the inner call once; the real one runs in a different state, so pad it */
   private static readonly SAFE_TX_GAS_MARGIN_BPS = BigInt(1_000);
   private static readonly SAFE_TX_GAS_MARGIN_FIXED = BigInt(10_000);
+  private static readonly REFUND_RECEIVER_CODE_TTL_MS = 60_000;
   private static readonly SAFE_ABI = parseAbi([
     'function simulateAndRevert(address targetContract, bytes calldataPayload)',
   ]);
@@ -92,6 +93,12 @@ export class GasTokenFeeService {
   // component the app can run without). It fails closed instead: isEnabled()
   // returns false on every chain, in every environment, until minMarginBps is fixed.
   private readonly disabled: boolean;
+  // Keyed by chain and receiver: an admin edit of the refund receiver takes effect immediately.
+  // Per-process cache: one getCode per chain per TTL on each replica
+  private readonly nativeRefundable = new Map<
+    string,
+    { refundable: boolean; expiresAt: number }
+  >();
 
   constructor(
     @Inject(IConfigurationService) configurationService: IConfigurationService,
@@ -246,12 +253,17 @@ export class GasTokenFeeService {
     >;
     refundReceiver: Address | null;
   }> {
-    const relayChain = await this.chainsRepository.getRelayChain(chainId);
+    const [tokens, refundReceiver] = await Promise.all([
+      this.getTokens(chainId),
+      this.getRefundReceiver(chainId),
+    ]);
     return {
-      gasTokens: (relayChain?.tokens ?? []).map(
-        ({ address, symbol, decimals }) => ({ address, symbol, decimals }),
-      ),
-      refundReceiver: relayChain?.refundReceiver ?? null,
+      gasTokens: tokens.map(({ address, symbol, decimals }) => ({
+        address,
+        symbol,
+        decimals,
+      })),
+      refundReceiver,
     };
   }
 
@@ -259,12 +271,66 @@ export class GasTokenFeeService {
     chainId: string,
     token: Address,
   ): Promise<GasTokenAllowlistEntry | null> {
+    const tokens = await this.getTokens(chainId);
+    return tokens.find((entry) => isAddressEqual(entry.address, token)) ?? null;
+  }
+
+  /** Fee tokens of the chain, without the native coin when the refund receiver cannot take it. */
+  private async getTokens(
+    chainId: string,
+  ): Promise<Array<GasTokenAllowlistEntry>> {
     const relayChain = await this.chainsRepository.getRelayChain(chainId);
-    return (
-      relayChain?.tokens.find((entry) =>
-        isAddressEqual(entry.address, token),
-      ) ?? null
+    const tokens = relayChain?.tokens ?? [];
+    if (
+      // Without a refund receiver nothing is refunded at all: preview and relay refuse on their own
+      !relayChain?.refundReceiver ||
+      !tokens.some(({ address }) => GasTokenFeeService.isNative(address)) ||
+      (await this.isNativeRefundable(chainId, relayChain.refundReceiver))
+    ) {
+      return tokens;
+    }
+    return tokens.filter(
+      ({ address }) => !GasTokenFeeService.isNative(address),
     );
+  }
+
+  /**
+   * The Safe refunds the native coin with `send()`, which forwards 2300 gas: a receiver with any
+   * code (a contract, an EIP-7702 delegated EOA) reverts the whole transaction with GS011.
+   * Fails closed: an unreadable code counts as not refundable (not cached, the next request retries).
+   */
+  private async isNativeRefundable(
+    chainId: string,
+    refundReceiver: Address,
+  ): Promise<boolean> {
+    const key = `${chainId}:${refundReceiver}`;
+    const cached = this.nativeRefundable.get(key);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.refundable;
+    }
+    let code: Hex | undefined;
+    try {
+      const client = await this.blockchainApiManager.getApi(chainId);
+      code = await client.getCode({ address: refundReceiver });
+    } catch (error) {
+      this.loggingService.error({
+        type: LogType.GasTokenFeeMisconfigured,
+        error: `Unable to read the code of refund receiver ${refundReceiver} on chain ${chainId}: ${GasTokenFeeService.getReason(error)}; the native fee token is not offered`,
+      });
+      return false;
+    }
+    const refundable = !code || code === '0x';
+    if (!refundable) {
+      this.loggingService.error({
+        type: LogType.GasTokenFeeMisconfigured,
+        error: `Refund receiver ${refundReceiver} on chain ${chainId} has code and cannot receive a native refund; the native fee token is not offered`,
+      });
+    }
+    this.nativeRefundable.set(key, {
+      refundable,
+      expiresAt: Date.now() + GasTokenFeeService.REFUND_RECEIVER_CODE_TTL_MS,
+    });
+    return refundable;
   }
 
   /** Fixed native USD price from the relay settings (testnets without a feed), else null. */
