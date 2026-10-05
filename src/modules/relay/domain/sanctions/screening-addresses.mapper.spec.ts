@@ -92,6 +92,36 @@ describe('ScreeningAddressesMapper', () => {
     expect(mockLimitAddressesMapper.getLimitAddresses).not.toHaveBeenCalled();
   });
 
+  it('does not screen the zero address of a native-coin refund', async () => {
+    const safe = safeBuilder().build();
+    const recipient = address();
+    mockSafeRepository.getSafe.mockResolvedValue(safe);
+    const data = execTransactionEncoder()
+      .with('to', recipient)
+      .with('value', BigInt(1))
+      .with('data', '0x')
+      .with('gasPrice', BigInt(1))
+      .with('gasToken', zeroAddress)
+      .with('refundReceiver', address())
+      .encode();
+
+    const result = await target.map({
+      version,
+      chainId,
+      to: safe.address,
+      data,
+      isSafePays: true,
+    });
+
+    expect(result).toEqual(
+      expect.arrayContaining([
+        { address: safe.address, role: 'safe' },
+        { address: recipient, role: 'to' },
+      ]),
+    );
+    expect(result.map((s) => s.address)).not.toContain(zeroAddress);
+  });
+
   it('uses getLimitAddresses on non-Safe-pays paths', async () => {
     const safe = safeBuilder().build();
     mockLimitAddressesMapper.getLimitAddresses.mockResolvedValue([

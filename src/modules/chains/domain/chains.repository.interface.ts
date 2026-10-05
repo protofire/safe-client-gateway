@@ -3,6 +3,7 @@ import type { Singleton } from '@/modules/chains/domain/entities/singleton.entit
 import type { Page } from '@/domain/entities/page.entity';
 import type { IndexingStatus } from '@/modules/indexing/domain/entities/indexing-status.entity';
 import type { GasPriceResponse } from '@/modules/chains/routes/entities/gas-price-response.entity';
+import type { RelayChain } from '@/modules/relay/domain/entities/gas-token.configuration';
 
 export const IChainsRepository = Symbol('IChainsRepository');
 
@@ -31,6 +32,14 @@ export interface IChainsRepository {
    * Triggers the removal of the chain data stored in the DataSource (e.g. cache)
    */
   clearChain(chainId: string): Promise<void>;
+
+  /**
+   * Gets the relay settings (relayer, fee tokens, budgets, sponsoring limits) of {@link chainId}
+   * from config-service, or null when the chain has none or they are invalid (logged).
+   *
+   * @param chainId
+   */
+  getRelayChain(chainId: string): Promise<RelayChain | null>;
 
   /**
    * Gets the supported {@link Singleton} associated with {@link chainId}

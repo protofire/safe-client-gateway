@@ -1,3 +1,4 @@
+import { InvalidTransferError } from '@/modules/relay/domain/errors/invalid-transfer.error';
 import {
   erc20ApproveEncoder,
   erc20TransferEncoder,
@@ -1228,6 +1229,34 @@ describe('LimitAddressesMapper', () => {
                 to: proxyFactory,
               });
               expect(expectedLimitAddresses).toStrictEqual(owners);
+            });
+
+            it('should throw when creating a Safe without owners', async () => {
+              const singleton = faker.helpers.arrayElement(
+                getSafeSingletonDeployments({
+                  version,
+                  chainId,
+                }),
+              );
+              const data = createProxyWithNonceEncoder()
+                .with('singleton', singleton)
+                .with('initializer', setupEncoder().with('owners', []).encode())
+                .encode();
+              const proxyFactory = faker.helpers.arrayElement(
+                getProxyFactoryDeployments({
+                  version,
+                  chainId,
+                }),
+              );
+
+              await expect(
+                target.getLimitAddresses({
+                  version,
+                  chainId,
+                  data,
+                  to: proxyFactory,
+                }),
+              ).rejects.toThrow(InvalidTransferError);
             });
 
             it('should throw when using an unofficial ProxyFactory to create an official Safe', async () => {
