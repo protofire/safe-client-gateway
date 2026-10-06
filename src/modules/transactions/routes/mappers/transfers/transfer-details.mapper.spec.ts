@@ -1,5 +1,6 @@
 import { faker } from '@faker-js/faker';
 import { erc20TransferBuilder } from '@/modules/safe/domain/entities/__tests__/erc20-transfer.builder';
+import { nativeTokenTransferBuilder } from '@/modules/safe/domain/entities/__tests__/native-token-transfer.builder';
 import { safeBuilder } from '@/modules/safe/domain/entities/__tests__/safe.builder';
 import { transferTransactionInfoBuilder } from '@/modules/transactions/routes/entities/__tests__/transfer-transaction-info.builder';
 import { TransferDetailsMapper } from '@/modules/transactions/routes/mappers/transfers/transfer-details.mapper';
@@ -38,5 +39,21 @@ describe('TransferDetails mapper (Unit)', () => {
       safeAppInfo: null,
       note: null,
     });
+    expect(actual).not.toHaveProperty('hederaTransactionId');
+  });
+
+  it('should include hederaTransactionId for Hedera native transfers', async () => {
+    const chainId = faker.string.numeric();
+    const hederaTransactionId = '0.0.10822511-1787674970-069053976';
+    const transfer = nativeTokenTransferBuilder()
+      .with('hederaTransactionId', hederaTransactionId)
+      .build();
+    const safe = safeBuilder().build();
+    const transferInfo = transferTransactionInfoBuilder().build();
+    transferInfoMapper.mapTransferInfo.mockResolvedValue(transferInfo);
+
+    const actual = await mapper.mapDetails(chainId, transfer, safe);
+
+    expect(actual).toHaveProperty('hederaTransactionId', hederaTransactionId);
   });
 });
