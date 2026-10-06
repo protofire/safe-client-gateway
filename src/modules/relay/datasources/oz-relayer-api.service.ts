@@ -24,6 +24,8 @@ import type { Relay } from '@/modules/relay/domain/entities/relay.entity';
 import { rawify, type Raw } from '@/validation/entities/raw.entity';
 import type { Address, Hash } from 'viem';
 import { IBlockchainApiManager } from '@/domain/interfaces/blockchain-api.manager.interface';
+import { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
+import { RELAYER_ID_PATTERN } from '@/modules/relay/domain/entities/gas-token.configuration';
 
 /**
  * Subset of OpenZeppelin Relayer's `ApiResponse<EvmTransactionResponse>`.
@@ -51,21 +53,58 @@ const OzTransactionResponseSchema = z.object({
     .optional(),
 });
 
+const OzRelayerResponseSchema = z.object({
+  success: z.boolean(),
+  data: z
+    .object({
+      paused: z.boolean(),
+      system_disabled: z.boolean().nullish(),
+      policies: z
+        .object({
+          min_balance: z.number().nullish(),
+          // A cap above 2^53, a string or 0 must not fail the whole parse (and with it availability):
+          // only the budgeted modes depend on it
+          gas_price_cap: z.number().int().positive().nullish().catch(null),
+        })
+        .nullish(),
+    })
+    .nullish(),
+});
+
+const OzBalanceResponseSchema = z.object({
+  success: z.boolean(),
+  data: z.object({ balance: z.number() }).nullish(),
+});
+
 type OzTransactionStatus = NonNullable<
   z.infer<typeof OzTransactionResponseSchema>['data']
 >['status'];
 
+type RelayerState = { available: boolean; gasPriceCap: bigint | null };
+
 /**
  * Relays through a self-hosted OpenZeppelin Relayer.
- * One relayer id per chain (`relay.ozRelayer.relayerIds`), one bearer key for the instance.
+ * One OZ relayer per chain (the chain's relay settings in config-service), one bearer key for the instance.
  */
 @Injectable()
 export class OzRelayerApi extends RelayCountCache implements IRelayApi {
   private static readonly SPEED = 'fast';
+  private static readonly AVAILABILITY_TTL_MS = 45_000;
+  private static readonly OZ_ID_PATTERN = /^[A-Za-z0-9-]{1,128}$/;
+
+  private static readonly UNAVAILABLE: RelayerState = {
+    available: false,
+    gasPriceCap: null,
+  };
 
   private readonly baseUri: string;
   private readonly apiKey: string;
-  private readonly relayerIds: Record<string, string>;
+  // Keyed by relayer id, not chain id: an admin edit of a chain's relayer id takes effect immediately.
+  // ponytail: per-process cache, each replica asks OZ at most once per TTL; move to Redis if replicas multiply
+  private readonly states = new Map<
+    string,
+    RelayerState & { expiresAt: number }
+  >();
 
   constructor(
     @Inject(NetworkService)
@@ -76,6 +115,8 @@ export class OzRelayerApi extends RelayCountCache implements IRelayApi {
     @Inject(CacheService) cacheService: ICacheService,
     @Inject(IBlockchainApiManager)
     private readonly blockchainApiManager: IBlockchainApiManager,
+    @Inject(IChainsRepository)
+    private readonly chainsRepository: IChainsRepository,
   ) {
     super(cacheService);
     this.baseUri = configurationService.getOrThrow<string>(
@@ -83,9 +124,6 @@ export class OzRelayerApi extends RelayCountCache implements IRelayApi {
     );
     this.apiKey = configurationService.getOrThrow<string>(
       'relay.ozRelayer.apiKey',
-    );
-    this.relayerIds = configurationService.getOrThrow<Record<string, string>>(
-      'relay.ozRelayer.relayerIds',
     );
   }
 
@@ -95,7 +133,11 @@ export class OzRelayerApi extends RelayCountCache implements IRelayApi {
     data: string;
     gasLimit: bigint | null;
   }): Promise<Raw<Relay>> {
-    const url = `${this.getRelayerUrl(args.chainId)}/transactions`;
+    const relayerId = await this.getRelayerId(args.chainId);
+    if (!relayerId) {
+      throw OzRelayerApi.notAvailable(args.chainId);
+    }
+    const url = `${this.toRelayerUrl(relayerId)}/transactions`;
     const response = await this.networkService
       .post<unknown>({
         url,
@@ -119,14 +161,82 @@ export class OzRelayerApi extends RelayCountCache implements IRelayApi {
         response.error ?? 'Relayer rejected the transaction',
       );
     }
-    return rawify({ taskId: response.data.id });
+    // The relayer travels in the task id so status polling does not depend on the settings at poll time
+    return rawify({ taskId: `${relayerId}:${response.data.id}` });
+  }
+
+  async isAvailable(chainId: string): Promise<boolean> {
+    return (await this.getRelayerState(chainId)).available;
+  }
+
+  async getGasPriceCap(chainId: string): Promise<bigint | null> {
+    return (await this.getRelayerState(chainId)).gasPriceCap;
+  }
+
+  /** Fails closed: missing or unreadable relay settings count as unavailable (not cached: settings have their own cache). */
+  private async getRelayerState(chainId: string): Promise<RelayerState> {
+    let relayerId: string | null;
+    try {
+      relayerId = await this.getRelayerId(chainId);
+    } catch {
+      return OzRelayerApi.UNAVAILABLE;
+    }
+    if (!relayerId) {
+      return OzRelayerApi.UNAVAILABLE;
+    }
+    const cached = this.states.get(relayerId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached;
+    }
+    const state = await this.fetchRelayerState(relayerId);
+    this.states.set(relayerId, {
+      ...state,
+      expiresAt: Date.now() + OzRelayerApi.AVAILABILITY_TTL_MS,
+    });
+    return state;
+  }
+
+  /** Fails closed: an unreachable or malformed relayer counts as unavailable. */
+  private async fetchRelayerState(relayerId: string): Promise<RelayerState> {
+    try {
+      const url = this.toRelayerUrl(relayerId);
+      const networkRequest = { headers: this.getHeaders() };
+      // ponytail: balances arrive as JSON numbers, so wei above 2^53 compare with float precision; fine for a threshold check
+      const [relayer, balance] = await Promise.all([
+        this.networkService
+          .get<unknown>({ url, networkRequest })
+          .then(({ data }) => OzRelayerResponseSchema.parse(data)),
+        this.networkService
+          .get<unknown>({ url: `${url}/balance`, networkRequest })
+          .then(({ data }) => OzBalanceResponseSchema.parse(data)),
+      ]);
+      if (
+        !relayer.success ||
+        !relayer.data ||
+        !balance.success ||
+        !balance.data
+      ) {
+        return OzRelayerApi.UNAVAILABLE;
+      }
+      const policies = relayer.data.policies;
+      const gasPriceCap = policies?.gas_price_cap;
+      return {
+        available:
+          !relayer.data.paused &&
+          !relayer.data.system_disabled &&
+          balance.data.balance >= (policies?.min_balance ?? 0),
+        gasPriceCap: gasPriceCap ? BigInt(gasPriceCap) : null,
+      };
+    } catch {
+      return OzRelayerApi.UNAVAILABLE;
+    }
   }
 
   async getRelayStatus(args: {
     chainId: string;
     taskId: string;
   }): Promise<Raw<RelayStatus>> {
-    const url = `${this.getRelayerUrl(args.chainId)}/transactions/${args.taskId}`;
+    const url = await this.getTransactionUrl(args);
     const response = await this.networkService
       .get<unknown>({
         url,
@@ -200,13 +310,47 @@ export class OzRelayerApi extends RelayCountCache implements IRelayApi {
     }
   }
 
-  private getRelayerUrl(chainId: string): string {
-    const relayerId = this.relayerIds[chainId];
-    if (!relayerId) {
-      throw new UnprocessableEntityException(
-        `Relaying is not available on chain ${chainId}`,
-      );
+  private async getRelayerId(chainId: string): Promise<string | null> {
+    const relayChain = await this.chainsRepository.getRelayChain(chainId);
+    return relayChain?.relayerId ?? null;
+  }
+
+  /** `<relayerId>:<ozId>` from relay(); a task id without ':' predates that format and uses the chain's current relayer. */
+  private async getTransactionUrl(args: {
+    chainId: string;
+    taskId: string;
+  }): Promise<string> {
+    const separator = args.taskId.indexOf(':');
+    // Without ':' (separator -1) this is the whole id
+    const ozId = args.taskId.slice(separator + 1);
+    if (!OzRelayerApi.OZ_ID_PATTERN.test(ozId)) {
+      throw new UnprocessableEntityException('Invalid task id');
     }
+    if (separator === -1) {
+      return `${await this.getRelayerUrl(args.chainId)}/transactions/${ozId}`;
+    }
+    const relayerId = args.taskId.slice(0, separator);
+    if (!RELAYER_ID_PATTERN.test(relayerId)) {
+      throw new UnprocessableEntityException('Invalid task id');
+    }
+    return `${this.toRelayerUrl(relayerId)}/transactions/${ozId}`;
+  }
+
+  private async getRelayerUrl(chainId: string): Promise<string> {
+    const relayerId = await this.getRelayerId(chainId);
+    if (!relayerId) {
+      throw OzRelayerApi.notAvailable(chainId);
+    }
+    return this.toRelayerUrl(relayerId);
+  }
+
+  private static notAvailable(chainId: string): UnprocessableEntityException {
+    return new UnprocessableEntityException(
+      `Relaying is not available on chain ${chainId}`,
+    );
+  }
+
+  private toRelayerUrl(relayerId: string): string {
     return `${this.baseUri}/api/v1/relayers/${relayerId}`;
   }
 

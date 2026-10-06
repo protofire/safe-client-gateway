@@ -12,6 +12,7 @@ import { IConfigApi } from '@/domain/interfaces/config-api.interface';
 import { SafeApp } from '@/modules/safe-apps/domain/entities/safe-app.entity';
 import { ILoggingService, LoggingService } from '@/logging/logging.interface';
 import { Raw } from '@/validation/entities/raw.entity';
+import { RelayChain } from '@/modules/relay/domain/entities/gas-token.configuration';
 import { Inject, Injectable } from '@nestjs/common';
 
 @Injectable()
@@ -81,9 +82,27 @@ export class ConfigApi implements IConfigApi {
     }
   }
 
+  async getRelayChain(chainId: string): Promise<Raw<RelayChain>> {
+    try {
+      const url = `${this.baseUri}/api/v1/relay/chains/${chainId}/`;
+      const cacheDir = CacheRouter.getRelayChainCacheDir(chainId);
+      return await this.dataSource.get<RelayChain>({
+        cacheDir,
+        url,
+        notFoundExpireTimeSeconds: this.defaultNotFoundExpirationTimeSeconds,
+        networkRequest: undefined,
+        expireTimeSeconds: this.defaultExpirationTimeInSeconds,
+      });
+    } catch (error) {
+      throw this.httpErrorFactory.from(error);
+    }
+  }
+
   async clearChain(chainId: string): Promise<void> {
     const chainCacheKey = CacheRouter.getChainCacheKey(chainId);
     const chainsCacheKey = CacheRouter.getChainsCacheKey();
+    // Relay settings live in config-service too and arrive with the same CHAIN_UPDATE hook
+    const relayChainCacheKey = CacheRouter.getRelayChainCacheKey(chainId);
     if (this.areConfigHooksDebugLogsEnabled) {
       this.loggingService.info(`Clearing chain ${chainId}: ${chainCacheKey}`);
       this.loggingService.info(`Clearing chains: ${chainsCacheKey}`);
@@ -91,6 +110,7 @@ export class ConfigApi implements IConfigApi {
     await Promise.all([
       this.cacheService.deleteByKey(chainCacheKey),
       this.cacheService.deleteByKey(chainsCacheKey),
+      this.cacheService.deleteByKey(relayChainCacheKey),
     ]);
   }
 
