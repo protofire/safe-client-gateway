@@ -33,6 +33,9 @@ export class TransferDetailsMapper {
       txHash: transfer.transactionHash,
       safeAppInfo: null,
       note: null,
+      ...(transfer.hederaTransactionId
+        ? { hederaTransactionId: transfer.hederaTransactionId }
+        : {}),
     };
   }
 }
