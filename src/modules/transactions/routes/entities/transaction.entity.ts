@@ -35,6 +35,13 @@ export class Transaction extends BaseTransaction {
   safeAppInfo: SafeAppInfo | null;
   @ApiPropertyOptional({ type: String, nullable: true })
   note: string | null;
+  // Only present for synthetic Hedera-native-transfer transactions: `txHash`
+  // for those is a service-generated placeholder (no real EVM transaction
+  // exists to look up on a block explorer). Carries the real,
+  // explorer-resolvable Hedera transaction id (e.g. "0.0.X-<seconds>-<nanos>")
+  // instead. Omitted from the response for ordinary EVM transactions.
+  @ApiPropertyOptional({ type: String })
+  hederaTransactionId?: string;
 
   constructor(
     id: string,
@@ -45,6 +52,7 @@ export class Transaction extends BaseTransaction {
     safeAppInfo: SafeAppInfo | null = null,
     note: string | null = null,
     txHash: Hash | null = null,
+    hederaTransactionId: string | null = null,
   ) {
     super(txInfo);
     this.id = id;
@@ -55,5 +63,8 @@ export class Transaction extends BaseTransaction {
     this.safeAppInfo = safeAppInfo;
     this.note = note;
     this.txHash = txHash;
+    if (hederaTransactionId) {
+      this.hederaTransactionId = hederaTransactionId;
+    }
   }
 }
