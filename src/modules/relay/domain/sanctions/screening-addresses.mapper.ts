@@ -14,19 +14,24 @@ export type ScreenedAddress = {
   role: 'safe' | 'owner' | 'to' | 'recipient';
 };
 
-/** Value moved by the transaction, for the rejected-transaction report. token null = native coin. */
+/**
+ * Value moved by the transaction, for the rejected-transaction report.
+ * token null = native coin; amount in raw base units (decimals come from `token`);
+ * from null = not known up front (the Safe a creation deploys).
+ */
 export type ScreenedTransfer = {
   token: Address | null;
-  from: Address;
+  from: Address | null;
   to: Address;
   amount: string;
 };
 
-/** Who is calling (`sender`) which address (`target`) with the calldata being walked. */
+/** Who calls (`sender`) which address (`target`), how (0 CALL, 1 DELEGATECALL), with the calldata being walked. */
 type CallContext = {
   target: Address;
   sender: Address;
-  transfers: Array<ScreenedTransfer> | null;
+  operation: number;
+  transfers: Array<ScreenedTransfer>;
 };
 
 @Injectable()
@@ -41,18 +46,18 @@ export class ScreeningAddressesMapper {
     private readonly delayModifierDecoder: DelayModifierDecoder,
   ) {}
 
-  async map(
-    args: {
-      version: string;
-      chainId: string;
-      to: Address;
-      data: Hex;
-      isSafePays: boolean;
-    },
-    // Filled with the decoded value transfers when given
-    transfers: Array<ScreenedTransfer> | null = null,
-  ): Promise<Array<ScreenedAddress>> {
+  async map(args: {
+    version: string;
+    chainId: string;
+    to: Address;
+    data: Hex;
+    isSafePays: boolean;
+  }): Promise<{
+    screened: Array<ScreenedAddress>;
+    transfers: Array<ScreenedTransfer>;
+  }> {
     const screened: Array<ScreenedAddress> = [];
+    const transfers: Array<ScreenedTransfer> = [];
 
     if (this.isCreateProxy(args.data)) {
       // Safe creation: getLimitAddresses returns the owners of the Safe to be created
@@ -60,8 +65,8 @@ export class ScreeningAddressesMapper {
       owners.forEach((owner) =>
         screened.push({ address: owner, role: 'owner' }),
       );
-      this.screenCreateProxySetup(args.data, screened);
-      return screened;
+      this.screenCreateProxySetup(args.data, screened, transfers);
+      return { screened, transfers };
     }
 
     // Safe-pays must not go through daily-limit validity rules (they reject e.g. transfers to self)
@@ -84,9 +89,10 @@ export class ScreeningAddressesMapper {
     this.walk(args.data, 0, screened, {
       target: args.to,
       sender: args.to,
+      operation: 0,
       transfers,
     });
-    return screened;
+    return { screened, transfers };
   }
 
   /**
@@ -161,17 +167,20 @@ export class ScreeningAddressesMapper {
       for (const tx of this.multiSendDecoder.mapMultiSendTransactions(data)) {
         const to = getAddress(tx.to);
         screened?.push({ address: to, role: 'to' });
-        // MultiSend is delegatecalled: its sub-calls come from the Safe that called it
+        // DELEGATECALLed (the norm), sub-calls come from the Safe; CALLed, from the MultiSend contract
+        const from = ctx?.operation === 1 ? ctx.sender : ctx?.target;
         this.walk(
           tx.data,
           depth + 1,
           screened,
-          this.call(ctx, ctx?.sender, to, tx.operation, tx.value),
+          this.call(ctx, from, to, tx.operation, tx.value),
         );
       }
       return;
     }
 
+    // A token's code run by DELEGATECALL moves nothing of the token: record no transfer
+    const call = ctx?.operation === 0 ? ctx : null;
     const erc20Call = this.tryDecodeErc20(data);
     if (
       erc20Call?.functionName === 'transfer' ||
@@ -179,9 +188,9 @@ export class ScreeningAddressesMapper {
     ) {
       screened?.push({ address: erc20Call.args[0], role: 'recipient' });
       if (erc20Call.functionName === 'transfer') {
-        ctx?.transfers?.push({
-          token: ctx.target,
-          from: ctx.sender,
+        call?.transfers.push({
+          token: call.target,
+          from: call.sender,
           to: erc20Call.args[0],
           amount: erc20Call.args[1].toString(),
         });
@@ -191,8 +200,8 @@ export class ScreeningAddressesMapper {
         { address: erc20Call.args[0], role: 'recipient' },
         { address: erc20Call.args[1], role: 'recipient' },
       );
-      ctx?.transfers?.push({
-        token: ctx.target,
+      call?.transfers.push({
+        token: call.target,
         from: erc20Call.args[0],
         to: erc20Call.args[1],
         amount: erc20Call.args[2].toString(),
@@ -216,18 +225,20 @@ export class ScreeningAddressesMapper {
       return null;
     }
     if (operation === 0 && value > BigInt(0)) {
-      ctx.transfers?.push({ token: null, from, to, amount: value.toString() });
+      ctx.transfers.push({ token: null, from, to, amount: value.toString() });
     }
-    return { target: to, sender: from, transfers: ctx.transfers };
+    return { target: to, sender: from, operation, transfers: ctx.transfers };
   }
 
   /**
    * For a Safe creation relay, screens the setup() delegatecall target (`to`)
-   * and payment receiver alongside the owners already collected.
+   * and payment receiver alongside the owners already collected, and records
+   * the setup() payment the new Safe makes.
    */
   private screenCreateProxySetup(
     data: Hex,
     screened: Array<ScreenedAddress>,
+    transfers: Array<ScreenedTransfer>,
   ): void {
     const proxyCall = this.tryDecodeProxyFactory(data);
     if (proxyCall?.functionName !== 'createProxyWithNonce') {
@@ -237,7 +248,16 @@ export class ScreeningAddressesMapper {
     if (setupCall?.functionName !== 'setup') {
       return;
     }
-    const [, , to, , , , , paymentReceiver] = setupCall.args;
+    const [, , to, , , paymentToken, payment, paymentReceiver] = setupCall.args;
+    if (payment > BigInt(0)) {
+      // ponytail: from (the CREATE2 Safe address) is not predicted; compute it if reports need it. A zero receiver means tx.origin (the relayer)
+      transfers.push({
+        token: paymentToken === zeroAddress ? null : paymentToken,
+        from: null,
+        to: paymentReceiver,
+        amount: payment.toString(),
+      });
+    }
     if (to !== zeroAddress) {
       screened.push({ address: to, role: 'to' });
     }
