@@ -11,7 +11,10 @@ import { GasTokenRelayer } from '@/modules/relay/domain/relayers/gas-token.relay
 import { GasTokenFeeService } from '@/modules/relay/domain/gas-token-fee.service';
 import { RelayScreeningService } from '@/modules/relay/domain/sanctions/relay-screening.service';
 import type { Operation } from '@/modules/safe/domain/entities/operation.entity';
-import type { Address, Hex } from 'viem';
+import { keccak256, type Address, type Hex } from 'viem';
+import { LogType } from '@/domain/common/entities/log-type.entity';
+import { ILoggingService, LoggingService } from '@/logging/logging.interface';
+import { SafeDecoder } from '@/modules/contracts/domain/decoders/safe-decoder.helper';
 
 @Injectable()
 export class RelayRepository {
@@ -21,6 +24,8 @@ export class RelayRepository {
     private readonly gasTokenRelayer: GasTokenRelayer,
     private readonly feeService: GasTokenFeeService,
     private readonly relayScreeningService: RelayScreeningService,
+    @Inject(LoggingService) private readonly loggingService: ILoggingService,
+    private readonly safeDecoder: SafeDecoder,
   ) {}
 
   async relay(args: {
@@ -31,13 +36,34 @@ export class RelayRepository {
     gasLimit: bigint | null;
   }): Promise<Relay> {
     // A non-zero gasPrice means the Safe refunds the executor: no quota, stricter checks
-    const isSafePays = this.gasTokenRelayer.getSafePaysFee(args.data) !== null;
+    const safePaysFee = this.gasTokenRelayer.getSafePaysFee(args.data);
+    const isSafePays = safePaysFee !== null;
     // Every relay path passes here: OFAC screening before any relayer sees the transaction
-    await this.relayScreeningService.screen({ ...args, isSafePays });
+    const screening = await this.relayScreeningService.screen({
+      ...args,
+      isSafePays,
+    });
     const relayer = isSafePays
       ? this.gasTokenRelayer
       : this.relayManager.getRelayer(args.chainId);
-    return relayer.relay(args);
+    const relay = await relayer.relay(args);
+    // Compliance record of every relayed transaction (10-year sink routes on this type); no IPs by design
+    this.loggingService.info({
+      type: LogType.RelayRecord,
+      chainId: args.chainId,
+      taskId: relay.taskId,
+      kind: isSafePays ? 'safe-pays' : 'sponsored',
+      // ponytail: Safe known only for a direct execTransaction; batches and creations log null, use the screening event's 'safe' roles for those
+      safe: this.safeDecoder.helpers.isExecTransaction(args.data)
+        ? args.to
+        : null,
+      to: args.to,
+      dataHash: keccak256(args.data),
+      gasToken: safePaysFee?.gasToken ?? null,
+      screening,
+      at: new Date().toISOString(),
+    });
+    return relay;
   }
 
   async getRelayStatus(args: {

@@ -14,6 +14,21 @@ export type ScreenedAddress = {
   role: 'safe' | 'owner' | 'to' | 'recipient';
 };
 
+/** Value moved by the transaction, for the rejected-transaction report. token null = native coin. */
+export type ScreenedTransfer = {
+  token: Address | null;
+  from: Address;
+  to: Address;
+  amount: string;
+};
+
+/** Who is calling (`sender`) which address (`target`) with the calldata being walked. */
+type CallContext = {
+  target: Address;
+  sender: Address;
+  transfers: Array<ScreenedTransfer> | null;
+};
+
 @Injectable()
 export class ScreeningAddressesMapper {
   constructor(
@@ -26,13 +41,17 @@ export class ScreeningAddressesMapper {
     private readonly delayModifierDecoder: DelayModifierDecoder,
   ) {}
 
-  async map(args: {
-    version: string;
-    chainId: string;
-    to: Address;
-    data: Hex;
-    isSafePays: boolean;
-  }): Promise<Array<ScreenedAddress>> {
+  async map(
+    args: {
+      version: string;
+      chainId: string;
+      to: Address;
+      data: Hex;
+      isSafePays: boolean;
+    },
+    // Filled with the decoded value transfers when given
+    transfers: Array<ScreenedTransfer> | null = null,
+  ): Promise<Array<ScreenedAddress>> {
     const screened: Array<ScreenedAddress> = [];
 
     if (this.isCreateProxy(args.data)) {
@@ -61,7 +80,12 @@ export class ScreeningAddressesMapper {
       );
     }
 
-    this.walk(args.data, 0, screened);
+    // ponytail: a top-level call that is not execTransaction is attributed to `to` as sender; relays are execTransaction in practice
+    this.walk(args.data, 0, screened, {
+      target: args.to,
+      sender: args.to,
+      transfers,
+    });
     return screened;
   }
 
@@ -71,28 +95,40 @@ export class ScreeningAddressesMapper {
    * never reach a relayer, screening on or off.
    */
   assertNoNestedRefund(data: Hex): void {
-    this.walk(data, 0, null);
+    this.walk(data, 0, null, null);
   }
 
   private walk(
     data: Hex,
     depth: number,
     screened: Array<ScreenedAddress> | null,
+    ctx: CallContext | null,
   ): void {
     const safeCall = this.tryDecodeSafe(data);
     if (safeCall?.functionName === 'execTransaction') {
-      const [to, , innerData, , , , gasPrice] = safeCall.args;
+      const [to, value, innerData, operation, , , gasPrice] = safeCall.args;
       if (depth > 0 && gasPrice > BigInt(0)) {
         throw new NestedRefundError();
       }
       screened?.push({ address: to, role: 'to' });
-      this.walk(innerData, depth + 1, screened);
+      // The Safe (ctx.target) makes the inner call
+      this.walk(
+        innerData,
+        depth + 1,
+        screened,
+        this.call(ctx, ctx?.target, to, operation, value),
+      );
       return;
     }
     if (safeCall?.functionName === 'execTransactionFromModule') {
-      const [to, , innerData] = safeCall.args;
+      const [to, value, innerData, operation] = safeCall.args;
       screened?.push({ address: to, role: 'to' });
-      this.walk(innerData, depth + 1, screened);
+      this.walk(
+        innerData,
+        depth + 1,
+        screened,
+        this.call(ctx, ctx?.target, to, operation, value),
+      );
       return;
     }
     if (safeCall?.functionName === 'addOwnerWithThreshold') {
@@ -109,16 +145,29 @@ export class ScreeningAddressesMapper {
       delayCall?.functionName === 'execTransactionFromModule' ||
       delayCall?.functionName === 'executeNextTx'
     ) {
-      const [to, , innerData] = delayCall.args;
+      const [to, value, innerData, operation] = delayCall.args;
       screened?.push({ address: to, role: 'to' });
-      this.walk(innerData, depth + 1, screened);
+      // ponytail: the modifier's avatar Safe makes this call but is recorded as the modifier; resolve the avatar if reports need it
+      this.walk(
+        innerData,
+        depth + 1,
+        screened,
+        this.call(ctx, ctx?.target, to, operation, value),
+      );
       return;
     }
 
     if (this.multiSendDecoder.helpers.isMultiSend(data)) {
       for (const tx of this.multiSendDecoder.mapMultiSendTransactions(data)) {
-        screened?.push({ address: getAddress(tx.to), role: 'to' });
-        this.walk(tx.data, depth + 1, screened);
+        const to = getAddress(tx.to);
+        screened?.push({ address: to, role: 'to' });
+        // MultiSend is delegatecalled: its sub-calls come from the Safe that called it
+        this.walk(
+          tx.data,
+          depth + 1,
+          screened,
+          this.call(ctx, ctx?.sender, to, tx.operation, tx.value),
+        );
       }
       return;
     }
@@ -129,13 +178,47 @@ export class ScreeningAddressesMapper {
       erc20Call?.functionName === 'approve'
     ) {
       screened?.push({ address: erc20Call.args[0], role: 'recipient' });
+      if (erc20Call.functionName === 'transfer') {
+        ctx?.transfers?.push({
+          token: ctx.target,
+          from: ctx.sender,
+          to: erc20Call.args[0],
+          amount: erc20Call.args[1].toString(),
+        });
+      }
     } else if (erc20Call?.functionName === 'transferFrom') {
       screened?.push(
         { address: erc20Call.args[0], role: 'recipient' },
         { address: erc20Call.args[1], role: 'recipient' },
       );
+      ctx?.transfers?.push({
+        token: ctx.target,
+        from: erc20Call.args[0],
+        to: erc20Call.args[1],
+        amount: erc20Call.args[2].toString(),
+      });
     }
     // ponytail: arbitrary contract calls (swaps, bridges) are screened by `to` only; decode more targets when a real case appears
+  }
+
+  /**
+   * Records the native value of a call (a delegatecall, operation 1, moves none)
+   * and returns the context its calldata runs in.
+   */
+  private call(
+    ctx: CallContext | null,
+    from: Address | undefined,
+    to: Address,
+    operation: number,
+    value: bigint,
+  ): CallContext | null {
+    if (!ctx || !from) {
+      return null;
+    }
+    if (operation === 0 && value > BigInt(0)) {
+      ctx.transfers?.push({ token: null, from, to, amount: value.toString() });
+    }
+    return { target: to, sender: from, transfers: ctx.transfers };
   }
 
   /**

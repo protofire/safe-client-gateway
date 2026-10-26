@@ -5,12 +5,23 @@ import {
   LoggingService,
   type ILoggingService,
 } from '@/logging/logging.interface';
-import { SanctionsListService } from '@/modules/relay/domain/sanctions/sanctions-list.service';
-import { ScreeningAddressesMapper } from '@/modules/relay/domain/sanctions/screening-addresses.mapper';
+import {
+  SanctionsListService,
+  type SanctionsCheck,
+} from '@/modules/relay/domain/sanctions/sanctions-list.service';
+import {
+  ScreeningAddressesMapper,
+  type ScreenedTransfer,
+} from '@/modules/relay/domain/sanctions/screening-addresses.mapper';
 import {
   SanctionsListUnavailableError,
   SanctionsScreeningError,
 } from '@/modules/relay/domain/errors/sanctions-screening.error';
+
+/** What a relayed transaction was screened against, for its RELAY_RECORD. */
+export type ScreeningOutcome =
+  | Pick<SanctionsCheck, 'result' | 'list'>
+  | 'disabled';
 
 @Injectable()
 export class RelayScreeningService {
@@ -26,13 +37,14 @@ export class RelayScreeningService {
     to: Address;
     data: Hex;
     isSafePays: boolean;
-  }): Promise<void> {
+  }): Promise<ScreeningOutcome> {
     if (!this.sanctionsList.isEnabled()) {
       // Screening off must not skip the nested-refund guard: it runs on its own
       this.screeningAddressesMapper.assertNoNestedRefund(args.data);
-      return;
+      return 'disabled';
     }
-    const screened = await this.screeningAddressesMapper.map(args);
+    const transfers: Array<ScreenedTransfer> = [];
+    const screened = await this.screeningAddressesMapper.map(args, transfers);
     const unique = [...new Set(screened.map((s) => s.address))];
     const check = this.sanctionsList.check(unique);
     // Audit record of every check (10-year sink routes on this type); no IPs by design
@@ -50,9 +62,12 @@ export class RelayScreeningService {
 
     if (check.result === 'clear') {
       this.loggingService.info(event);
-      return;
+      return { result: check.result, list: check.list };
     }
-    this.loggingService.warn(event);
+    // A refused hit keeps what the rejected-transaction report needs; clear events stay small
+    this.loggingService.warn(
+      check.result === 'hit' ? { ...event, transfers } : event,
+    );
     throw check.result === 'hit'
       ? new SanctionsScreeningError()
       : new SanctionsListUnavailableError();
