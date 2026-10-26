@@ -110,6 +110,12 @@ export class ScreeningAddressesMapper {
     screened: Array<ScreenedAddress> | null,
     ctx: CallContext | null,
   ): void {
+    const isMultiSend = this.multiSendDecoder.helpers.isMultiSend(data);
+    // Code run by DELEGATECALL (other than MultiSend) acts as the Safe in ways we do not
+    // model: record no transfers or value for anything nested; addresses are still screened
+    if (ctx?.operation === 1 && !isMultiSend) {
+      ctx = null;
+    }
     const safeCall = this.tryDecodeSafe(data);
     if (safeCall?.functionName === 'execTransaction') {
       const [to, value, innerData, operation, , , gasPrice] = safeCall.args;
@@ -163,7 +169,7 @@ export class ScreeningAddressesMapper {
       return;
     }
 
-    if (this.multiSendDecoder.helpers.isMultiSend(data)) {
+    if (isMultiSend) {
       for (const tx of this.multiSendDecoder.mapMultiSendTransactions(data)) {
         const to = getAddress(tx.to);
         screened?.push({ address: to, role: 'to' });
@@ -179,8 +185,6 @@ export class ScreeningAddressesMapper {
       return;
     }
 
-    // A token's code run by DELEGATECALL moves nothing of the token: record no transfer
-    const call = ctx?.operation === 0 ? ctx : null;
     const erc20Call = this.tryDecodeErc20(data);
     if (
       erc20Call?.functionName === 'transfer' ||
@@ -188,9 +192,9 @@ export class ScreeningAddressesMapper {
     ) {
       screened?.push({ address: erc20Call.args[0], role: 'recipient' });
       if (erc20Call.functionName === 'transfer') {
-        call?.transfers.push({
-          token: call.target,
-          from: call.sender,
+        ctx?.transfers.push({
+          token: ctx.target,
+          from: ctx.sender,
           to: erc20Call.args[0],
           amount: erc20Call.args[1].toString(),
         });
@@ -200,8 +204,8 @@ export class ScreeningAddressesMapper {
         { address: erc20Call.args[0], role: 'recipient' },
         { address: erc20Call.args[1], role: 'recipient' },
       );
-      call?.transfers.push({
-        token: call.target,
+      ctx?.transfers.push({
+        token: ctx.target,
         from: erc20Call.args[0],
         to: erc20Call.args[1],
         amount: erc20Call.args[2].toString(),

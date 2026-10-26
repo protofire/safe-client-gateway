@@ -560,6 +560,32 @@ describe('ScreeningAddressesMapper', () => {
     expect(transfers).toEqual([]);
   });
 
+  it('records nothing nested under a DELEGATECALL into a non-MultiSend target', async () => {
+    const safe = safeBuilder().build();
+    mockSafeRepository.getSafe.mockResolvedValue(safe);
+    const nested = execTransactionEncoder()
+      .with('to', address())
+      .with('value', BigInt(7))
+      .with('operation', 0)
+      .encode();
+    const data = execTransactionEncoder()
+      .with('to', address())
+      .with('data', nested)
+      .with('operation', 1)
+      .with('gasPrice', BigInt(1))
+      .encode();
+
+    const { transfers } = await target.map({
+      version,
+      chainId,
+      to: safe.address,
+      data,
+      isSafePays: true,
+    });
+
+    expect(transfers).toEqual([]);
+  });
+
   it.each([
     ['native', zeroAddress, null],
     ['token', getAddress(faker.finance.ethereumAddress()), 'token'],

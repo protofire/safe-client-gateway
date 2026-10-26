@@ -14,7 +14,7 @@ import type { Operation } from '@/modules/safe/domain/entities/operation.entity'
 import { keccak256, type Address, type Hex } from 'viem';
 import { LogType } from '@/domain/common/entities/log-type.entity';
 import { ILoggingService, LoggingService } from '@/logging/logging.interface';
-import { asError } from '@/logging/utils';
+import { DataSourceError } from '@/domain/errors/data-source.error';
 
 @Injectable()
 export class RelayRepository {
@@ -65,14 +65,19 @@ export class RelayRepository {
     try {
       relay = await relayer.relay(args);
     } catch (error) {
-      // A timeout or unparsable response may hide an accepted relay. Refusals land here too:
-      // over-recording this minimal data is acceptable for compliance
-      this.loggingService.info({
-        ...record,
-        taskId: null,
-        outcome: 'unconfirmed',
-        error: asError(error).message,
-      });
+      // A 5xx/codeless DataSourceError (timeout, network, unparsable response) may hide an
+      // accepted relay. Refusals before submission (4xx, limits, other errors) are not
+      // relayed: no record. Never log the error text, it can carry RPC URLs with API keys
+      const errorCode =
+        error instanceof DataSourceError ? (error.code ?? 503) : null;
+      if (errorCode !== null && errorCode >= 500) {
+        this.loggingService.info({
+          ...record,
+          taskId: null,
+          outcome: 'unconfirmed',
+          errorCode,
+        });
+      }
       throw error;
     }
     this.loggingService.info({

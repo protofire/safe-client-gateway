@@ -1,5 +1,6 @@
 import { getAddress, zeroAddress } from 'viem';
 import { faker } from '@faker-js/faker';
+import { DataSourceError } from '@/domain/errors/data-source.error';
 import { execTransactionEncoder } from '@/modules/contracts/domain/__tests__/encoders/safe-encoder.builder';
 import { createProxyWithNonceEncoder } from '@/modules/relay/domain/contracts/__tests__/encoders/proxy-factory-encoder.builder';
 import { RelayRepository } from '@/modules/relay/domain/relay.repository';
@@ -299,20 +300,50 @@ describe('RelayRepository RELAY_RECORD', () => {
     );
   });
 
-  it('records an unconfirmed relay when the relayer call throws, and rethrows', async () => {
+  it.each([
+    ['without a code (timeout, network, unparsable)', undefined],
+    ['with a 5xx code', 503],
+  ])(
+    'records an unconfirmed relay for a DataSourceError %s, without its text',
+    async (_, code) => {
+      gasTokenRelayer.getSafePaysFee.mockReturnValue(null);
+      const error = new DataSourceError(
+        'request to https://mainnet.infura.io/v3/SECRET_KEY failed',
+        code,
+      );
+      sponsoredRelayer.relay.mockRejectedValueOnce(error);
+
+      await expect(relay(execTransactionEncoder().encode())).rejects.toBe(
+        error,
+      );
+
+      expect(record()).toEqual({
+        type: 'RELAY_RECORD',
+        chainId: '8453',
+        kind: 'sponsored',
+        to: safe,
+        dataHash: expect.any(String),
+        gasToken: null,
+        screening: { result: 'clear', list },
+        taskId: null,
+        outcome: 'unconfirmed',
+        errorCode: 503,
+      });
+      expect(JSON.stringify(logging.info.mock.calls)).not.toContain(
+        'SECRET_KEY',
+      );
+    },
+  );
+
+  it.each([
+    ['a plain Error', new Error('https://mainnet.infura.io/v3/SECRET_KEY')],
+    ['a 4xx DataSourceError', new DataSourceError('SECRET_KEY refused', 422)],
+  ])('records nothing for %s (refused before submission)', async (_, error) => {
     gasTokenRelayer.getSafePaysFee.mockReturnValue(null);
-    const error = new Error('timeout of 5000ms exceeded');
     sponsoredRelayer.relay.mockRejectedValueOnce(error);
 
     await expect(relay(execTransactionEncoder().encode())).rejects.toBe(error);
 
-    expect(record()).toMatchObject({
-      type: 'RELAY_RECORD',
-      taskId: null,
-      outcome: 'unconfirmed',
-      error: 'timeout of 5000ms exceeded',
-      kind: 'sponsored',
-      screening: { result: 'clear', list },
-    });
+    expect(logging.info).not.toHaveBeenCalled();
   });
 });
