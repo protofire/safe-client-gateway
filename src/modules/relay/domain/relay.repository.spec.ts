@@ -1,6 +1,7 @@
 import { getAddress, zeroAddress } from 'viem';
 import { faker } from '@faker-js/faker';
 import { DataSourceError } from '@/domain/errors/data-source.error';
+import { RelaySubmitError } from '@/modules/relay/domain/errors/relay-submit.error';
 import { execTransactionEncoder } from '@/modules/contracts/domain/__tests__/encoders/safe-encoder.builder';
 import { createProxyWithNonceEncoder } from '@/modules/relay/domain/contracts/__tests__/encoders/proxy-factory-encoder.builder';
 import { RelayRepository } from '@/modules/relay/domain/relay.repository';
@@ -304,12 +305,14 @@ describe('RelayRepository RELAY_RECORD', () => {
     ['without a code (timeout, network, unparsable)', undefined],
     ['with a 5xx code', 503],
   ])(
-    'records an unconfirmed relay for a DataSourceError %s, without its text',
+    'records an unconfirmed relay for a relay submit failure %s, without its text',
     async (_, code) => {
       gasTokenRelayer.getSafePaysFee.mockReturnValue(null);
-      const error = new DataSourceError(
-        'request to https://mainnet.infura.io/v3/SECRET_KEY failed',
-        code,
+      const error = new RelaySubmitError(
+        new DataSourceError(
+          'request to https://mainnet.infura.io/v3/SECRET_KEY failed',
+          code,
+        ),
       );
       sponsoredRelayer.relay.mockRejectedValueOnce(error);
 
@@ -337,8 +340,15 @@ describe('RelayRepository RELAY_RECORD', () => {
 
   it.each([
     ['a plain Error', new Error('https://mainnet.infura.io/v3/SECRET_KEY')],
-    ['a 4xx DataSourceError', new DataSourceError('SECRET_KEY refused', 422)],
-  ])('records nothing for %s (refused before submission)', async (_, error) => {
+    [
+      'a 4xx relay submit refusal',
+      new RelaySubmitError(new DataSourceError('SECRET_KEY refused', 422)),
+    ],
+    [
+      'a 5xx raised before submit (config-service down)',
+      new DataSourceError('SECRET_KEY down', 503),
+    ],
+  ])('records nothing for %s', async (_, error) => {
     gasTokenRelayer.getSafePaysFee.mockReturnValue(null);
     sponsoredRelayer.relay.mockRejectedValueOnce(error);
 

@@ -14,7 +14,7 @@ import type { Operation } from '@/modules/safe/domain/entities/operation.entity'
 import { keccak256, type Address, type Hex } from 'viem';
 import { LogType } from '@/domain/common/entities/log-type.entity';
 import { ILoggingService, LoggingService } from '@/logging/logging.interface';
-import { DataSourceError } from '@/domain/errors/data-source.error';
+import { RelaySubmitError } from '@/modules/relay/domain/errors/relay-submit.error';
 
 @Injectable()
 export class RelayRepository {
@@ -50,7 +50,8 @@ export class RelayRepository {
      * `type` (and SANCTIONS_SCREENING hits on `result`). No IPs or headers by design.
      * The logger nests events under its envelope: CloudWatch filters must use
      * `$.message.type` / `$.message.result`. Transfer amounts in SANCTIONS_SCREENING
-     * are raw base units; resolve decimals from `token`.
+     * are raw base units; resolve decimals from `token`. 'unconfirmed' = the relay
+     * submission itself failed with a 5xx/timeout/unparsable response, so it may have landed.
      */
     const record = {
       type: LogType.RelayRecord,
@@ -65,11 +66,11 @@ export class RelayRepository {
     try {
       relay = await relayer.relay(args);
     } catch (error) {
-      // A 5xx/codeless DataSourceError (timeout, network, unparsable response) may hide an
-      // accepted relay. Refusals before submission (4xx, limits, other errors) are not
-      // relayed: no record. Never log the error text, it can carry RPC URLs with API keys
+      // A 5xx/codeless submit failure (timeout, network, unparsable response) may hide an
+      // accepted relay. 4xx submit refusals and failures before submit are not relayed:
+      // no record. Never log the error text, it can carry RPC URLs with API keys
       const errorCode =
-        error instanceof DataSourceError ? (error.code ?? 503) : null;
+        error instanceof RelaySubmitError ? (error.code ?? 503) : null;
       if (errorCode !== null && errorCode >= 500) {
         this.loggingService.info({
           ...record,

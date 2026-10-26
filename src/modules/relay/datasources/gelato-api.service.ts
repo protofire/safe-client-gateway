@@ -7,6 +7,7 @@ import {
 import { IRelayApi } from '@/domain/interfaces/relay-api.interface';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import { HttpErrorFactory } from '@/datasources/errors/http-error-factory';
+import { RelaySubmitError } from '@/modules/relay/domain/errors/relay-submit.error';
 import {
   CacheService,
   ICacheService,
@@ -16,7 +17,10 @@ import {
   RelayStatusCode,
   type RelayStatus,
 } from '@/modules/relay/domain/entities/relay-status.entity';
-import type { Relay } from '@/modules/relay/domain/entities/relay.entity';
+import {
+  RelaySchema,
+  type Relay,
+} from '@/modules/relay/domain/entities/relay.entity';
 import { rawify, type Raw } from '@/validation/entities/raw.entity';
 import type { Address } from 'viem';
 
@@ -73,7 +77,7 @@ export class GelatoApi extends RelayCountCache implements IRelayApi {
 
     try {
       const url = `${this.baseUri}/relays/v2/sponsored-call`;
-      const { data } = await this.networkService.post<Relay>({
+      const { data } = await this.networkService.post<unknown>({
         url,
         data: {
           sponsorApiKey,
@@ -85,9 +89,10 @@ export class GelatoApi extends RelayCountCache implements IRelayApi {
           }),
         },
       });
-      return data;
+      // Parsed inside the try: an accepted relay with a malformed body is a 503 submit failure
+      return rawify(RelaySchema.parse(data));
     } catch (error) {
-      throw this.httpErrorFactory.from(error);
+      throw new RelaySubmitError(this.httpErrorFactory.from(error));
     }
   }
 
