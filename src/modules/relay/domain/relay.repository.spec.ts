@@ -1,4 +1,8 @@
-import { zeroAddress } from 'viem';
+import { getAddress, zeroAddress } from 'viem';
+import { faker } from '@faker-js/faker';
+import { SafeDecoder } from '@/modules/contracts/domain/decoders/safe-decoder.helper';
+import { execTransactionEncoder } from '@/modules/contracts/domain/__tests__/encoders/safe-encoder.builder';
+import { createProxyWithNonceEncoder } from '@/modules/relay/domain/contracts/__tests__/encoders/proxy-factory-encoder.builder';
 import { RelayRepository } from '@/modules/relay/domain/relay.repository';
 import type { IRelayManager } from '@/modules/relay/domain/interfaces/relay-manager.interface';
 import type { IRelayApi } from '@/domain/interfaces/relay-api.interface';
@@ -28,6 +32,8 @@ describe('RelayRepository gas token capability', () => {
       gasTokenRelayer,
       feeService,
       relayScreeningService as unknown as RelayScreeningService,
+      {} as ILoggingService,
+      new SafeDecoder(),
     );
 
     await expect(repository.getGasTokenConfiguration('1')).resolves.toEqual({
@@ -59,6 +65,8 @@ describe('RelayRepository gas token capability', () => {
         {} as GasTokenRelayer,
         feeService,
         { screen: jest.fn() } as unknown as RelayScreeningService,
+        {} as ILoggingService,
+        new SafeDecoder(),
       );
 
       await expect(
@@ -96,6 +104,8 @@ describe('RelayRepository gas token capability', () => {
         {} as GasTokenRelayer,
         feeService,
         { screen: jest.fn() } as unknown as RelayScreeningService,
+        {} as ILoggingService,
+        new SafeDecoder(),
       );
 
       await expect(
@@ -152,6 +162,8 @@ describe('RelayRepository fee tokens from config-service settings', () => {
       {} as GasTokenRelayer,
       feeService,
       { screen: jest.fn() } as unknown as RelayScreeningService,
+      {} as ILoggingService,
+      new SafeDecoder(),
     );
   };
 
@@ -182,5 +194,126 @@ describe('RelayRepository fee tokens from config-service settings', () => {
       })),
       refundReceiver: relayChain.refundReceiver,
     });
+  });
+});
+
+describe('RelayRepository RELAY_RECORD', () => {
+  const safe = getAddress(faker.finance.ethereumAddress());
+  const gasToken = getAddress(faker.finance.ethereumAddress());
+  const list = {
+    sourceSha256: 'a'.repeat(64),
+    sourcePublishDate: '2026-10-01',
+    checkedAt: '2026-10-26T10:00:00.000Z',
+  };
+  const logging = { info: jest.fn() };
+  const sponsoredRelayer = {
+    relay: jest.fn().mockResolvedValue({ taskId: 'r1:sponsored' }),
+  };
+  const gasTokenRelayer = {
+    getSafePaysFee: jest.fn(),
+    relay: jest.fn().mockResolvedValue({ taskId: 'r1:safe-pays' }),
+  };
+  const screen = jest.fn();
+  const repository = new RelayRepository(
+    { getRelayer: () => sponsoredRelayer } as unknown as IRelayManager,
+    {} as IRelayApi,
+    gasTokenRelayer as unknown as GasTokenRelayer,
+    {} as GasTokenFeeService,
+    { screen } as unknown as RelayScreeningService,
+    logging as unknown as ILoggingService,
+    new SafeDecoder(),
+  );
+  const relay = (data: `0x${string}`): Promise<unknown> =>
+    repository.relay({
+      version: '1.4.1',
+      chainId: '8453',
+      to: safe,
+      data,
+      gasLimit: null,
+    });
+  const record = (): Record<string, unknown> => {
+    expect(logging.info).toHaveBeenCalledTimes(1);
+    return logging.info.mock.calls[0][0];
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    screen.mockResolvedValue({ result: 'clear', list });
+  });
+
+  it('records a sponsored relay with the screening result', async () => {
+    gasTokenRelayer.getSafePaysFee.mockReturnValue(null);
+    const data = execTransactionEncoder().encode();
+
+    await relay(data);
+
+    expect(record()).toEqual({
+      type: 'RELAY_RECORD',
+      chainId: '8453',
+      taskId: 'r1:sponsored',
+      kind: 'sponsored',
+      safe,
+      to: safe,
+      dataHash: expect.stringMatching(/^0x[0-9a-f]{64}$/),
+      gasToken: null,
+      screening: { result: 'clear', list },
+      at: expect.any(String),
+    });
+  });
+
+  it('records a Safe-pays relay with its gas token', async () => {
+    gasTokenRelayer.getSafePaysFee.mockReturnValue({ gasToken });
+    const data = execTransactionEncoder().with('gasPrice', BigInt(1)).encode();
+
+    await relay(data);
+
+    expect(record()).toMatchObject({
+      type: 'RELAY_RECORD',
+      taskId: 'r1:safe-pays',
+      kind: 'safe-pays',
+      safe,
+      gasToken,
+      screening: { result: 'clear', list },
+    });
+  });
+
+  it('records screening as disabled when it is switched off', async () => {
+    gasTokenRelayer.getSafePaysFee.mockReturnValue(null);
+    screen.mockResolvedValue('disabled');
+
+    await relay(execTransactionEncoder().encode());
+
+    expect(record()).toMatchObject({ screening: 'disabled' });
+  });
+
+  it('has no Safe for a Safe creation and carries no IP or header fields', async () => {
+    gasTokenRelayer.getSafePaysFee.mockReturnValue(null);
+
+    await relay(createProxyWithNonceEncoder().encode());
+
+    expect(record()).toMatchObject({ safe: null });
+    expect(Object.keys(record()).sort()).toEqual(
+      [
+        'at',
+        'chainId',
+        'dataHash',
+        'gasToken',
+        'kind',
+        'safe',
+        'screening',
+        'taskId',
+        'to',
+        'type',
+      ].sort(),
+    );
+  });
+
+  it('records nothing when the relayer refuses', async () => {
+    gasTokenRelayer.getSafePaysFee.mockReturnValue(null);
+    sponsoredRelayer.relay.mockRejectedValueOnce(new Error('refused'));
+
+    await expect(relay(execTransactionEncoder().encode())).rejects.toThrow();
+
+    expect(logging.info).not.toHaveBeenCalled();
   });
 });

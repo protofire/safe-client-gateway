@@ -51,7 +51,7 @@ describe('RelayScreeningService', () => {
 
   it('skips everything but the nested-refund guard when screening is disabled', async () => {
     mockList.isEnabled.mockReturnValue(false);
-    await target.screen(args);
+    await expect(target.screen(args)).resolves.toBe('disabled');
     expect(mockMapper.map).not.toHaveBeenCalled();
     expect(mockMapper.assertNoNestedRefund).toHaveBeenCalledWith(args.data);
   });
@@ -68,7 +68,10 @@ describe('RelayScreeningService', () => {
 
   it('logs a clear check with list version and dataHash, and returns', async () => {
     mockList.check.mockReturnValue({ result: 'clear', matches: [], list });
-    await target.screen(args);
+    await expect(target.screen(args)).resolves.toEqual({
+      result: 'clear',
+      list,
+    });
     expect(mockList.check).toHaveBeenCalledWith([owner]);
     expect(mockLogging.info).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -78,6 +81,29 @@ describe('RelayScreeningService', () => {
         list,
       }),
     );
+    // Clear events stay their old size: transfer details are for refused hits only
+    expect(mockLogging.info.mock.calls[0][0]).not.toHaveProperty('transfers');
+  });
+
+  it('adds the decoded transfers to a hit event', async () => {
+    const transfer = {
+      token: null,
+      from: args.to,
+      to: owner,
+      amount: '7',
+    };
+    mockMapper.map.mockImplementation((_, transfers) => {
+      transfers?.push(transfer);
+      return Promise.resolve([{ address: owner, role: 'recipient' }]);
+    });
+    mockList.check.mockReturnValue({ result: 'hit', matches: [owner], list });
+    await target.screen(args).catch(() => undefined);
+    const event = mockLogging.warn.mock.calls[0][0];
+    expect(event).toMatchObject({
+      type: 'SANCTIONS_SCREENING',
+      result: 'hit',
+      transfers: [transfer],
+    });
   });
 
   it('throws 403 without details on a hit and logs a warning', async () => {

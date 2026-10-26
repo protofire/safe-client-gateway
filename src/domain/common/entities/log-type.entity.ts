@@ -28,6 +28,7 @@ export enum LogType {
   NotificationError = 'NOTIFICATION_ERROR',
   NotificationSent = 'NOTIFICATION_SENT',
   RateLimit = 'RATE_LIMIT',
+  RelayRecord = 'RELAY_RECORD',
   SanctionsListRefreshFailed = 'SANCTIONS_LIST_REFRESH_FAILED',
   SanctionsScreening = 'SANCTIONS_SCREENING',
   SanctionsScreeningDisabled = 'SANCTIONS_SCREENING_DISABLED',
