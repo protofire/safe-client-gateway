@@ -14,7 +14,7 @@ import type { Operation } from '@/modules/safe/domain/entities/operation.entity'
 import { keccak256, type Address, type Hex } from 'viem';
 import { LogType } from '@/domain/common/entities/log-type.entity';
 import { ILoggingService, LoggingService } from '@/logging/logging.interface';
-import { SafeDecoder } from '@/modules/contracts/domain/decoders/safe-decoder.helper';
+import { RelaySubmitError } from '@/modules/relay/domain/errors/relay-submit.error';
 
 @Injectable()
 export class RelayRepository {
@@ -25,7 +25,6 @@ export class RelayRepository {
     private readonly feeService: GasTokenFeeService,
     private readonly relayScreeningService: RelayScreeningService,
     @Inject(LoggingService) private readonly loggingService: ILoggingService,
-    private readonly safeDecoder: SafeDecoder,
   ) {}
 
   async relay(args: {
@@ -46,22 +45,46 @@ export class RelayRepository {
     const relayer = isSafePays
       ? this.gasTokenRelayer
       : this.relayManager.getRelayer(args.chainId);
-    const relay = await relayer.relay(args);
-    // Compliance record of every relayed transaction (10-year sink routes on this type); no IPs by design
-    this.loggingService.info({
+    /*
+     * Compliance record of every relayed transaction; the 10-year sink routes on
+     * `type` (and SANCTIONS_SCREENING hits on `result`). No IPs or headers by design.
+     * The logger nests events under its envelope: CloudWatch filters must use
+     * `$.message.type` / `$.message.result`. Transfer amounts in SANCTIONS_SCREENING
+     * are raw base units; resolve decimals from `token`. 'unconfirmed' = the relay
+     * submission itself failed with a 5xx/timeout/unparsable response, so it may have landed.
+     */
+    const record = {
       type: LogType.RelayRecord,
       chainId: args.chainId,
-      taskId: relay.taskId,
       kind: isSafePays ? 'safe-pays' : 'sponsored',
-      // ponytail: Safe known only for a direct execTransaction; batches and creations log null, use the screening event's 'safe' roles for those
-      safe: this.safeDecoder.helpers.isExecTransaction(args.data)
-        ? args.to
-        : null,
       to: args.to,
       dataHash: keccak256(args.data),
       gasToken: safePaysFee?.gasToken ?? null,
       screening,
-      at: new Date().toISOString(),
+    };
+    let relay: Relay;
+    try {
+      relay = await relayer.relay(args);
+    } catch (error) {
+      // A 5xx/codeless submit failure (timeout, network, unparsable response) may hide an
+      // accepted relay. 4xx submit refusals and failures before submit are not relayed:
+      // no record. Never log the error text, it can carry RPC URLs with API keys
+      const errorCode =
+        error instanceof RelaySubmitError ? (error.code ?? 503) : null;
+      if (errorCode !== null && errorCode >= 500) {
+        this.loggingService.info({
+          ...record,
+          taskId: null,
+          outcome: 'unconfirmed',
+          errorCode,
+        });
+      }
+      throw error;
+    }
+    this.loggingService.info({
+      ...record,
+      taskId: relay.taskId,
+      outcome: 'accepted',
     });
     return relay;
   }

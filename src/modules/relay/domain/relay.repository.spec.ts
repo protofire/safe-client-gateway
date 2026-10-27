@@ -1,6 +1,7 @@
 import { getAddress, zeroAddress } from 'viem';
 import { faker } from '@faker-js/faker';
-import { SafeDecoder } from '@/modules/contracts/domain/decoders/safe-decoder.helper';
+import { DataSourceError } from '@/domain/errors/data-source.error';
+import { RelaySubmitError } from '@/modules/relay/domain/errors/relay-submit.error';
 import { execTransactionEncoder } from '@/modules/contracts/domain/__tests__/encoders/safe-encoder.builder';
 import { createProxyWithNonceEncoder } from '@/modules/relay/domain/contracts/__tests__/encoders/proxy-factory-encoder.builder';
 import { RelayRepository } from '@/modules/relay/domain/relay.repository';
@@ -33,7 +34,6 @@ describe('RelayRepository gas token capability', () => {
       feeService,
       relayScreeningService as unknown as RelayScreeningService,
       {} as ILoggingService,
-      new SafeDecoder(),
     );
 
     await expect(repository.getGasTokenConfiguration('1')).resolves.toEqual({
@@ -66,7 +66,6 @@ describe('RelayRepository gas token capability', () => {
         feeService,
         { screen: jest.fn() } as unknown as RelayScreeningService,
         {} as ILoggingService,
-        new SafeDecoder(),
       );
 
       await expect(
@@ -105,7 +104,6 @@ describe('RelayRepository gas token capability', () => {
         feeService,
         { screen: jest.fn() } as unknown as RelayScreeningService,
         {} as ILoggingService,
-        new SafeDecoder(),
       );
 
       await expect(
@@ -163,7 +161,6 @@ describe('RelayRepository fee tokens from config-service settings', () => {
       feeService,
       { screen: jest.fn() } as unknown as RelayScreeningService,
       {} as ILoggingService,
-      new SafeDecoder(),
     );
   };
 
@@ -221,7 +218,6 @@ describe('RelayRepository RELAY_RECORD', () => {
     {} as GasTokenFeeService,
     { screen } as unknown as RelayScreeningService,
     logging as unknown as ILoggingService,
-    new SafeDecoder(),
   );
   const relay = (data: `0x${string}`): Promise<unknown> =>
     repository.relay({
@@ -251,13 +247,12 @@ describe('RelayRepository RELAY_RECORD', () => {
       type: 'RELAY_RECORD',
       chainId: '8453',
       taskId: 'r1:sponsored',
+      outcome: 'accepted',
       kind: 'sponsored',
-      safe,
       to: safe,
       dataHash: expect.stringMatching(/^0x[0-9a-f]{64}$/),
       gasToken: null,
       screening: { result: 'clear', list },
-      at: expect.any(String),
     });
   });
 
@@ -270,8 +265,8 @@ describe('RelayRepository RELAY_RECORD', () => {
     expect(record()).toMatchObject({
       type: 'RELAY_RECORD',
       taskId: 'r1:safe-pays',
+      outcome: 'accepted',
       kind: 'safe-pays',
-      safe,
       gasToken,
       screening: { result: 'clear', list },
     });
@@ -286,20 +281,18 @@ describe('RelayRepository RELAY_RECORD', () => {
     expect(record()).toMatchObject({ screening: 'disabled' });
   });
 
-  it('has no Safe for a Safe creation and carries no IP or header fields', async () => {
+  it('carries no IP or header fields', async () => {
     gasTokenRelayer.getSafePaysFee.mockReturnValue(null);
 
     await relay(createProxyWithNonceEncoder().encode());
 
-    expect(record()).toMatchObject({ safe: null });
     expect(Object.keys(record()).sort()).toEqual(
       [
-        'at',
         'chainId',
         'dataHash',
         'gasToken',
         'kind',
-        'safe',
+        'outcome',
         'screening',
         'taskId',
         'to',
@@ -308,11 +301,58 @@ describe('RelayRepository RELAY_RECORD', () => {
     );
   });
 
-  it('records nothing when the relayer refuses', async () => {
-    gasTokenRelayer.getSafePaysFee.mockReturnValue(null);
-    sponsoredRelayer.relay.mockRejectedValueOnce(new Error('refused'));
+  it.each([
+    ['without a code (timeout, network, unparsable)', undefined],
+    ['with a 5xx code', 503],
+  ])(
+    'records an unconfirmed relay for a relay submit failure %s, without its text',
+    async (_, code) => {
+      gasTokenRelayer.getSafePaysFee.mockReturnValue(null);
+      const error = new RelaySubmitError(
+        new DataSourceError(
+          'request to https://mainnet.infura.io/v3/SECRET_KEY failed',
+          code,
+        ),
+      );
+      sponsoredRelayer.relay.mockRejectedValueOnce(error);
 
-    await expect(relay(execTransactionEncoder().encode())).rejects.toThrow();
+      await expect(relay(execTransactionEncoder().encode())).rejects.toBe(
+        error,
+      );
+
+      expect(record()).toEqual({
+        type: 'RELAY_RECORD',
+        chainId: '8453',
+        kind: 'sponsored',
+        to: safe,
+        dataHash: expect.any(String),
+        gasToken: null,
+        screening: { result: 'clear', list },
+        taskId: null,
+        outcome: 'unconfirmed',
+        errorCode: 503,
+      });
+      expect(JSON.stringify(logging.info.mock.calls)).not.toContain(
+        'SECRET_KEY',
+      );
+    },
+  );
+
+  it.each([
+    ['a plain Error', new Error('https://mainnet.infura.io/v3/SECRET_KEY')],
+    [
+      'a 4xx relay submit refusal',
+      new RelaySubmitError(new DataSourceError('SECRET_KEY refused', 422)),
+    ],
+    [
+      'a 5xx raised before submit (config-service down)',
+      new DataSourceError('SECRET_KEY down', 503),
+    ],
+  ])('records nothing for %s', async (_, error) => {
+    gasTokenRelayer.getSafePaysFee.mockReturnValue(null);
+    sponsoredRelayer.relay.mockRejectedValueOnce(error);
+
+    await expect(relay(execTransactionEncoder().encode())).rejects.toBe(error);
 
     expect(logging.info).not.toHaveBeenCalled();
   });

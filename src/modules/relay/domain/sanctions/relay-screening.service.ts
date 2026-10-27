@@ -7,12 +7,9 @@ import {
 } from '@/logging/logging.interface';
 import {
   SanctionsListService,
-  type SanctionsCheck,
+  type SanctionsListVersion,
 } from '@/modules/relay/domain/sanctions/sanctions-list.service';
-import {
-  ScreeningAddressesMapper,
-  type ScreenedTransfer,
-} from '@/modules/relay/domain/sanctions/screening-addresses.mapper';
+import { ScreeningAddressesMapper } from '@/modules/relay/domain/sanctions/screening-addresses.mapper';
 import {
   SanctionsListUnavailableError,
   SanctionsScreeningError,
@@ -20,8 +17,11 @@ import {
 
 /** What a relayed transaction was screened against, for its RELAY_RECORD. */
 export type ScreeningOutcome =
-  | Pick<SanctionsCheck, 'result' | 'list'>
+  | { result: 'clear'; list: SanctionsListVersion | null }
   | 'disabled';
+
+// Keeps a hit event far below CloudWatch's 256 KB event limit; transfersTotal shows what was cut
+const MAX_LOGGED_TRANSFERS = 100;
 
 @Injectable()
 export class RelayScreeningService {
@@ -43,8 +43,8 @@ export class RelayScreeningService {
       this.screeningAddressesMapper.assertNoNestedRefund(args.data);
       return 'disabled';
     }
-    const transfers: Array<ScreenedTransfer> = [];
-    const screened = await this.screeningAddressesMapper.map(args, transfers);
+    const { screened, transfers } =
+      await this.screeningAddressesMapper.map(args);
     const unique = [...new Set(screened.map((s) => s.address))];
     const check = this.sanctionsList.check(unique);
     // Audit record of every check (10-year sink routes on this type); no IPs by design
@@ -62,11 +62,17 @@ export class RelayScreeningService {
 
     if (check.result === 'clear') {
       this.loggingService.info(event);
-      return { result: check.result, list: check.list };
+      return { result: 'clear', list: check.list };
     }
     // A refused hit keeps what the rejected-transaction report needs; clear events stay small
     this.loggingService.warn(
-      check.result === 'hit' ? { ...event, transfers } : event,
+      check.result === 'hit'
+        ? {
+            ...event,
+            transfers: transfers.slice(0, MAX_LOGGED_TRANSFERS),
+            transfersTotal: transfers.length,
+          }
+        : event,
     );
     throw check.result === 'hit'
       ? new SanctionsScreeningError()

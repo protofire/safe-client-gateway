@@ -2,13 +2,27 @@ import { faker } from '@faker-js/faker';
 import { getAddress, keccak256 } from 'viem';
 import type { ILoggingService } from '@/logging/logging.interface';
 import type { SanctionsListService } from '@/modules/relay/domain/sanctions/sanctions-list.service';
-import type { ScreeningAddressesMapper } from '@/modules/relay/domain/sanctions/screening-addresses.mapper';
+import { ScreeningAddressesMapper } from '@/modules/relay/domain/sanctions/screening-addresses.mapper';
 import { RelayScreeningService } from '@/modules/relay/domain/sanctions/relay-screening.service';
 import {
   SanctionsListUnavailableError,
   SanctionsScreeningError,
 } from '@/modules/relay/domain/errors/sanctions-screening.error';
 import { NestedRefundError } from '@/modules/relay/domain/errors/nested-refund.error';
+import type { LimitAddressesMapper } from '@/modules/relay/domain/limit-addresses.mapper';
+import type { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
+import { safeBuilder } from '@/modules/safe/domain/entities/__tests__/safe.builder';
+import { SafeDecoder } from '@/modules/contracts/domain/decoders/safe-decoder.helper';
+import { MultiSendDecoder } from '@/modules/contracts/domain/decoders/multi-send-decoder.helper';
+import { Erc20Decoder } from '@/modules/relay/domain/contracts/decoders/erc-20-decoder.helper';
+import { ProxyFactoryDecoder } from '@/modules/relay/domain/contracts/decoders/proxy-factory-decoder.helper';
+import { DelayModifierDecoder } from '@/modules/alerts/domain/contracts/decoders/delay-modifier-decoder.helper';
+import { execTransactionEncoder } from '@/modules/contracts/domain/__tests__/encoders/safe-encoder.builder';
+import { erc20TransferEncoder } from '@/modules/relay/domain/contracts/__tests__/encoders/erc20-encoder.builder';
+import {
+  multiSendEncoder,
+  multiSendTransactionsEncoder,
+} from '@/modules/contracts/domain/__tests__/encoders/multi-send-encoder.builder';
 
 const mockList = jest.mocked({
   isEnabled: jest.fn(),
@@ -42,10 +56,13 @@ describe('RelayScreeningService', () => {
   beforeEach(() => {
     jest.resetAllMocks();
     mockList.isEnabled.mockReturnValue(true);
-    mockMapper.map.mockResolvedValue([
-      { address: owner, role: 'owner' },
-      { address: owner, role: 'recipient' },
-    ]);
+    mockMapper.map.mockResolvedValue({
+      screened: [
+        { address: owner, role: 'owner' },
+        { address: owner, role: 'recipient' },
+      ],
+      transfers: [],
+    });
     target = new RelayScreeningService(mockList, mockMapper, mockLogging);
   });
 
@@ -85,36 +102,102 @@ describe('RelayScreeningService', () => {
     expect(mockLogging.info.mock.calls[0][0]).not.toHaveProperty('transfers');
   });
 
-  it('adds the decoded transfers to a hit event', async () => {
-    const transfer = {
-      token: null,
-      from: args.to,
-      to: owner,
-      amount: '7',
-    };
-    mockMapper.map.mockImplementation((_, transfers) => {
-      transfers?.push(transfer);
-      return Promise.resolve([{ address: owner, role: 'recipient' }]);
-    });
-    mockList.check.mockReturnValue({ result: 'hit', matches: [owner], list });
-    await target.screen(args).catch(() => undefined);
-    const event = mockLogging.warn.mock.calls[0][0];
-    expect(event).toMatchObject({
-      type: 'SANCTIONS_SCREENING',
-      result: 'hit',
-      transfers: [transfer],
-    });
-  });
+  describe('with the real mapper', () => {
+    const safe = safeBuilder().build();
+    const realTarget = (): RelayScreeningService =>
+      new RelayScreeningService(
+        mockList,
+        new ScreeningAddressesMapper(
+          {} as LimitAddressesMapper,
+          {
+            getSafe: jest.fn().mockResolvedValue(safe),
+          } as unknown as ISafeRepository,
+          new SafeDecoder(),
+          new Erc20Decoder(),
+          new MultiSendDecoder(mockLogging),
+          new ProxyFactoryDecoder(),
+          new DelayModifierDecoder(),
+        ),
+        mockLogging,
+      );
+    const execBatch = (
+      transactions: Parameters<typeof multiSendTransactionsEncoder>[0],
+    ): typeof args =>
+      ({
+        ...args,
+        to: safe.address,
+        data: execTransactionEncoder()
+          .with('to', getAddress(faker.finance.ethereumAddress()))
+          .with(
+            'data',
+            multiSendEncoder()
+              .with('transactions', multiSendTransactionsEncoder(transactions))
+              .encode(),
+          )
+          .with('operation', 1)
+          .with('gasPrice', BigInt(1))
+          .encode(),
+      }) as typeof args;
 
-  it('throws 403 without details on a hit and logs a warning', async () => {
-    mockList.check.mockReturnValue({ result: 'hit', matches: [owner], list });
-    const error = await target.screen(args).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(SanctionsScreeningError);
-    expect((error as SanctionsScreeningError).getStatus()).toBe(403);
-    expect((error as Error).message).not.toContain(owner);
-    expect(mockLogging.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ result: 'hit', matches: [owner] }),
-    );
+    it('adds native and ERC-20 transfers of a MultiSend to a hit event', async () => {
+      const [payee, token] = [
+        getAddress(faker.finance.ethereumAddress()),
+        getAddress(faker.finance.ethereumAddress()),
+      ];
+      mockList.check.mockReturnValue({ result: 'hit', matches: [owner], list });
+
+      await expect(
+        realTarget().screen(
+          execBatch([
+            { operation: 0, to: payee, value: BigInt(7), data: '0x' },
+            {
+              operation: 0,
+              to: token,
+              value: BigInt(0),
+              data: erc20TransferEncoder()
+                .with('to', owner)
+                .with('value', BigInt(100))
+                .encode(),
+            },
+          ]),
+        ),
+      ).rejects.toBeInstanceOf(SanctionsScreeningError);
+
+      expect(mockLogging.warn.mock.calls[0][0]).toMatchObject({
+        type: 'SANCTIONS_SCREENING',
+        result: 'hit',
+        transfers: [
+          { token: null, from: safe.address, to: payee, amount: '7' },
+          { token, from: safe.address, to: owner, amount: '100' },
+        ],
+        transfersTotal: 2,
+      });
+    });
+
+    it('caps the logged transfers at 100 and reports the total', async () => {
+      mockList.check.mockReturnValue({ result: 'hit', matches: [owner], list });
+      const payee = getAddress(faker.finance.ethereumAddress());
+
+      await realTarget()
+        .screen(
+          execBatch(
+            Array.from({ length: 150 }, () => ({
+              operation: 0,
+              to: payee,
+              value: BigInt(1),
+              data: '0x' as const,
+            })),
+          ),
+        )
+        .catch(() => undefined);
+
+      const event = mockLogging.warn.mock.calls[0][0] as {
+        transfers: Array<unknown>;
+        transfersTotal: number;
+      };
+      expect(event.transfers).toHaveLength(100);
+      expect(event.transfersTotal).toBe(150);
+    });
   });
 
   it('throws 503 when the list is unavailable', async () => {
