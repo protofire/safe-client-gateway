@@ -11,7 +11,10 @@ import { GasTokenRelayer } from '@/modules/relay/domain/relayers/gas-token.relay
 import { GasTokenFeeService } from '@/modules/relay/domain/gas-token-fee.service';
 import { RelayScreeningService } from '@/modules/relay/domain/sanctions/relay-screening.service';
 import type { Operation } from '@/modules/safe/domain/entities/operation.entity';
-import type { Address, Hex } from 'viem';
+import { keccak256, type Address, type Hex } from 'viem';
+import { LogType } from '@/domain/common/entities/log-type.entity';
+import { ILoggingService, LoggingService } from '@/logging/logging.interface';
+import { RelaySubmitError } from '@/modules/relay/domain/errors/relay-submit.error';
 
 @Injectable()
 export class RelayRepository {
@@ -21,6 +24,7 @@ export class RelayRepository {
     private readonly gasTokenRelayer: GasTokenRelayer,
     private readonly feeService: GasTokenFeeService,
     private readonly relayScreeningService: RelayScreeningService,
+    @Inject(LoggingService) private readonly loggingService: ILoggingService,
   ) {}
 
   async relay(args: {
@@ -31,13 +35,58 @@ export class RelayRepository {
     gasLimit: bigint | null;
   }): Promise<Relay> {
     // A non-zero gasPrice means the Safe refunds the executor: no quota, stricter checks
-    const isSafePays = this.gasTokenRelayer.getSafePaysFee(args.data) !== null;
+    const safePaysFee = this.gasTokenRelayer.getSafePaysFee(args.data);
+    const isSafePays = safePaysFee !== null;
     // Every relay path passes here: OFAC screening before any relayer sees the transaction
-    await this.relayScreeningService.screen({ ...args, isSafePays });
+    const screening = await this.relayScreeningService.screen({
+      ...args,
+      isSafePays,
+    });
     const relayer = isSafePays
       ? this.gasTokenRelayer
       : this.relayManager.getRelayer(args.chainId);
-    return relayer.relay(args);
+    /*
+     * Compliance record of every relayed transaction; the 10-year sink routes on
+     * `type` (and SANCTIONS_SCREENING hits on `result`). No IPs or headers by design.
+     * The logger nests events under its envelope: CloudWatch filters must use
+     * `$.message.type` / `$.message.result`. Transfer amounts in SANCTIONS_SCREENING
+     * are raw base units; resolve decimals from `token`. 'unconfirmed' = the relay
+     * submission itself failed with a 5xx/timeout/unparsable response, so it may have landed.
+     */
+    const record = {
+      type: LogType.RelayRecord,
+      chainId: args.chainId,
+      kind: isSafePays ? 'safe-pays' : 'sponsored',
+      to: args.to,
+      dataHash: keccak256(args.data),
+      gasToken: safePaysFee?.gasToken ?? null,
+      screening,
+    };
+    let relay: Relay;
+    try {
+      relay = await relayer.relay(args);
+    } catch (error) {
+      // A 5xx/codeless submit failure (timeout, network, unparsable response) may hide an
+      // accepted relay. 4xx submit refusals and failures before submit are not relayed:
+      // no record. Never log the error text, it can carry RPC URLs with API keys
+      const errorCode =
+        error instanceof RelaySubmitError ? (error.code ?? 503) : null;
+      if (errorCode !== null && errorCode >= 500) {
+        this.loggingService.info({
+          ...record,
+          taskId: null,
+          outcome: 'unconfirmed',
+          errorCode,
+        });
+      }
+      throw error;
+    }
+    this.loggingService.info({
+      ...record,
+      taskId: relay.taskId,
+      outcome: 'accepted',
+    });
+    return relay;
   }
 
   async getRelayStatus(args: {

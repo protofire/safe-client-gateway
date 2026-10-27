@@ -7,6 +7,7 @@ import { getAddress } from 'viem';
 import { HttpErrorFactory } from '@/datasources/errors/http-error-factory';
 import { NetworkResponseError } from '@/datasources/network/entities/network.error.entity';
 import { DataSourceError } from '@/domain/errors/data-source.error';
+import { RelaySubmitError } from '@/modules/relay/domain/errors/relay-submit.error';
 import { FakeCacheService } from '@/datasources/cache/__tests__/fake.cache.service';
 import { CacheDir } from '@/datasources/cache/entities/cache-dir.entity';
 import { rawify } from '@/validation/entities/raw.entity';
@@ -138,6 +139,30 @@ describe('GelatoApi', () => {
           gasLimit: null,
         }),
       ).rejects.toThrow();
+    });
+
+    it('should throw a 503 relay submit failure for a 200 with a malformed body', async () => {
+      const chainId = faker.string.numeric();
+      fakeConfigurationService.set(
+        `relay.apiKey.${chainId}`,
+        faker.string.sample(),
+      );
+      mockNetworkService.post.mockResolvedValueOnce({
+        status: 200,
+        data: rawify({ unexpected: true }),
+      });
+
+      const thrown = await target
+        .relay({
+          chainId,
+          to: getAddress(faker.finance.ethereumAddress()),
+          data: faker.string.hexadecimal() as Hex,
+          gasLimit: null,
+        })
+        .catch((e: unknown) => e);
+
+      expect(thrown).toBeInstanceOf(RelaySubmitError);
+      expect(thrown).toMatchObject({ code: 503 });
     });
 
     it('should forward error', async () => {

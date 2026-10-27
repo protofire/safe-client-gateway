@@ -73,7 +73,7 @@ describe('ScreeningAddressesMapper', () => {
       .with('gasPrice', BigInt(1))
       .encode();
 
-    const result = await target.map({
+    const { screened: result } = await target.map({
       version,
       chainId,
       to: safe.address,
@@ -105,7 +105,7 @@ describe('ScreeningAddressesMapper', () => {
       .with('refundReceiver', address())
       .encode();
 
-    const result = await target.map({
+    const { screened: result } = await target.map({
       version,
       chainId,
       to: safe.address,
@@ -133,7 +133,7 @@ describe('ScreeningAddressesMapper', () => {
       .with('data', '0x')
       .encode();
 
-    const result = await target.map({
+    const { screened: result } = await target.map({
       version,
       chainId,
       to: safe.address,
@@ -185,7 +185,7 @@ describe('ScreeningAddressesMapper', () => {
       .with('operation', 1)
       .encode();
 
-    const result = await target.map({
+    const { screened: result } = await target.map({
       version,
       chainId,
       to: address(),
@@ -255,7 +255,7 @@ describe('ScreeningAddressesMapper', () => {
       .with('gasPrice', BigInt(1))
       .encode();
 
-    const result = await target.map({
+    const { screened: result } = await target.map({
       version,
       chainId,
       to: safe.address,
@@ -310,7 +310,7 @@ describe('ScreeningAddressesMapper', () => {
       )
       .encode();
 
-    const result = await target.map({
+    const { screened: result } = await target.map({
       version,
       chainId,
       to: address(),
@@ -341,7 +341,7 @@ describe('ScreeningAddressesMapper', () => {
       )
       .encode();
 
-    const result = await target.map({
+    const { screened: result } = await target.map({
       version,
       chainId,
       to: address(),
@@ -385,7 +385,7 @@ describe('ScreeningAddressesMapper', () => {
       .with('gasPrice', BigInt(0))
       .encode();
 
-    const result = await target.map({
+    const { screened: result } = await target.map({
       version,
       chainId,
       to: safe.address,
@@ -400,6 +400,229 @@ describe('ScreeningAddressesMapper', () => {
       ]),
     );
   });
+
+  it('collects native value and ERC-20 transfer amounts of a direct execTransaction', async () => {
+    const safe = safeBuilder().build();
+    mockSafeRepository.getSafe.mockResolvedValue(safe);
+    const [token, recipient] = [address(), address()];
+    const data = execTransactionEncoder()
+      .with('to', token)
+      .with('value', BigInt(3))
+      .with(
+        'data',
+        erc20TransferEncoder()
+          .with('to', recipient)
+          .with('value', BigInt(100))
+          .encode(),
+      )
+      .with('gasPrice', BigInt(1))
+      .encode();
+    const { transfers } = await target.map({
+      version,
+      chainId,
+      to: safe.address,
+      data,
+      isSafePays: true,
+    });
+
+    expect(transfers).toEqual([
+      { token: null, from: safe.address, to: token, amount: '3' },
+      { token, from: safe.address, to: recipient, amount: '100' },
+    ]);
+  });
+
+  it('collects MultiSend sub-call transfers, not the delegatecall to MultiSend', async () => {
+    const safe = safeBuilder().build();
+    mockSafeRepository.getSafe.mockResolvedValue(safe);
+    const [payee, tokenA, recipientA, tokenB, holder, recipientB] = [
+      address(),
+      address(),
+      address(),
+      address(),
+      address(),
+      address(),
+    ];
+    const batch = multiSendEncoder()
+      .with(
+        'transactions',
+        multiSendTransactionsEncoder([
+          { operation: 0, to: payee, value: BigInt(7), data: '0x' },
+          {
+            operation: 0,
+            to: tokenA,
+            value: BigInt(0),
+            data: erc20TransferEncoder()
+              .with('to', recipientA)
+              .with('value', BigInt(100))
+              .encode(),
+          },
+          {
+            operation: 0,
+            to: tokenB,
+            value: BigInt(0),
+            data: erc20TransferFromEncoder()
+              .with('sender', holder)
+              .with('recipient', recipientB)
+              .with('amount', BigInt(50))
+              .encode(),
+          },
+        ]),
+      )
+      .encode();
+    const data = execTransactionEncoder()
+      .with('to', address())
+      .with('value', BigInt(9)) // delegatecall: moves no value
+      .with('data', batch)
+      .with('operation', 1)
+      .with('gasPrice', BigInt(1))
+      .encode();
+    const { transfers } = await target.map({
+      version,
+      chainId,
+      to: safe.address,
+      data,
+      isSafePays: true,
+    });
+
+    expect(transfers).toEqual([
+      { token: null, from: safe.address, to: payee, amount: '7' },
+      { token: tokenA, from: safe.address, to: recipientA, amount: '100' },
+      { token: tokenB, from: holder, to: recipientB, amount: '50' },
+    ]);
+  });
+
+  it('collects MultiSend sub-calls as from the MultiSend contract when it is CALLed', async () => {
+    const safe = safeBuilder().build();
+    mockSafeRepository.getSafe.mockResolvedValue(safe);
+    const [multiSend, payee, token, recipient] = [
+      address(),
+      address(),
+      address(),
+      address(),
+    ];
+    const batch = multiSendEncoder()
+      .with(
+        'transactions',
+        multiSendTransactionsEncoder([
+          { operation: 0, to: payee, value: BigInt(7), data: '0x' },
+          {
+            operation: 0,
+            to: token,
+            value: BigInt(0),
+            data: erc20TransferEncoder()
+              .with('to', recipient)
+              .with('value', BigInt(100))
+              .encode(),
+          },
+        ]),
+      )
+      .encode();
+    const data = execTransactionEncoder()
+      .with('to', multiSend)
+      .with('data', batch)
+      .with('operation', 0)
+      .with('gasPrice', BigInt(1))
+      .encode();
+
+    const { transfers } = await target.map({
+      version,
+      chainId,
+      to: safe.address,
+      data,
+      isSafePays: true,
+    });
+
+    expect(transfers).toEqual([
+      { token: null, from: multiSend, to: payee, amount: '7' },
+      { token, from: multiSend, to: recipient, amount: '100' },
+    ]);
+  });
+
+  it('records no transfer for a DELEGATECALL into anything but MultiSend', async () => {
+    const safe = safeBuilder().build();
+    mockSafeRepository.getSafe.mockResolvedValue(safe);
+    const data = execTransactionEncoder()
+      .with('to', address())
+      .with('value', BigInt(9))
+      .with('data', erc20TransferEncoder().with('value', BigInt(100)).encode())
+      .with('operation', 1)
+      .with('gasPrice', BigInt(1))
+      .encode();
+
+    const { transfers } = await target.map({
+      version,
+      chainId,
+      to: safe.address,
+      data,
+      isSafePays: true,
+    });
+
+    expect(transfers).toEqual([]);
+  });
+
+  it('records nothing nested under a DELEGATECALL into a non-MultiSend target', async () => {
+    const safe = safeBuilder().build();
+    mockSafeRepository.getSafe.mockResolvedValue(safe);
+    const nested = execTransactionEncoder()
+      .with('to', address())
+      .with('value', BigInt(7))
+      .with('operation', 0)
+      .encode();
+    const data = execTransactionEncoder()
+      .with('to', address())
+      .with('data', nested)
+      .with('operation', 1)
+      .with('gasPrice', BigInt(1))
+      .encode();
+
+    const { transfers } = await target.map({
+      version,
+      chainId,
+      to: safe.address,
+      data,
+      isSafePays: true,
+    });
+
+    expect(transfers).toEqual([]);
+  });
+
+  it.each([
+    ['native', zeroAddress, null],
+    ['token', getAddress(faker.finance.ethereumAddress()), 'token'],
+  ])(
+    'records the setup() payment of a Safe creation (%s)',
+    async (_, paymentToken, expectedToken) => {
+      const paymentReceiver = address();
+      mockLimitAddressesMapper.getLimitAddresses.mockResolvedValue([address()]);
+      const data = createProxyWithNonceEncoder()
+        .with(
+          'initializer',
+          setupEncoder()
+            .with('paymentToken', paymentToken)
+            .with('payment', BigInt(5))
+            .with('paymentReceiver', paymentReceiver)
+            .encode(),
+        )
+        .encode();
+
+      const { transfers } = await target.map({
+        version,
+        chainId,
+        to: address(),
+        data,
+        isSafePays: false,
+      });
+
+      expect(transfers).toEqual([
+        {
+          token: expectedToken && paymentToken,
+          from: null,
+          to: paymentReceiver,
+          amount: '5',
+        },
+      ]);
+    },
+  );
 
   it('runs the nested-refund guard on its own via assertNoNestedRefund', () => {
     const nested = execTransactionEncoder()
