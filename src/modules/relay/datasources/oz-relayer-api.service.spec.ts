@@ -8,6 +8,7 @@ import { NetworkResponseError } from '@/datasources/network/entities/network.err
 import type { INetworkService } from '@/datasources/network/network.service.interface';
 import type { IBlockchainApiManager } from '@/domain/interfaces/blockchain-api.manager.interface';
 import { DataSourceError } from '@/domain/errors/data-source.error';
+import { RelaySubmitError } from '@/modules/relay/domain/errors/relay-submit.error';
 import { OzRelayerApi } from '@/modules/relay/datasources/oz-relayer-api.service';
 import { RelayStatusCode } from '@/modules/relay/domain/entities/relay-status.entity';
 import { rawify } from '@/validation/entities/raw.entity';
@@ -169,6 +170,54 @@ describe('OzRelayerApi', () => {
           gasLimit: null,
         }),
       ).rejects.toThrow('Insufficient balance');
+    });
+
+    it.each([
+      ['a timeout', new Error('timeout of 5000ms exceeded'), 503],
+      [
+        'a 422',
+        new NetworkResponseError(
+          new URL('https://relayer.example/transactions'),
+          { status: 422 } as Response,
+          { message: 'invalid' },
+        ),
+        422,
+      ],
+    ])(
+      'marks a failed transaction POST (%s) as a relay submit failure',
+      async (_, error, code) => {
+        mockNetworkService.post.mockRejectedValueOnce(error);
+
+        const thrown = await target
+          .relay({
+            chainId,
+            to: getAddress(faker.finance.ethereumAddress()),
+            data: faker.string.hexadecimal() as Hex,
+            gasLimit: null,
+          })
+          .catch((e: unknown) => e);
+
+        expect(thrown).toBeInstanceOf(RelaySubmitError);
+        expect(thrown).toMatchObject({ code });
+      },
+    );
+
+    it('does not mark a relay settings failure before submit as a submit failure', async () => {
+      mockChainsRepository.getRelayChain.mockRejectedValueOnce(
+        new DataSourceError('config-service down', 503),
+      );
+
+      const thrown = await target
+        .relay({
+          chainId,
+          to: getAddress(faker.finance.ethereumAddress()),
+          data: faker.string.hexadecimal() as Hex,
+          gasLimit: null,
+        })
+        .catch((e: unknown) => e);
+
+      expect(thrown).not.toBeInstanceOf(RelaySubmitError);
+      expect(mockNetworkService.post).not.toHaveBeenCalled();
     });
 
     it('should forward network errors', async () => {

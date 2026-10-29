@@ -11,6 +11,7 @@ import {
 import { IRelayApi } from '@/domain/interfaces/relay-api.interface';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import { HttpErrorFactory } from '@/datasources/errors/http-error-factory';
+import { RelaySubmitError } from '@/modules/relay/domain/errors/relay-submit.error';
 import {
   CacheService,
   ICacheService,
@@ -154,7 +155,7 @@ export class OzRelayerApi extends RelayCountCache implements IRelayApi {
       })
       .then(({ data }) => OzTransactionResponseSchema.parse(data))
       .catch((error) => {
-        throw this.httpErrorFactory.from(error);
+        throw new RelaySubmitError(this.httpErrorFactory.from(error));
       });
     if (!response.success || !response.data) {
       throw new UnprocessableEntityException(
