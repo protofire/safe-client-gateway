@@ -85,4 +85,16 @@ describe('McpAppModule', () => {
       .expect(503)
       .expect({ status: 'KO' });
   });
+
+  it('is not ready when the cache ping never settles', async () => {
+    jest.spyOn(console, 'error').mockImplementation();
+    jest
+      .spyOn(app.get<FakeCacheService>(CacheService), 'ping')
+      .mockReturnValue(new Promise(() => {}));
+
+    await request(app.getHttpServer())
+      .get('/health/ready')
+      .expect(503)
+      .expect({ status: 'KO' });
+  });
 });
