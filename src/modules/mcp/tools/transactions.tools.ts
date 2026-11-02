@@ -1,5 +1,6 @@
 import { HttpException } from '@nestjs/common';
 import { z } from 'zod';
+import type { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
 import type { IDataDecoderRepository } from '@/modules/data-decoder/domain/v2/data-decoder.repository.interface';
 import {
   defineTool,
@@ -107,6 +108,7 @@ export function transactionsTools(
     'getTransactionQueue' | 'getTransactionHistory' | 'getById'
   >,
   dataDecoderRepository: Pick<IDataDecoderRepository, 'getDecodedData'>,
+  chainsRepository: Pick<IChainsRepository, 'getChain'>,
 ): Array<McpTool> {
   return [
     defineTool({
@@ -206,6 +208,8 @@ export function transactionsTools(
       annotations: READ_ONLY_ANNOTATIONS,
       useful: true,
       handler: async ({ chainId, to, data }) => {
+        // The decoder does not resolve the chain; an unknown one is NOT_FOUND
+        await chainsRepository.getChain(chainId);
         const { method, parameters, accuracy } =
           await dataDecoderRepository.getDecodedData({
             chainId,

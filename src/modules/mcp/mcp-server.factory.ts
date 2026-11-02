@@ -1,9 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import {
-  CLIENT_INFO_META_KEY,
-  McpServer,
-  PROTOCOL_VERSION_META_KEY,
-} from '@modelcontextprotocol/server';
+import { CLIENT_INFO_META_KEY, McpServer } from '@modelcontextprotocol/server';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
 import { BalancesService } from '@/modules/balances/routes/balances.service';
@@ -47,7 +43,11 @@ export class McpServerFactory {
       ...ownersTools(safeRepository, fanoutLimit),
       ...safeTools(safeRepository),
       ...balancesTools(balancesService),
-      ...transactionsTools(transactionsService, dataDecoderRepository),
+      ...transactionsTools(
+        transactionsService,
+        dataDecoderRepository,
+        chainsRepository,
+      ),
       ...proposersTools(delegatesRepository),
     ];
   }
@@ -67,23 +67,13 @@ export class McpServerFactory {
           annotations: tool.annotations,
         },
         (args: unknown, ctx) => {
-          // 2026-07-28 requests carry the envelope; 2025 ones the initialize
+          // Only 2026-07-28 requests name their client; 2025 ones are stateless
           const envelope = (ctx.mcpReq.envelope ?? {}) as Record<
             string,
-            unknown
+            { name?: string } | undefined
           >;
-          // The accessors are deprecated for 2026 requests only; 2025 has no other source
-          /* eslint-disable @typescript-eslint/no-deprecated */
-          const clientInfo = (envelope[CLIENT_INFO_META_KEY] ??
-            server.server.getClientVersion()) as { name?: string } | undefined;
-          return tool.call(args, this.events, {
-            clientName: clientInfo?.name,
-            protocolVersion: (envelope[PROTOCOL_VERSION_META_KEY] ??
-              server.server.getNegotiatedProtocolVersion()) as
-              | string
-              | undefined,
-          });
-          /* eslint-enable @typescript-eslint/no-deprecated */
+          const clientInfo = envelope[CLIENT_INFO_META_KEY];
+          return tool.call(args, this.events, { clientName: clientInfo?.name });
         },
       );
     }

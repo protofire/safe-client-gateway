@@ -15,8 +15,17 @@ import {
 } from '@/modules/mcp/usage/mcp-usage.store';
 
 export const MCP_USER_AGENT_KEY = 'mcp.userAgent';
+export const MCP_PROTOCOL_VERSION_KEY = 'mcp.protocolVersion';
 export const MAX_USER_AGENT_LENGTH = 200;
 const WRITE_TIMEOUT_MS = 2000;
+const CANONICAL_CHAIN_ID = /^[1-9]\d*$/;
+
+function chainOf(chainId: string | null): string {
+  if (chainId === null) {
+    return 'none';
+  }
+  return CANONICAL_CHAIN_ID.test(chainId) ? chainId : 'unknown';
+}
 
 function withTimeout<T>(work: Promise<T>): Promise<T> {
   let timer: NodeJS.Timeout;
@@ -24,6 +33,7 @@ function withTimeout<T>(work: Promise<T>): Promise<T> {
     timer = setTimeout((): void => {
       reject(new Error('usage write timed out'));
     }, WRITE_TIMEOUT_MS);
+    timer.unref();
   });
   return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
 }
@@ -51,9 +61,9 @@ export class McpUsageService {
     });
     const ip = this.cls.get<string | undefined>(MCP_IP_KEY);
     const userAgent = this.cls.get<string | undefined>(MCP_USER_AGENT_KEY);
-    // Unresolved chains would otherwise let a client mint unbounded fields
-    const chainId =
-      call.outcome === 'ok' ? (call.chainId ?? 'none') : 'unknown';
+    // `ok` does not prove the chain resolved ("01" is chain 1), and the id is
+    // client input: only canonical ids may become part of a field
+    const chainId = call.outcome === 'ok' ? chainOf(call.chainId) : 'unknown';
 
     this.loggingService.info({
       type: LogType.McpToolCall,
@@ -62,19 +72,23 @@ export class McpUsageService {
       outcome: call.outcome,
       latencyMs: Math.round(call.latencyMs),
       resultCount: call.resultCount,
-      protocolVersion: call.protocolVersion,
+      protocolVersion: this.cls.get<string | undefined>(
+        MCP_PROTOCOL_VERSION_KEY,
+      ),
       clientLabel: label,
     });
 
     const date = new Date().toISOString().slice(0, 10);
     const field = [call.tool, chainId, label, call.outcome].join('|');
+    const countsClient = call.useful && call.outcome === 'ok';
     // Fire and forget: Redis may be down and hang commands
-    void withTimeout(this.write(date, field, call.useful, ip, userAgent)).catch(
-      (error: unknown) =>
-        this.loggingService.warn({
-          message: 'MCP usage write failed',
-          error: error instanceof Error ? error.message : typeof error,
-        }),
+    void withTimeout(
+      this.write(date, field, countsClient, ip, userAgent),
+    ).catch((error: unknown) =>
+      this.loggingService.warn({
+        message: 'MCP usage write failed',
+        error: error instanceof Error ? error.message : typeof error,
+      }),
     );
   }
 

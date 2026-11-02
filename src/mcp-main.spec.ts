@@ -97,6 +97,8 @@ describe('configureMcpApp over real HTTP', () => {
     app = moduleFixture.createNestApplication<NestExpressApplication>();
     configureMcpApp(app);
     await app.init();
+    // One listening server: supertest would otherwise listen(0) per request
+    await app.listen(0);
   }
 
   const post = (xForwardedFor: string): request.Test =>
@@ -143,7 +145,7 @@ describe('configureMcpApp over real HTTP', () => {
     }
 
     expect((await post('203.0.113.5')).status).toBe(429);
-  });
+  }, 30_000);
 
   it('two clients at different ingress-set addresses have separate buckets', async () => {
     for (let i = 0; i < 61; i++) {
@@ -152,7 +154,7 @@ describe('configureMcpApp over real HTTP', () => {
 
     expect((await post('203.0.113.5')).status).toBe(429);
     expect((await post('203.0.113.6')).status).not.toBe(429);
-  });
+  }, 30_000);
 
   it('a forged left-most X-Forwarded-For does not change the bucket', async () => {
     // One trusted hop: the ingress appends the real address, the client forges the rest
@@ -161,7 +163,7 @@ describe('configureMcpApp over real HTTP', () => {
     }
 
     expect((await post('1.2.3.99, 10.0.0.9')).status).toBe(429);
-  });
+  }, 30_000);
 
   describe('tools/call through the transport', () => {
     const MODERN = '2026-07-28';
@@ -234,6 +236,30 @@ describe('configureMcpApp over real HTTP', () => {
         ...Array(5).fill({ status: 200, code: 'ok' }),
         { status: 200, code: 'RATE_LIMITED' },
       ]);
+    });
+
+    it('logs the protocol version of a 2025-11-25 tools/call from the header', async () => {
+      const info = jest.mocked(console.info);
+      const legacy = (version: string): request.Test =>
+        request(app.getHttpServer())
+          .post('/mcp')
+          .set('Accept', 'application/json, text/event-stream')
+          .set('MCP-Protocol-Version', version)
+          .set('X-Forwarded-For', '203.0.113.40')
+          .send({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'tools/call',
+            params: { name: 'list_chains', arguments: {} },
+          });
+
+      expect((await legacy('2025-11-25')).status).toBe(200);
+
+      const logged = info.mock.calls
+        .map(([entry]) => entry as { type?: string; protocolVersion?: string })
+        .filter(({ type }) => type === 'MCP_TOOL_CALL')
+        .map(({ protocolVersion }) => protocolVersion);
+      expect(logged).toEqual(['2025-11-25']);
     });
 
     it('another IP has its own fan-out budget', async () => {

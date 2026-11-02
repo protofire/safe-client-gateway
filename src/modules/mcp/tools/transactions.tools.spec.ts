@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { getAddress } from 'viem';
 import { faker } from '@faker-js/faker';
+import { DataSourceError } from '@/domain/errors/data-source.error';
 import { callTool } from '@/modules/mcp/tools/__tests__/call-tool';
 import { transactionsTools } from '@/modules/mcp/tools/transactions.tools';
 
@@ -11,7 +12,8 @@ describe('transaction tools', () => {
     getById: jest.fn(),
   };
   const decoder = { getDecodedData: jest.fn() };
-  const tools = transactionsTools(service, decoder);
+  const chains = { getChain: jest.fn() };
+  const tools = transactionsTools(service, decoder, chains);
   const safeAddress = getAddress(faker.finance.ethereumAddress());
   const hash = `0x${'ab'.repeat(32)}`;
   const args = { chainId: '1', safeAddress };
@@ -288,6 +290,20 @@ describe('transaction tools', () => {
         method: 'transfer',
         accuracy: 'FULL_MATCH',
       });
+    });
+
+    it('is NOT_FOUND for a chain that does not resolve, without decoding', async () => {
+      chains.getChain.mockRejectedValue(new DataSourceError('Not found', 404));
+
+      const { isError, payload } = await callTool(tools, 'decode_calldata', {
+        chainId: '99999999999',
+        to: safeAddress,
+        data: '0xa9059cbb',
+      });
+
+      expect(isError).toBe(true);
+      expect(payload.code).toBe('NOT_FOUND');
+      expect(decoder.getDecodedData).not.toHaveBeenCalled();
     });
 
     it('rejects non-hex calldata', async () => {

@@ -38,11 +38,10 @@ export type McpToolCall = {
   resultCount: number;
   useful: boolean;
   clientName?: string;
-  protocolVersion?: string;
 };
 
 /** What the transport knows about the caller of one tool call. */
-export type McpCallContext = { clientName?: string; protocolVersion?: string };
+export type McpCallContext = { clientName?: string };
 
 @Injectable()
 export class McpToolEvents {

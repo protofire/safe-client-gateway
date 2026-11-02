@@ -9,6 +9,7 @@ import {
 } from '@/modules/mcp/tools/define-tool';
 import {
   McpUsageService,
+  MCP_PROTOCOL_VERSION_KEY,
   MCP_USER_AGENT_KEY,
 } from '@/modules/mcp/usage/mcp-usage.service';
 import { FakeMcpUsageStore } from '@/modules/mcp/usage/__tests__/fake-mcp-usage.store';
@@ -27,9 +28,14 @@ describe('McpUsageService', () => {
   const cls = {
     get: jest.fn(
       (key: string) =>
-        ({ [MCP_IP_KEY]: IP, [MCP_USER_AGENT_KEY]: USER_AGENT })[key],
+        ({
+          [MCP_IP_KEY]: ip,
+          [MCP_USER_AGENT_KEY]: USER_AGENT,
+          [MCP_PROTOCOL_VERSION_KEY]: '2026-07-28',
+        })[key],
     ),
   } as unknown as ClsService;
+  let ip: string | undefined;
   let events: McpToolEvents;
 
   function build(store: IMcpUsageStore): void {
@@ -45,7 +51,6 @@ describe('McpUsageService', () => {
     resultCount: 1,
     useful: true,
     clientName: 'claude-code',
-    protocolVersion: '2026-07-28',
     ...overrides,
   });
 
@@ -54,6 +59,7 @@ describe('McpUsageService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    ip = IP;
   });
 
   it('counts a call under tool|chain|label|outcome', async () => {
@@ -135,6 +141,45 @@ describe('McpUsageService', () => {
     expect(JSON.stringify(logging.info.mock.calls)).not.toContain(
       '99999999999',
     );
+  });
+
+  it.each(['01', '0', '1e3', ' 1', '1.0'])(
+    'does not mint a field from the non-canonical chainId %j',
+    async (chainId) => {
+      const store = new FakeMcpUsageStore();
+      build(store);
+
+      events.onCall(call({ chainId }));
+      await settle();
+
+      expect(Object.keys(store.calls)).toEqual([
+        'get_safe|unknown|claude-code|ok',
+      ]);
+    },
+  );
+
+  it('counts no client for a failed call', async () => {
+    const store = new FakeMcpUsageStore();
+    build(store);
+
+    events.onCall(call({ outcome: 'NOT_FOUND' }));
+    await settle();
+
+    expect(store.calls).toEqual({
+      'get_safe|unknown|claude-code|NOT_FOUND': 1,
+    });
+    expect(store.clients.size).toBe(0);
+  });
+
+  it('counts no client without an ip', async () => {
+    const store = new FakeMcpUsageStore();
+    build(store);
+    ip = undefined;
+
+    events.onCall(call());
+    await settle();
+
+    expect(store.clients.size).toBe(0);
   });
 
   it('a store failure does not fail the tool and logs one warning', async () => {

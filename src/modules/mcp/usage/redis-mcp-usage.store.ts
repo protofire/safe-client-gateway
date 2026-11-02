@@ -47,10 +47,13 @@ export class RedisMcpUsageStore implements IMcpUsageStore {
 
   async getDailySalt(date: string): Promise<string> {
     const key = `mcp:salt:${date}`;
-    await this.client.set(key, randomBytes(32).toString('hex'), {
+    const fresh = randomBytes(32).toString('hex');
+    // SET NX GET returns the existing value, or null when it stored `fresh`
+    const existing = await this.client.set(key, fresh, {
       NX: true,
       EX: SALT_TTL_SECONDS,
+      GET: true,
     });
-    return (await this.client.get(key)) as string;
+    return existing ?? fresh;
   }
 }
