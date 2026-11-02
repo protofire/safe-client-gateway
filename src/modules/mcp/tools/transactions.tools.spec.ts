@@ -182,6 +182,31 @@ describe('transaction tools', () => {
       ...extra,
     });
 
+    it('caps hexData at 2000 characters and says so', async () => {
+      const long = `0x${'ab'.repeat(2000)}`;
+      service.getById.mockResolvedValue(details(data({ hexData: long })));
+
+      const { payload } = await callTool(tools, 'get_transaction', {
+        chainId: '1',
+        txId: hash,
+      });
+
+      expect(payload.hexData).toBe(long.slice(0, 2000));
+      expect(payload.hexDataTruncated).toBe(true);
+    });
+
+    it('leaves short hexData whole', async () => {
+      service.getById.mockResolvedValue(details(data({})));
+
+      const { payload } = await callTool(tools, 'get_transaction', {
+        chainId: '1',
+        txId: hash,
+      });
+
+      expect(payload.hexData).toBe('0x1234');
+      expect(payload.hexDataTruncated).toBe(false);
+    });
+
     it('accepts a CGW id and a bare safeTxHash', async () => {
       service.getById.mockResolvedValue(details(data({})));
       const id = `multisig_${safeAddress}_${hash}`;

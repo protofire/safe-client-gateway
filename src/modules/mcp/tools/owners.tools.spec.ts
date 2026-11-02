@@ -1,7 +1,11 @@
 import { getAddress } from 'viem';
 import { faker } from '@faker-js/faker';
 import { callTool } from '@/modules/mcp/tools/__tests__/call-tool';
+import { McpFanoutLimit } from '@/modules/mcp/mcp-fanout-limit';
+import type { ClsService } from 'nestjs-cls';
+import type { ICacheService } from '@/datasources/cache/cache.service.interface';
 import { MAX_MULTISIGS, ownersTools } from '@/modules/mcp/tools/owners.tools';
+import type { McpTool } from '@/modules/mcp/tools/define-tool';
 import type { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
 
 describe('find_safes_by_owner', () => {
@@ -9,7 +13,11 @@ describe('find_safes_by_owner', () => {
     getAllSafesByOwnerV2: jest.fn(),
     getSafesByOwnerV2: jest.fn(),
   };
-  const tools = ownersTools(repository as unknown as ISafeRepository);
+  const fanoutLimit = { check: jest.fn() };
+  const tools = ownersTools(
+    repository as unknown as ISafeRepository,
+    fanoutLimit,
+  );
   const ownerAddress = getAddress(faker.finance.ethereumAddress());
   const address = (): string => getAddress(faker.finance.ethereumAddress());
 
@@ -94,5 +102,66 @@ describe('find_safes_by_owner', () => {
     });
 
     expect(payload.truncated).toBe(false);
+  });
+
+  describe('fan-out limit', () => {
+    function limited(): Array<McpTool> {
+      const counts = new Map<string, number>();
+      const cache = {
+        increment: jest.fn((key: string) => {
+          counts.set(key, (counts.get(key) ?? 0) + 1);
+          return Promise.resolve(counts.get(key));
+        }),
+      };
+      const cls = { get: jest.fn().mockReturnValue('203.0.113.5') };
+      const limit = new McpFanoutLimit(
+        cache as unknown as ICacheService,
+        cls as unknown as ClsService,
+      );
+      return ownersTools(repository as unknown as ISafeRepository, limit);
+    }
+
+    it('the 6th call without chainIds in a minute returns RATE_LIMITED', async () => {
+      repository.getAllSafesByOwnerV2.mockResolvedValue({});
+      const limitedTools = limited();
+
+      for (let i = 0; i < 5; i++) {
+        const { isError } = await callTool(
+          limitedTools,
+          'find_safes_by_owner',
+          {
+            ownerAddress,
+          },
+        );
+        expect(isError).toBeUndefined();
+      }
+      const { isError, payload } = await callTool(
+        limitedTools,
+        'find_safes_by_owner',
+        { ownerAddress },
+      );
+
+      expect(isError).toBe(true);
+      expect(payload.code).toBe('RATE_LIMITED');
+      expect(repository.getAllSafesByOwnerV2).toHaveBeenCalledTimes(5);
+    });
+
+    it('calls with chainIds do not count', async () => {
+      repository.getSafesByOwnerV2.mockResolvedValue({ safes: [] });
+      repository.getAllSafesByOwnerV2.mockResolvedValue({});
+      const limitedTools = limited();
+
+      for (let i = 0; i < 10; i++) {
+        await callTool(limitedTools, 'find_safes_by_owner', {
+          ownerAddress,
+          chainIds: ['1'],
+        });
+      }
+      const { isError } = await callTool(limitedTools, 'find_safes_by_owner', {
+        ownerAddress,
+      });
+
+      expect(isError).toBeUndefined();
+    });
   });
 });

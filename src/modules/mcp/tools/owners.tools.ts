@@ -4,6 +4,7 @@ import {
   READ_ONLY_ANNOTATIONS,
   type McpTool,
 } from '@/modules/mcp/tools/define-tool';
+import type { McpFanoutLimit } from '@/modules/mcp/mcp-fanout-limit';
 import type { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
 import { AddressSchema } from '@/validation/entities/schemas/address.schema';
 import { NumericStringSchema } from '@/validation/entities/schemas/numeric-string.schema';
@@ -11,7 +12,10 @@ import { NumericStringSchema } from '@/validation/entities/schemas/numeric-strin
 export const MAX_CHAIN_IDS = 5;
 export const MAX_MULTISIGS = 100;
 
-export function ownersTools(safeRepository: ISafeRepository): Array<McpTool> {
+export function ownersTools(
+  safeRepository: ISafeRepository,
+  fanoutLimit: Pick<McpFanoutLimit, 'check'>,
+): Array<McpTool> {
   return [
     defineTool({
       name: 'find_safes_by_owner',
@@ -42,6 +46,7 @@ export function ownersTools(safeRepository: ISafeRepository): Array<McpTool> {
               outcome.status === 'fulfilled' ? outcome.value.safes : null;
           });
         } else {
+          await fanoutLimit.check();
           Object.assign(
             byChain,
             await safeRepository.getAllSafesByOwnerV2({ ownerAddress }),

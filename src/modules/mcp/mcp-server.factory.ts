@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
 import { BalancesService } from '@/modules/balances/routes/balances.service';
+import { McpFanoutLimit } from '@/modules/mcp/mcp-fanout-limit';
 import { balancesTools } from '@/modules/mcp/tools/balances.tools';
 import { chainsTools } from '@/modules/mcp/tools/chains.tools';
 import { McpToolEvents, type McpTool } from '@/modules/mcp/tools/define-tool';
@@ -32,13 +33,14 @@ export class McpServerFactory {
     @Inject(IDelegatesV2Repository)
     delegatesRepository: IDelegatesV2Repository,
     private readonly events: McpToolEvents,
+    fanoutLimit: McpFanoutLimit,
   ) {
     this.serverName = configurationService.getOrThrow('mcp.serverName');
     this.version = configurationService.getOrThrow('about.version');
     // tools/list keeps this order
     this.tools = [
       ...chainsTools(chainsRepository),
-      ...ownersTools(safeRepository),
+      ...ownersTools(safeRepository, fanoutLimit),
       ...safeTools(safeRepository),
       ...balancesTools(balancesService),
       ...transactionsTools(transactionsService, dataDecoderRepository),

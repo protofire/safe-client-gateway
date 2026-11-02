@@ -4,11 +4,13 @@ import {
   type OnModuleDestroy,
   Req,
   Res,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiExcludeController } from '@nestjs/swagger';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import type { Request, Response } from 'express';
+import { McpRateLimitGuard } from '@/modules/mcp/routes/guards/mcp-rate-limit.guard';
 import { McpServerFactory } from '@/modules/mcp/mcp-server.factory';
 
 @Controller()
@@ -22,6 +24,7 @@ export class McpController implements OnModuleDestroy {
     this.node = toNodeHandler(this.handler);
   }
 
+  @UseGuards(McpRateLimitGuard)
   @All('mcp')
   handle(@Req() req: Request, @Res() res: Response): Promise<void> {
     return this.node(req, res, req.body);

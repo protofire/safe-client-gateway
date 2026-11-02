@@ -62,12 +62,17 @@ function warningsOf(details: TransactionDetails): Array<string> {
   return warnings;
 }
 
+const MAX_HEX_DATA_LENGTH = 2000;
+
 function detailsOf(details: TransactionDetails): Record<string, unknown> {
   const { txData } = details;
   const multisig =
     details.detailedExecutionInfo?.type === ExecutionDetailsType.Multisig
       ? (details.detailedExecutionInfo as MultisigExecutionDetails)
       : null;
+  const hexData = txData?.hexData ?? null;
+  const hexDataTruncated =
+    hexData !== null && hexData.length > MAX_HEX_DATA_LENGTH;
   return {
     id: details.txId,
     safeTxHash: multisig?.safeTxHash ?? safeTxHashOf(details.txId),
@@ -80,7 +85,8 @@ function detailsOf(details: TransactionDetails): Record<string, unknown> {
     toName: txData?.to.name ?? null,
     value: txData?.value ?? null,
     operation: txData ? Operation[txData.operation] : null,
-    hexData: txData?.hexData ?? null,
+    hexData: hexDataTruncated ? hexData.slice(0, MAX_HEX_DATA_LENGTH) : hexData,
+    hexDataTruncated,
     dataDecoded: txData?.dataDecoded ?? null,
     proposer: multisig?.proposer?.value ?? null,
     proposedByDelegate: multisig?.proposedByDelegate?.value ?? null,
