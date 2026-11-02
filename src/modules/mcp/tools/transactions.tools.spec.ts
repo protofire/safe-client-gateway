@@ -252,6 +252,55 @@ describe('transaction tools', () => {
       expect(payload.warnings[1]).toMatch(/not a known contract/);
     });
 
+    it('does not call a delegatecall trusted when the decoder returned nothing', async () => {
+      service.getById.mockResolvedValue(
+        details(data({ operation: 1, trustedDelegateCallTarget: true })),
+      );
+
+      const { payload } = await callTool(tools, 'get_transaction', {
+        chainId: '1',
+        txId: hash,
+      });
+
+      expect(payload.warnings[0]).toMatch(/can change its owners or drain/);
+      expect(payload.warnings[0]).not.toMatch(/trusted/);
+    });
+
+    it('reduces a large decoded batch but keeps its targets visible', async () => {
+      const calls = Array.from({ length: 40 }, (_, i) => ({
+        operation: 0,
+        to: getAddress(`0x${(i + 1).toString(16).padStart(40, '0')}`),
+        value: '0',
+        dataDecoded: { method: 'transfer', parameters: [] },
+        data: `0x${'ab'.repeat(200)}`,
+      }));
+      service.getById.mockResolvedValue(
+        details(
+          data({
+            dataDecoded: {
+              method: 'multiSend',
+              parameters: [{ name: 'transactions', valueDecoded: calls }],
+            },
+          }),
+        ),
+      );
+
+      const { payload } = await callTool(tools, 'get_transaction', {
+        chainId: '1',
+        txId: hash,
+      });
+
+      expect(payload.dataDecodedTruncated).toBe(true);
+      expect(payload.dataDecoded.totalCalls).toBe(40);
+      expect(payload.dataDecoded.calls).toHaveLength(20);
+      expect(payload.dataDecoded.calls[0]).toEqual({
+        operation: 0,
+        to: calls[0].to,
+        value: '0',
+        method: 'transfer',
+      });
+    });
+
     it('maps a malformed id to INVALID_INPUT', async () => {
       service.getById.mockRejectedValue(
         new BadRequestException('Invalid transaction ID'),

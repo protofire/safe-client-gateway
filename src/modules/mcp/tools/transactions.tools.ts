@@ -49,7 +49,7 @@ function warningsOf(details: TransactionDetails): Array<string> {
   const warnings: Array<string> = [];
   if (txData.operation === Operation.DELEGATE) {
     warnings.push(
-      txData.trustedDelegateCallTarget === true
+      txData.trustedDelegateCallTarget === true && txData.dataDecoded !== null
         ? 'DELEGATECALL to a known trusted contract: the target code runs with the full authority of the account.'
         : 'DELEGATECALL: the target code runs with the full authority of the account and can change its owners or drain it.',
     );
@@ -64,6 +64,39 @@ function warningsOf(details: TransactionDetails): Array<string> {
 }
 
 const MAX_HEX_DATA_LENGTH = 2000;
+const MAX_DECODED_LENGTH = 4000;
+const MAX_BATCH_CALLS = 20;
+
+// Keeps every target of a batch visible when the full decoding is too large
+function reduceDecoded(
+  dataDecoded: NonNullable<TransactionDetails['txData']>['dataDecoded'],
+): { value: unknown; truncated: boolean } {
+  if (
+    !dataDecoded ||
+    JSON.stringify(dataDecoded).length <= MAX_DECODED_LENGTH
+  ) {
+    return { value: dataDecoded ?? null, truncated: false };
+  }
+  const inner = dataDecoded.parameters?.find((p) =>
+    Array.isArray(p.valueDecoded),
+  )?.valueDecoded;
+  if (!Array.isArray(inner)) {
+    return { value: { method: dataDecoded.method }, truncated: true };
+  }
+  return {
+    value: {
+      method: dataDecoded.method,
+      calls: inner.slice(0, MAX_BATCH_CALLS).map((call) => ({
+        operation: call.operation,
+        to: call.to,
+        value: call.value,
+        method: call.dataDecoded?.method ?? null,
+      })),
+      totalCalls: inner.length,
+    },
+    truncated: true,
+  };
+}
 
 function detailsOf(details: TransactionDetails): Record<string, unknown> {
   const { txData } = details;
@@ -74,6 +107,7 @@ function detailsOf(details: TransactionDetails): Record<string, unknown> {
   const hexData = txData?.hexData ?? null;
   const hexDataTruncated =
     hexData !== null && hexData.length > MAX_HEX_DATA_LENGTH;
+  const decoded = reduceDecoded(txData?.dataDecoded ?? null);
   return {
     id: details.txId,
     safeTxHash: multisig?.safeTxHash ?? safeTxHashOf(details.txId),
@@ -88,7 +122,8 @@ function detailsOf(details: TransactionDetails): Record<string, unknown> {
     operation: txData ? Operation[txData.operation] : null,
     hexData: hexDataTruncated ? hexData.slice(0, MAX_HEX_DATA_LENGTH) : hexData,
     hexDataTruncated,
-    dataDecoded: txData?.dataDecoded ?? null,
+    dataDecoded: decoded.value,
+    dataDecodedTruncated: decoded.truncated,
     proposer: multisig?.proposer?.value ?? null,
     proposedByDelegate: multisig?.proposedByDelegate?.value ?? null,
     confirmations:
