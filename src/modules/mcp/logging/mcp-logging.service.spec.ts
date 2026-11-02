@@ -14,6 +14,8 @@ import { McpAppModule } from '@/mcp-app.module';
 import { chainBuilder } from '@/modules/chains/domain/entities/__tests__/chain.builder';
 import { redact } from '@/modules/mcp/logging/mcp-logging.service';
 import { safeBuilder } from '@/modules/safe/domain/entities/__tests__/safe.builder';
+import { FakeMcpUsageStore } from '@/modules/mcp/usage/__tests__/fake-mcp-usage.store';
+import { McpUsageStore } from '@/modules/mcp/usage/mcp-usage.store';
 
 const address = (): `0x${string}` =>
   getAddress(faker.finance.ethereumAddress());
@@ -137,6 +139,8 @@ describe('McpLoggingService on the real network service', () => {
       .useModule(TestCacheModule)
       .overrideProvider('Logger')
       .useValue({ log })
+      .overrideProvider(McpUsageStore)
+      .useClass(FakeMcpUsageStore)
       .compile();
 
     app = moduleFixture.createNestApplication();

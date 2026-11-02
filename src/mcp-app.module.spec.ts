@@ -20,6 +20,8 @@ import { TxAuthNetworkModule } from '@/datasources/network/tx-auth.network.modul
 import { TestTxAuthNetworkModule } from '@/datasources/network/__tests__/test.tx-auth.network.module';
 import { QueueReadiness } from '@/domain/interfaces/queue-readiness.interface';
 import { TestLoggingModule } from '@/logging/__tests__/test.logging.module';
+import { FakeMcpUsageStore } from '@/modules/mcp/usage/__tests__/fake-mcp-usage.store';
+import { McpUsageStore } from '@/modules/mcp/usage/mcp-usage.store';
 import { McpLoggingModule } from '@/modules/mcp/logging/mcp-logging.module';
 import { CsvExportConsumer } from '@/modules/csv-export/v1/consumers/csv-export.consumer';
 import { IHooksRepository } from '@/modules/hooks/domain/hooks.repository.interface';
@@ -44,6 +46,8 @@ describe('McpAppModule', () => {
       .useModule(TestTxAuthNetworkModule)
       .overrideModule(McpLoggingModule)
       .useModule(TestLoggingModule)
+      .overrideProvider(McpUsageStore)
+      .useClass(FakeMcpUsageStore)
       .compile();
 
     app = moduleFixture.createNestApplication();

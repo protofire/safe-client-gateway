@@ -37,7 +37,12 @@ export type McpToolCall = {
   latencyMs: number;
   resultCount: number;
   useful: boolean;
+  clientName?: string;
+  protocolVersion?: string;
 };
+
+/** What the transport knows about the caller of one tool call. */
+export type McpCallContext = { clientName?: string; protocolVersion?: string };
 
 @Injectable()
 export class McpToolEvents {
@@ -69,7 +74,11 @@ type ToolDefinition<I> = {
 
 export type McpTool = Omit<ToolDefinition<never>, 'inputSchema' | 'handler'> & {
   listedSchema: ReturnType<typeof withoutValidation>;
-  call: (args: unknown, events: McpToolEvents) => Promise<CallToolResult>;
+  call: (
+    args: unknown,
+    events: McpToolEvents,
+    context?: McpCallContext,
+  ) => Promise<CallToolResult>;
 };
 
 /**
@@ -142,7 +151,7 @@ export function defineTool<I>(definition: ToolDefinition<I>): McpTool {
   return {
     ...metadata,
     listedSchema: withoutValidation(inputSchema),
-    call: async (args, events): Promise<CallToolResult> => {
+    call: async (args, events, context): Promise<CallToolResult> => {
       const startedAt = performance.now();
       const report = (
         outcome: McpToolCall['outcome'],
@@ -157,6 +166,7 @@ export function defineTool<I>(definition: ToolDefinition<I>): McpTool {
             latencyMs: performance.now() - startedAt,
             resultCount,
             useful: definition.useful,
+            ...context,
           });
         } catch (error) {
           // Reporting never changes what the client gets
@@ -185,7 +195,8 @@ export function defineTool<I>(definition: ToolDefinition<I>): McpTool {
         if (toolError.code === 'INTERNAL_ERROR') {
           events.onInternalError(definition.name, error);
         }
-        report(toolError.code, chainId, 0);
+        // A failed call may name a chain that does not exist
+        report(toolError.code, null, 0);
         return toErrorResult(toolError);
       }
 

@@ -1,0 +1,98 @@
+import { createHash } from 'crypto';
+import { Inject, Injectable } from '@nestjs/common';
+import { ClsService } from 'nestjs-cls';
+import { LogType } from '@/domain/common/entities/log-type.entity';
+import { ILoggingService, LoggingService } from '@/logging/logging.interface';
+import { MCP_IP_KEY } from '@/modules/mcp/routes/guards/mcp-rate-limit.guard';
+import {
+  McpToolEvents,
+  type McpToolCall,
+} from '@/modules/mcp/tools/define-tool';
+import { clientLabel } from '@/modules/mcp/usage/client-label';
+import {
+  McpUsageStore,
+  type IMcpUsageStore,
+} from '@/modules/mcp/usage/mcp-usage.store';
+
+export const MCP_USER_AGENT_KEY = 'mcp.userAgent';
+export const MAX_USER_AGENT_LENGTH = 200;
+const WRITE_TIMEOUT_MS = 2000;
+
+function withTimeout<T>(work: Promise<T>): Promise<T> {
+  let timer: NodeJS.Timeout;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout((): void => {
+      reject(new Error('usage write timed out'));
+    }, WRITE_TIMEOUT_MS);
+  });
+  return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Counts tool calls by tool, chain, client label and outcome, and distinct
+ * clients by a daily-salted hash. The raw IP and User-Agent are only ever
+ * hashed; writes never delay or fail a tool result.
+ */
+@Injectable()
+export class McpUsageService {
+  constructor(
+    events: McpToolEvents,
+    @Inject(McpUsageStore) private readonly store: IMcpUsageStore,
+    @Inject(LoggingService) private readonly loggingService: ILoggingService,
+    private readonly cls: ClsService,
+  ) {
+    events.onCall = (call): void => this.record(call);
+  }
+
+  private record(call: McpToolCall): void {
+    const label = clientLabel({
+      clientName: call.clientName,
+      userAgent: this.cls.get<string | undefined>(MCP_USER_AGENT_KEY),
+    });
+    const ip = this.cls.get<string | undefined>(MCP_IP_KEY);
+    const userAgent = this.cls.get<string | undefined>(MCP_USER_AGENT_KEY);
+    // Unresolved chains would otherwise let a client mint unbounded fields
+    const chainId =
+      call.outcome === 'ok' ? (call.chainId ?? 'none') : 'unknown';
+
+    this.loggingService.info({
+      type: LogType.McpToolCall,
+      tool: call.tool,
+      chainId,
+      outcome: call.outcome,
+      latencyMs: Math.round(call.latencyMs),
+      resultCount: call.resultCount,
+      protocolVersion: call.protocolVersion,
+      clientLabel: label,
+    });
+
+    const date = new Date().toISOString().slice(0, 10);
+    const field = [call.tool, chainId, label, call.outcome].join('|');
+    // Fire and forget: Redis may be down and hang commands
+    void withTimeout(this.write(date, field, call.useful, ip, userAgent)).catch(
+      (error: unknown) =>
+        this.loggingService.warn({
+          message: 'MCP usage write failed',
+          error: error instanceof Error ? error.message : typeof error,
+        }),
+    );
+  }
+
+  private async write(
+    date: string,
+    field: string,
+    useful: boolean,
+    ip: string | undefined,
+    userAgent: string | undefined,
+  ): Promise<void> {
+    await this.store.incrementCall(date, field);
+    if (!useful || !ip) {
+      return;
+    }
+    const salt = await this.store.getDailySalt(date);
+    const hash = createHash('sha256')
+      .update(`${ip}|${userAgent ?? ''}|${salt}`)
+      .digest('hex');
+    await this.store.addClient(date, hash);
+  }
+}

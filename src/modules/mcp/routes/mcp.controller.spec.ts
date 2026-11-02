@@ -21,6 +21,8 @@ import { TxAuthNetworkModule } from '@/datasources/network/tx-auth.network.modul
 import { TestTxAuthNetworkModule } from '@/datasources/network/__tests__/test.tx-auth.network.module';
 import { pageBuilder } from '@/domain/entities/__tests__/page.builder';
 import { TestLoggingModule } from '@/logging/__tests__/test.logging.module';
+import { FakeMcpUsageStore } from '@/modules/mcp/usage/__tests__/fake-mcp-usage.store';
+import { McpUsageStore } from '@/modules/mcp/usage/mcp-usage.store';
 import { McpLoggingModule } from '@/modules/mcp/logging/mcp-logging.module';
 import { chainBuilder } from '@/modules/chains/domain/entities/__tests__/chain.builder';
 import type { Chain } from '@/modules/chains/domain/entities/chain.entity';
@@ -119,6 +121,7 @@ describe('McpController', () => {
   beforeEach(async () => {
     jest.resetAllMocks();
     jest.spyOn(console, 'debug').mockImplementation();
+    jest.spyOn(console, 'info').mockImplementation();
     const moduleFixture = await Test.createTestingModule({
       imports: [McpAppModule.register(configuration)],
     })
@@ -132,6 +135,8 @@ describe('McpController', () => {
       .useModule(TestTxAuthNetworkModule)
       .overrideModule(McpLoggingModule)
       .useModule(TestLoggingModule)
+      .overrideProvider(McpUsageStore)
+      .useClass(FakeMcpUsageStore)
       .compile();
 
     app = moduleFixture.createNestApplication();

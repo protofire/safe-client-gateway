@@ -1,17 +1,24 @@
 import { Test } from '@nestjs/testing';
 import type { NestExpressApplication } from '@nestjs/platform-express';
+import { createHash } from 'crypto';
 import request from 'supertest';
 import { BlocklistModule } from '@/config/entities/blocklist.module';
 import configuration from '@/config/entities/__tests__/configuration';
 import { TestBlocklistModule } from '@/config/entities/__tests__/test.blocklist.module';
 import { TestCacheModule } from '@/datasources/cache/__tests__/test.cache.module';
 import { CacheModule } from '@/datasources/cache/cache.module';
-import { TestNetworkModule } from '@/datasources/network/__tests__/test.network.module';
+import {
+  networkService,
+  TestNetworkModule,
+} from '@/datasources/network/__tests__/test.network.module';
+import { rawify } from '@/validation/entities/raw.entity';
 import { TestTxAuthNetworkModule } from '@/datasources/network/__tests__/test.tx-auth.network.module';
 import { NetworkModule } from '@/datasources/network/network.module';
 import { TxAuthNetworkModule } from '@/datasources/network/tx-auth.network.module';
 import { TestLoggingModule } from '@/logging/__tests__/test.logging.module';
 import { McpAppModule } from '@/mcp-app.module';
+import { FakeMcpUsageStore } from '@/modules/mcp/usage/__tests__/fake-mcp-usage.store';
+import { McpUsageStore } from '@/modules/mcp/usage/mcp-usage.store';
 import { McpLoggingModule } from '@/modules/mcp/logging/mcp-logging.module';
 import { configureMcpApp } from '@/mcp-main';
 
@@ -84,6 +91,8 @@ describe('configureMcpApp over real HTTP', () => {
       .useModule(TestTxAuthNetworkModule)
       .overrideModule(McpLoggingModule)
       .useModule(TestLoggingModule)
+      .overrideProvider(McpUsageStore)
+      .useClass(FakeMcpUsageStore)
       .compile();
     app = moduleFixture.createNestApplication<NestExpressApplication>();
     configureMcpApp(app);
@@ -152,5 +161,135 @@ describe('configureMcpApp over real HTTP', () => {
     }
 
     expect((await post('1.2.3.99, 10.0.0.9')).status).toBe(429);
+  });
+
+  describe('tools/call through the transport', () => {
+    const MODERN = '2026-07-28';
+    const OWNER = '0x0000000000000000000000000000000000000001';
+
+    async function callTool(
+      name: string,
+      args: object,
+      headers: { ip: string; userAgent?: string },
+    ): Promise<{
+      status: number;
+      result: { isError?: boolean; text: string };
+    }> {
+      const response = await request(app.getHttpServer())
+        .post('/mcp')
+        .set('Accept', 'application/json, text/event-stream')
+        .set('MCP-Protocol-Version', MODERN)
+        .set('Mcp-Method', 'tools/call')
+        .set('Mcp-Name', name)
+        .set('X-Forwarded-For', headers.ip)
+        .set('User-Agent', headers.userAgent ?? 'supertest')
+        .send({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: {
+            name,
+            arguments: args,
+            _meta: {
+              'io.modelcontextprotocol/protocolVersion': MODERN,
+              'io.modelcontextprotocol/clientCapabilities': {},
+              'io.modelcontextprotocol/clientInfo': {
+                name: 'claude-code',
+                version: '1.0.0',
+              },
+            },
+          },
+        });
+      const { result } = response.body as {
+        result: { isError?: boolean; content: Array<{ text: string }> };
+      };
+      return {
+        status: response.status,
+        result: { isError: result.isError, text: result.content[0].text },
+      };
+    }
+
+    beforeEach(() => {
+      jest.mocked(networkService.get).mockResolvedValue({
+        data: rawify({ count: 0, next: null, previous: null, results: [] }),
+        status: 200,
+      });
+    });
+
+    it('the sixth find_safes_by_owner without chainIds from one IP is RATE_LIMITED', async () => {
+      const outcomes: Array<{ status: number; code: string }> = [];
+      for (let i = 0; i < 6; i++) {
+        const { status, result } = await callTool(
+          'find_safes_by_owner',
+          { ownerAddress: OWNER },
+          { ip: '203.0.113.20' },
+        );
+        outcomes.push({
+          status,
+          code: result.isError ? JSON.parse(result.text).code : 'ok',
+        });
+      }
+
+      expect(outcomes).toEqual([
+        ...Array(5).fill({ status: 200, code: 'ok' }),
+        { status: 200, code: 'RATE_LIMITED' },
+      ]);
+    });
+
+    it('another IP has its own fan-out budget', async () => {
+      for (let i = 0; i < 6; i++) {
+        await callTool(
+          'find_safes_by_owner',
+          { ownerAddress: OWNER },
+          { ip: '203.0.113.20' },
+        );
+      }
+
+      const { result } = await callTool(
+        'find_safes_by_owner',
+        { ownerAddress: OWNER },
+        { ip: '203.0.113.21' },
+      );
+
+      expect(result.isError).toBeUndefined();
+    });
+
+    it('counts the call and hashes the client from the IP and User-Agent in Cls', async () => {
+      const store = app.get<FakeMcpUsageStore>(McpUsageStore);
+
+      await callTool(
+        'find_safes_by_owner',
+        { ownerAddress: OWNER, chainIds: ['1'] },
+        { ip: '203.0.113.30', userAgent: 'test-agent/1' },
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(store.calls).toEqual({
+        'find_safes_by_owner|none|claude-code|ok': 1,
+      });
+      expect([...store.clients]).toEqual([
+        createHash('sha256')
+          .update(`203.0.113.30|test-agent/1|${store.salt}`)
+          .digest('hex'),
+      ]);
+    });
+
+    it('an unknown chainId creates no usage field', async () => {
+      const store = app.get<FakeMcpUsageStore>(McpUsageStore);
+      jest.mocked(networkService.get).mockRejectedValue(new Error('no chain'));
+
+      const { result } = await callTool(
+        'get_safe',
+        { chainId: '99999999999', safeAddress: OWNER },
+        { ip: '203.0.113.31' },
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(result.isError).toBe(true);
+      expect(Object.keys(store.calls)).toHaveLength(1);
+      expect(JSON.stringify(Object.keys(store.calls))).not.toContain(
+        '99999999999',
+      );
+    });
   });
 });
