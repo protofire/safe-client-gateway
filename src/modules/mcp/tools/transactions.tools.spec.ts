@@ -1,0 +1,278 @@
+import { BadRequestException } from '@nestjs/common';
+import { getAddress } from 'viem';
+import { faker } from '@faker-js/faker';
+import { callTool } from '@/modules/mcp/tools/__tests__/call-tool';
+import { transactionsTools } from '@/modules/mcp/tools/transactions.tools';
+
+describe('transaction tools', () => {
+  const service = {
+    getTransactionQueue: jest.fn(),
+    getTransactionHistory: jest.fn(),
+    getById: jest.fn(),
+  };
+  const decoder = { getDecodedData: jest.fn() };
+  const tools = transactionsTools(service, decoder);
+  const safeAddress = getAddress(faker.finance.ethereumAddress());
+  const hash = `0x${'ab'.repeat(32)}`;
+  const args = { chainId: '1', safeAddress };
+
+  const transaction = (id: string, extra: object = {}): object => ({
+    id,
+    timestamp: 1,
+    txStatus: 'AWAITING_CONFIRMATIONS',
+    txInfo: {
+      type: 'Custom',
+      humanDescription: 'Send\n 1 ETH',
+      methodName: null,
+    },
+    executionInfo: {
+      type: 'MULTISIG',
+      nonce: 7,
+      confirmationsRequired: 3,
+      confirmationsSubmitted: 1,
+      missingSigners: null,
+    },
+    ...extra,
+  });
+
+  beforeEach(() => jest.resetAllMocks());
+
+  describe('list_queued_transactions', () => {
+    it('returns <= 20 summaries and a next cursor, dropping labels and conflict headers', async () => {
+      service.getTransactionQueue.mockResolvedValue({
+        count: 1,
+        previous: null,
+        next: 'https://mcp.invalid/?cursor=limit%3D20%26offset%3D20',
+        results: [
+          { type: 'LABEL', label: 'Next' },
+          {
+            type: 'TRANSACTION',
+            conflictType: 'None',
+            transaction: transaction(`multisig_${safeAddress}_${hash}`),
+          },
+          { type: 'CONFLICT_HEADER', nonce: 7 },
+        ],
+      });
+
+      const { payload } = await callTool(
+        tools,
+        'list_queued_transactions',
+        args,
+      );
+
+      expect(payload.results).toEqual([
+        {
+          id: `multisig_${safeAddress}_${hash}`,
+          safeTxHash: hash,
+          status: 'AWAITING_CONFIRMATIONS',
+          nonce: 7,
+          description: 'Send 1 ETH',
+          confirmations: 1,
+          threshold: 3,
+          timestamp: 1,
+        },
+      ]);
+      expect(payload.next).toBe('limit=20&offset=20');
+      const call = service.getTransactionQueue.mock.calls[0][0] as {
+        paginationData: object;
+        routeUrl: URL;
+      };
+      expect(call.paginationData).toMatchObject({ limit: 20, offset: 0 });
+      expect(call.routeUrl.toString()).toBe(
+        'https://mcp.invalid/?cursor=limit%3D20%26offset%3D0',
+      );
+    });
+
+    it('passes the client offset back in, never its limit', async () => {
+      service.getTransactionQueue.mockResolvedValue({
+        count: 0,
+        next: null,
+        previous: null,
+        results: [],
+      });
+
+      const { payload } = await callTool(tools, 'list_queued_transactions', {
+        ...args,
+        cursor: 'limit=1000&offset=40',
+      });
+
+      expect(
+        service.getTransactionQueue.mock.calls[0][0].paginationData,
+      ).toMatchObject({
+        limit: 20,
+        offset: 40,
+      });
+      expect(payload.next).toBeNull();
+    });
+  });
+
+  describe('list_transaction_history', () => {
+    it('includes an incoming transfer: it has id, no safeTxHash', async () => {
+      const id = `transfer_${safeAddress}_e1234`;
+      service.getTransactionHistory.mockResolvedValue({
+        count: 2,
+        next: null,
+        previous: null,
+        results: [
+          { type: 'DATE_LABEL', timestamp: 1 },
+          {
+            type: 'TRANSACTION',
+            conflictType: 'None',
+            transaction: transaction(id, {
+              txStatus: 'SUCCESS',
+              executionInfo: null,
+            }),
+          },
+        ],
+      });
+
+      const { payload } = await callTool(
+        tools,
+        'list_transaction_history',
+        args,
+      );
+
+      expect(payload.results).toHaveLength(1);
+      expect(payload.results[0]).toMatchObject({
+        id,
+        safeTxHash: null,
+        nonce: null,
+        confirmations: null,
+        threshold: null,
+      });
+      expect(service.getTransactionHistory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          timezoneOffsetMs: 0,
+          onlyTrusted: true,
+          showImitations: false,
+        }),
+      );
+    });
+  });
+
+  describe('get_transaction', () => {
+    const details = (txData: object | null): object => ({
+      txId: `multisig_${safeAddress}_${hash}`,
+      safeAddress,
+      txStatus: 'AWAITING_EXECUTION',
+      txHash: null,
+      executedAt: null,
+      txInfo: { type: 'Custom', humanDescription: null, methodName: 'foo' },
+      txData,
+      detailedExecutionInfo: {
+        type: 'MULTISIG',
+        nonce: 7,
+        safeTxHash: hash,
+        confirmationsRequired: 2,
+        confirmations: [
+          { signer: { value: safeAddress }, signature: '0x1', submittedAt: 5 },
+        ],
+        rejectors: [],
+        proposer: { value: safeAddress },
+        proposedByDelegate: null,
+      },
+    });
+    const data = (extra: object): object => ({
+      hexData: '0x1234',
+      dataDecoded: null,
+      to: { value: safeAddress, name: 'Known' },
+      value: '0',
+      operation: 0,
+      trustedDelegateCallTarget: null,
+      ...extra,
+    });
+
+    it('accepts a CGW id and a bare safeTxHash', async () => {
+      service.getById.mockResolvedValue(details(data({})));
+      const id = `multisig_${safeAddress}_${hash}`;
+
+      for (const txId of [id, hash]) {
+        const { payload } = await callTool(tools, 'get_transaction', {
+          chainId: '1',
+          txId,
+        });
+        expect(payload).toMatchObject({
+          safeTxHash: hash,
+          nonce: 7,
+          threshold: 2,
+          proposer: safeAddress,
+          description: 'Custom: foo',
+        });
+        expect(payload.confirmations).toEqual([
+          { signer: safeAddress, submittedAt: 5 },
+        ]);
+        expect(payload.warnings).toEqual([]);
+        expect(service.getById).toHaveBeenLastCalledWith({
+          chainId: '1',
+          txId,
+        });
+      }
+    });
+
+    it('warns on DELEGATECALL and on an unknown contract', async () => {
+      service.getById.mockResolvedValue(
+        details(data({ operation: 1, to: { value: safeAddress, name: null } })),
+      );
+
+      const { payload } = await callTool(tools, 'get_transaction', {
+        chainId: '1',
+        txId: hash,
+      });
+
+      expect(payload.operation).toBe('DELEGATE');
+      expect(payload.warnings).toHaveLength(2);
+      expect(payload.warnings[0]).toMatch(/DELEGATECALL/);
+      expect(payload.warnings[1]).toMatch(/not a known contract/);
+    });
+
+    it('maps a malformed id to INVALID_INPUT', async () => {
+      service.getById.mockRejectedValue(
+        new BadRequestException('Invalid transaction ID'),
+      );
+
+      const { isError, payload } = await callTool(tools, 'get_transaction', {
+        chainId: '1',
+        txId: 'nope',
+      });
+
+      expect(isError).toBe(true);
+      expect(payload.code).toBe('INVALID_INPUT');
+    });
+  });
+
+  describe('decode_calldata', () => {
+    it('returns the decoded call', async () => {
+      decoder.getDecodedData.mockResolvedValue({
+        method: 'transfer',
+        parameters: [{ name: 'to', type: 'address', value: safeAddress }],
+        accuracy: 'FULL_MATCH',
+      });
+
+      const { payload } = await callTool(tools, 'decode_calldata', {
+        chainId: '1',
+        to: safeAddress,
+        data: '0xa9059cbb',
+      });
+
+      expect(decoder.getDecodedData).toHaveBeenCalledWith({
+        chainId: '1',
+        to: safeAddress,
+        data: '0xa9059cbb',
+      });
+      expect(payload).toMatchObject({
+        method: 'transfer',
+        accuracy: 'FULL_MATCH',
+      });
+    });
+
+    it('rejects non-hex calldata', async () => {
+      const { payload } = await callTool(tools, 'decode_calldata', {
+        chainId: '1',
+        to: safeAddress,
+        data: 'zz',
+      });
+
+      expect(payload.code).toBe('INVALID_INPUT');
+    });
+  });
+});

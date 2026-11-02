@@ -219,19 +219,31 @@ describe('McpController', () => {
       inputSchema: { properties: Record<string, unknown> };
     }>;
 
-    expect(tools.map((tool) => tool.name)).toEqual(['list_chains', 'get_safe']);
+    expect(tools.map((tool) => tool.name)).toEqual([
+      'list_chains',
+      'find_safes_by_owner',
+      'get_safe',
+      'get_balances',
+      'list_queued_transactions',
+      'list_transaction_history',
+      'get_transaction',
+      'decode_calldata',
+      'list_proposers',
+    ]);
+    const getSafe = tools.find((tool) => tool.name === 'get_safe')!;
     for (const next of [
       'get_balances',
       'list_queued_transactions',
       'list_proposers',
     ]) {
-      expect(tools[1].description).toContain(next);
+      expect(getSafe.description).toContain(next);
     }
-    expect(Object.keys(tools[1].inputSchema.properties)).toEqual([
+    expect(Object.keys(getSafe.inputSchema.properties)).toEqual([
       'chainId',
       'safeAddress',
     ]);
     for (const tool of tools) {
+      expect(tool.description).toMatch(/Next: /);
       expect(tool.annotations).toEqual({
         readOnlyHint: true,
         destructiveHint: false,
