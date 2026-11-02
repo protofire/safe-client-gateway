@@ -7,6 +7,8 @@ import { McpFanoutLimit } from '@/modules/mcp/mcp-fanout-limit';
 import { McpServerFactory } from '@/modules/mcp/mcp-server.factory';
 import { McpRateLimitGuard } from '@/modules/mcp/routes/guards/mcp-rate-limit.guard';
 import { McpController } from '@/modules/mcp/routes/mcp.controller';
+import { McpUsageController } from '@/modules/mcp/routes/mcp-usage.controller';
+import { McpUsageAuthGuard } from '@/modules/mcp/routes/guards/mcp-usage-auth.guard';
 import { RedisMcpUsageStore } from '@/modules/mcp/usage/redis-mcp-usage.store';
 import { McpUsageService } from '@/modules/mcp/usage/mcp-usage.service';
 import { McpUsageStore } from '@/modules/mcp/usage/mcp-usage.store';
@@ -23,12 +25,13 @@ import { TransactionsModule } from '@/modules/transactions/transactions.module';
     SafeRepositoryModule,
     TransactionsModule,
   ],
-  controllers: [McpController],
+  controllers: [McpController, McpUsageController],
   providers: [
     McpServerFactory,
     McpToolEvents,
     McpFanoutLimit,
     McpRateLimitGuard,
+    McpUsageAuthGuard,
     McpUsageService,
     { provide: McpUsageStore, useClass: RedisMcpUsageStore },
   ],

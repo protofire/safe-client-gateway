@@ -349,6 +349,8 @@ export default () => ({
   },
   mcp: {
     serverName: process.env.MCP_SERVER_NAME || 'multisig',
+    // `user:pass` for basic auth on /mcp/usage.json; unset refuses every request
+    usageAuth: process.env.MCP_USAGE_AUTH,
   },
   mappings: {
     imitation: {

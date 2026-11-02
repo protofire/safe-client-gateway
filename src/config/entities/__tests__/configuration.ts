@@ -209,6 +209,7 @@ export default (): ReturnType<typeof configuration> => ({
   },
   mcp: {
     serverName: 'multisig',
+    usageAuth: undefined,
   },
   mappings: {
     imitation: {
