@@ -20,8 +20,8 @@ import { rawify } from '@/validation/entities/raw.entity';
 import { TxAuthNetworkModule } from '@/datasources/network/tx-auth.network.module';
 import { TestTxAuthNetworkModule } from '@/datasources/network/__tests__/test.tx-auth.network.module';
 import { pageBuilder } from '@/domain/entities/__tests__/page.builder';
-import { RequestScopedLoggingModule } from '@/logging/logging.module';
 import { TestLoggingModule } from '@/logging/__tests__/test.logging.module';
+import { McpLoggingModule } from '@/modules/mcp/logging/mcp-logging.module';
 import { chainBuilder } from '@/modules/chains/domain/entities/__tests__/chain.builder';
 import type { Chain } from '@/modules/chains/domain/entities/chain.entity';
 import { safeBuilder } from '@/modules/safe/domain/entities/__tests__/safe.builder';
@@ -130,7 +130,7 @@ describe('McpController', () => {
       .useModule(TestNetworkModule)
       .overrideModule(TxAuthNetworkModule)
       .useModule(TestTxAuthNetworkModule)
-      .overrideModule(RequestScopedLoggingModule)
+      .overrideModule(McpLoggingModule)
       .useModule(TestLoggingModule)
       .compile();
 
@@ -214,11 +214,19 @@ describe('McpController', () => {
     const { result } = legacyMessage(listed.body as string);
     const tools = result.tools as Array<{
       name: string;
+      description: string;
       annotations: unknown;
       inputSchema: { properties: Record<string, unknown> };
     }>;
 
     expect(tools.map((tool) => tool.name)).toEqual(['list_chains', 'get_safe']);
+    for (const next of [
+      'get_balances',
+      'list_queued_transactions',
+      'list_proposers',
+    ]) {
+      expect(tools[1].description).toContain(next);
+    }
     expect(Object.keys(tools[1].inputSchema.properties)).toEqual([
       'chainId',
       'safeAddress',

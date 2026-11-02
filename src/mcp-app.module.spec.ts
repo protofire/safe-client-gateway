@@ -19,8 +19,8 @@ import { TestNetworkModule } from '@/datasources/network/__tests__/test.network.
 import { TxAuthNetworkModule } from '@/datasources/network/tx-auth.network.module';
 import { TestTxAuthNetworkModule } from '@/datasources/network/__tests__/test.tx-auth.network.module';
 import { QueueReadiness } from '@/domain/interfaces/queue-readiness.interface';
-import { RequestScopedLoggingModule } from '@/logging/logging.module';
 import { TestLoggingModule } from '@/logging/__tests__/test.logging.module';
+import { McpLoggingModule } from '@/modules/mcp/logging/mcp-logging.module';
 import { CsvExportConsumer } from '@/modules/csv-export/v1/consumers/csv-export.consumer';
 import { IHooksRepository } from '@/modules/hooks/domain/hooks.repository.interface';
 import { EventCacheHelper } from '@/modules/hooks/domain/helpers/event-cache.helper';
@@ -42,7 +42,7 @@ describe('McpAppModule', () => {
       .useModule(TestNetworkModule)
       .overrideModule(TxAuthNetworkModule)
       .useModule(TestTxAuthNetworkModule)
-      .overrideModule(RequestScopedLoggingModule)
+      .overrideModule(McpLoggingModule)
       .useModule(TestLoggingModule)
       .compile();
 

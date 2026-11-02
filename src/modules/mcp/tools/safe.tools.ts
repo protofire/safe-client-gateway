@@ -44,7 +44,7 @@ export function safeTools(safeRepository: ISafeRepository): Array<McpTool> {
       name: 'get_safe',
       title: 'Get multisig account',
       description:
-        'Reads a multisig account: owners, threshold, nonce, version, modules, guard, fallback handler and riskNotes. Prerequisite: a chainId from list_chains and the account address.',
+        'Reads a multisig account: owners, threshold, nonce, version, modules, guard, fallback handler and riskNotes. Prerequisite: a chainId from list_chains and the account address. Next: get_balances for its assets, list_queued_transactions for pending transactions, list_proposers for who can propose.',
       inputSchema: z.object({
         chainId: NumericStringSchema.describe(
           'Chain id as a decimal string, from list_chains',

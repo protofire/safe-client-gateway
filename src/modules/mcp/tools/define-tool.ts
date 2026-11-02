@@ -148,15 +148,21 @@ export function defineTool<I>(definition: ToolDefinition<I>): McpTool {
         outcome: McpToolCall['outcome'],
         chainId: string | null,
         resultCount: number,
-      ): void =>
-        events.onCall({
-          tool: definition.name,
-          chainId,
-          outcome,
-          latencyMs: performance.now() - startedAt,
-          resultCount,
-          useful: definition.useful,
-        });
+      ): void => {
+        try {
+          events.onCall({
+            tool: definition.name,
+            chainId,
+            outcome,
+            latencyMs: performance.now() - startedAt,
+            resultCount,
+            useful: definition.useful,
+          });
+        } catch (error) {
+          // Reporting never changes what the client gets
+          events.onInternalError(definition.name, error);
+        }
+      };
 
       const parsed = inputSchema.safeParse(args);
       if (!parsed.success) {
@@ -171,11 +177,9 @@ export function defineTool<I>(definition: ToolDefinition<I>): McpTool {
       }
 
       const { chainId = null } = parsed.data as { chainId?: string };
+      let result: { results?: unknown };
       try {
-        const result = (await handler(parsed.data)) as { results?: unknown };
-        const { results } = result;
-        report('ok', chainId, Array.isArray(results) ? results.length : 1);
-        return { content: toText({ dataNotice: DATA_NOTICE, ...result }) };
+        result = (await handler(parsed.data)) as typeof result;
       } catch (error) {
         const toolError = toToolError(error);
         if (toolError.code === 'INTERNAL_ERROR') {
@@ -184,6 +188,10 @@ export function defineTool<I>(definition: ToolDefinition<I>): McpTool {
         report(toolError.code, chainId, 0);
         return toErrorResult(toolError);
       }
+
+      const { results } = result;
+      report('ok', chainId, Array.isArray(results) ? results.length : 1);
+      return { content: toText({ dataNotice: DATA_NOTICE, ...result }) };
     },
   };
 }

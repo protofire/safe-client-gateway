@@ -15,11 +15,11 @@ import configuration from '@/config/entities/configuration';
 import { CacheModule } from '@/datasources/cache/cache.module';
 import { CircuitBreakerModule } from '@/datasources/circuit-breaker/circuit-breaker.module';
 import { NetworkModule } from '@/datasources/network/network.module';
-import { RequestScopedLoggingModule } from '@/logging/logging.module';
 import { BalancesModule } from '@/modules/balances/balances.module';
 import { ChainsModule } from '@/modules/chains/chains.module';
 import { DataDecoderModule } from '@/modules/data-decoder/data-decoder.module';
 import { DelegatesV2RepositoryModule } from '@/modules/delegate/domain/v2/delegates.v2.repository.interface';
+import { McpLoggingModule } from '@/modules/mcp/logging/mcp-logging.module';
 import { McpModule } from '@/modules/mcp/mcp.module';
 import { McpHealthController } from '@/modules/mcp/routes/mcp-health.controller';
 import { SafeRepositoryModule } from '@/modules/safe/domain/safe.repository.interface';
@@ -60,7 +60,7 @@ export class McpAppModule implements NestModule {
         ConfigurationModule.register(configFactory),
         InMemoryCacheModule.register({ isGlobal: true }),
         NetworkModule,
-        RequestScopedLoggingModule,
+        McpLoggingModule,
         // Circuit-breaker cleanup is a @Cron job
         ScheduleModule.forRoot(),
       ],

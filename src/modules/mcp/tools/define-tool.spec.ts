@@ -104,6 +104,19 @@ describe('defineTool', () => {
     });
   });
 
+  it('keeps a good result, reported once, when onCall throws', async () => {
+    handler.mockResolvedValue({ results: [] });
+    onCall.mockImplementationOnce(() => {
+      throw new Error('store down');
+    });
+
+    const result = await tool.call({ chainId: '1' }, events);
+
+    expect(result.isError).toBeUndefined();
+    expect(onCall).toHaveBeenCalledTimes(1);
+    expect(logging.error).toHaveBeenCalledTimes(1);
+  });
+
   it('hides an unexpected error and logs its name only', async () => {
     handler.mockRejectedValue(new TypeError('secret 0xabc'));
 
