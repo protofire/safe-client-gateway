@@ -347,6 +347,9 @@ export default () => ({
     // There is no hook to invalidate the owners, so defaulting 0 disables the cache
     ownersTtlSeconds: parseInt(process.env.OWNERS_TTL_SECONDS ?? `${0}`),
   },
+  mcp: {
+    serverName: process.env.MCP_SERVER_NAME || 'multisig',
+  },
   mappings: {
     imitation: {
       lookupDistance: parseInt(process.env.IMITATION_LOOKUP_DISTANCE ?? `${3}`),

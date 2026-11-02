@@ -20,6 +20,7 @@ import { BalancesModule } from '@/modules/balances/balances.module';
 import { ChainsModule } from '@/modules/chains/chains.module';
 import { DataDecoderModule } from '@/modules/data-decoder/data-decoder.module';
 import { DelegatesV2RepositoryModule } from '@/modules/delegate/domain/v2/delegates.v2.repository.interface';
+import { McpModule } from '@/modules/mcp/mcp.module';
 import { McpHealthController } from '@/modules/mcp/routes/mcp-health.controller';
 import { SafeRepositoryModule } from '@/modules/safe/domain/safe.repository.interface';
 import { TransactionsModule } from '@/modules/transactions/transactions.module';
@@ -40,6 +41,7 @@ export class McpAppModule implements NestModule {
         ChainsModule,
         DataDecoderModule,
         DelegatesV2RepositoryModule,
+        McpModule,
         SafeRepositoryModule,
         TransactionsModule,
         // common

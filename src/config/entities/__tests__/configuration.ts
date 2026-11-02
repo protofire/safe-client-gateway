@@ -207,6 +207,9 @@ export default (): ReturnType<typeof configuration> => ({
     silent: process.env.LOG_SILENT?.toLowerCase() === 'true',
     prettyColorize: process.env.LOG_PRETTY_COLORIZE?.toLowerCase() === 'true',
   },
+  mcp: {
+    serverName: 'multisig',
+  },
   mappings: {
     imitation: {
       lookupDistance: faker.number.int(),
