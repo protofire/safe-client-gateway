@@ -1,3 +1,4 @@
+import { formatUnits } from 'viem';
 import { z } from 'zod';
 import { PaginationData } from '@/routes/common/pagination/pagination.data';
 import { ExecutionInfoType } from '@/modules/transactions/routes/entities/execution-info.entity';
@@ -70,18 +71,23 @@ function oneLine(text: string): string {
     : flat;
 }
 
-/** Amounts are as the service gives them: base units, not decimals-adjusted. */
+/** Token amounts are decimals-adjusted when decimals are known, else base units. */
 function assetOf(transfer: Transfer): string {
   if (isErc20Transfer(transfer)) {
-    return `${transfer.value} ${transfer.tokenSymbol ?? transfer.tokenAddress}`;
+    const token = transfer.tokenSymbol ?? transfer.tokenAddress;
+    return typeof transfer.decimals !== 'number'
+      ? `${transfer.value} base units of ${token}`
+      : `${formatUnits(BigInt(transfer.value), transfer.decimals)} ${token}`;
   }
   if (isErc721Transfer(transfer)) {
     return `${transfer.tokenSymbol ?? transfer.tokenAddress} #${transfer.tokenId}`;
   }
-  return `${(transfer as NativeCoinTransfer).value ?? 'unknown amount'} native`;
+  const { value } = transfer as NativeCoinTransfer;
+  return value === null
+    ? 'an unknown amount of native coin'
+    : `${value} wei of native coin`;
 }
 
-/** Amounts are as the service gives them: base units, not decimals-adjusted. */
 function describeTransfer(info: TransferTransactionInfo): string {
   const { transferInfo, direction, sender, recipient } = info;
   const counterparty = {

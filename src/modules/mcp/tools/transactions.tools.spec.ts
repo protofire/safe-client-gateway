@@ -182,6 +182,7 @@ describe('transaction tools', () => {
                 tokenAddress: recipient,
                 value: '1500000',
                 tokenSymbol: 'USDC',
+                decimals: 6,
               }),
             }),
           },
@@ -195,7 +196,7 @@ describe('transaction tools', () => {
       );
 
       expect(payload.results[0].description).toBe(
-        `INCOMING transfer of 1500000 USDC from ${sender}`,
+        `INCOMING transfer of 1.5 USDC from ${sender}`,
       );
     });
 
@@ -219,7 +220,7 @@ describe('transaction tools', () => {
       });
 
       expect(payload.description).toBe(
-        `OUTGOING transfer of 1000000000000000000 native to ${recipient}`,
+        `OUTGOING transfer of 1000000000000000000 wei of native coin to ${recipient}`,
       );
     });
   });
