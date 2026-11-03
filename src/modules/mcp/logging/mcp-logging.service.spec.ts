@@ -29,6 +29,7 @@ describe('redact', () => {
     [LogType.ExternalRequestCacheHit],
     [LogType.ExternalRequestCacheMiss],
     [LogType.ExternalRequestCacheError],
+    ['cache_write'],
   ])('drops %s', (type) => {
     expect(redact({ type, key: `1_safe_${hex}` })).toBeUndefined();
   });
@@ -49,6 +50,20 @@ describe('redact', () => {
       target_host: 'tx.test',
       request_status: 500,
     });
+  });
+
+  it('keeps an Error as name, message and stack, scrubbed', () => {
+    const error = new TypeError(`bad safe ${hex}`);
+
+    expect(redact({ message: 'failed', error })).toEqual({
+      message: 'failed',
+      error: {
+        name: 'TypeError',
+        message: 'bad safe [redacted]',
+        stack: expect.not.stringContaining(hex),
+      },
+    });
+    expect(redact(error)).toMatchObject({ name: 'TypeError' });
   });
 
   it('scrubs addresses and URLs anywhere else', () => {

@@ -9,6 +9,8 @@ const DROPPED_TYPES = new Set<unknown>([
   LogType.ExternalRequestCacheError,
   LogType.ExternalRequestCacheHit,
   LogType.ExternalRequestCacheMiss,
+  // CacheFirstDataSource logs the whole cached safe or page
+  'cache_write',
 ]);
 const LOCATOR_KEYS = new Set(['field', 'key', 'path', 'url']);
 const URL_OR_HEX = /https?:\/\/\S+|0x[0-9a-f]{40,}/gi;
@@ -17,6 +19,14 @@ const REDACTED = '[redacted]';
 function scrub(value: unknown): unknown {
   if (typeof value === 'string') {
     return value.replace(URL_OR_HEX, REDACTED);
+  }
+  if (value instanceof Error) {
+    // Its own properties are not enumerable: it would log as {}
+    return {
+      name: value.name,
+      message: scrub(value.message),
+      stack: scrub(value.stack),
+    };
   }
   if (Array.isArray(value)) {
     return value.map(scrub);
@@ -36,7 +46,11 @@ function scrub(value: unknown): unknown {
  * tool arguments are never logged. Failed upstream requests stay visible.
  */
 export function redact(message: unknown): unknown {
-  if (typeof message !== 'object' || message === null) {
+  if (
+    typeof message !== 'object' ||
+    message === null ||
+    message instanceof Error
+  ) {
     return scrub(message);
   }
   const entry = message as Record<string, unknown>;
