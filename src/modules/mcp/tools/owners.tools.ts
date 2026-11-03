@@ -5,9 +5,9 @@ import {
   type McpTool,
 } from '@/modules/mcp/tools/define-tool';
 import type { McpFanoutLimit } from '@/modules/mcp/mcp-fanout-limit';
+import { chainIdField } from '@/modules/mcp/tools/summaries';
 import type { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
 import { AddressSchema } from '@/validation/entities/schemas/address.schema';
-import { NumericStringSchema } from '@/validation/entities/schemas/numeric-string.schema';
 
 export const MAX_CHAIN_IDS = 5;
 export const MAX_MULTISIGS = 100;
@@ -24,7 +24,7 @@ export function ownersTools(
       inputSchema: z.object({
         ownerAddress: AddressSchema.describe('Address of the owner'),
         chainIds: z
-          .array(NumericStringSchema)
+          .array(chainIdField)
           .min(1)
           .max(MAX_CHAIN_IDS)
           .optional()

@@ -5,9 +5,11 @@ import {
   READ_ONLY_ANNOTATIONS,
   type McpTool,
 } from '@/modules/mcp/tools/define-tool';
-import { PAGE_SIZE } from '@/modules/mcp/tools/summaries';
-import { AddressSchema } from '@/validation/entities/schemas/address.schema';
-import { NumericStringSchema } from '@/validation/entities/schemas/numeric-string.schema';
+import {
+  chainIdField,
+  PAGE_SIZE,
+  safeAddressField,
+} from '@/modules/mcp/tools/summaries';
 
 const SCOPE_NOTE =
   'Lists the delegates registered for this multisig account only. Delegates registered for an owner across all accounts are not included.';
@@ -21,10 +23,8 @@ export function proposersTools(
       title: 'List proposers',
       description: `Lists who may propose transactions to a multisig account without being an owner: delegate, delegator and label. Only delegates scoped to this account are listed; at most ${PAGE_SIZE}, truncated says when more exist. Prerequisite: chainId from list_chains and the account address. Next: get_safe for the owners, list_queued_transactions for what was proposed.`,
       inputSchema: z.object({
-        chainId: NumericStringSchema.describe(
-          'Chain id as a decimal string, from list_chains',
-        ),
-        safeAddress: AddressSchema.describe('Address of the multisig account'),
+        chainId: chainIdField,
+        safeAddress: safeAddressField,
       }),
       annotations: READ_ONLY_ANNOTATIONS,
       useful: true,

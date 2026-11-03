@@ -6,9 +6,8 @@ import {
   READ_ONLY_ANNOTATIONS,
   type McpTool,
 } from '@/modules/mcp/tools/define-tool';
+import { chainIdField, safeAddressField } from '@/modules/mcp/tools/summaries';
 import type { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
-import { AddressSchema } from '@/validation/entities/schemas/address.schema';
-import { NumericStringSchema } from '@/validation/entities/schemas/numeric-string.schema';
 
 function riskNotes(args: {
   owners: Array<string>;
@@ -46,10 +45,8 @@ export function safeTools(safeRepository: ISafeRepository): Array<McpTool> {
       description:
         'Reads a multisig account: owners, threshold, nonce, version, modules, guard, fallback handler and riskNotes. Prerequisite: a chainId from list_chains and the account address. Next: get_balances for its assets, list_queued_transactions for pending transactions, list_proposers for who can propose.',
       inputSchema: z.object({
-        chainId: NumericStringSchema.describe(
-          'Chain id as a decimal string, from list_chains',
-        ),
-        safeAddress: AddressSchema.describe('Address of the multisig account'),
+        chainId: chainIdField,
+        safeAddress: safeAddressField,
       }),
       annotations: READ_ONLY_ANNOTATIONS,
       useful: true,

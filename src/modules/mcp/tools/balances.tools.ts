@@ -5,8 +5,7 @@ import {
   READ_ONLY_ANNOTATIONS,
   type McpTool,
 } from '@/modules/mcp/tools/define-tool';
-import { AddressSchema } from '@/validation/entities/schemas/address.schema';
-import { NumericStringSchema } from '@/validation/entities/schemas/numeric-string.schema';
+import { chainIdField, safeAddressField } from '@/modules/mcp/tools/summaries';
 
 export const MAX_BALANCES = 50;
 const FIAT_CODE = 'USD';
@@ -20,10 +19,8 @@ export function balancesTools(
       title: 'Get balances',
       description: `Reads the token balances of a multisig account in ${FIAT_CODE}, the ${MAX_BALANCES} largest by fiat value, spam excluded; truncated says when more exist. Prerequisite: chainId from list_chains and the account address. Next: list_queued_transactions for pending transfers, get_safe for owners and threshold.`,
       inputSchema: z.object({
-        chainId: NumericStringSchema.describe(
-          'Chain id as a decimal string, from list_chains',
-        ),
-        safeAddress: AddressSchema.describe('Address of the multisig account'),
+        chainId: chainIdField,
+        safeAddress: safeAddressField,
       }),
       annotations: READ_ONLY_ANNOTATIONS,
       useful: true,
