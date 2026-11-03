@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
-# Local cgw-mcp run: Redis from docker-compose, built entry under the .nvmrc Node.
+# Local cgw-mcp run: Redis from docker-compose, built entry; use the Node version in .nvmrc.
 # Placeholders only (they boot the app; they are not real credentials). Needs `yarn build` first.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-source ~/.nvm/nvm.sh
-nvm use "$(cat .nvmrc)" >/dev/null
 
 docker compose up -d redis
 
