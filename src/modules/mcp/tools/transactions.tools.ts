@@ -1,5 +1,4 @@
 import { HttpException } from '@nestjs/common';
-import { isAddress } from 'viem';
 import { z } from 'zod';
 import type { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
 import type { IDataDecoderRepository } from '@/modules/data-decoder/domain/v2/data-decoder.repository.interface';
@@ -16,6 +15,7 @@ import {
   nextCursor,
   pageRequest,
   safeAddressField,
+  safeAddressOfTxId,
   safeTxHashOf,
   summarizeTransaction,
 } from '@/modules/mcp/tools/summaries';
@@ -237,10 +237,11 @@ export function transactionsTools(
       annotations: READ_ONLY_ANNOTATIONS,
       useful: true,
       handler: async ({ chainId, txId }) => {
-        const [type, safeAddress] = txId.split(TRANSACTION_ID_SEPARATOR);
+        const [type] = txId.split(TRANSACTION_ID_SEPARATOR);
+        const safeAddress = safeAddressOfTxId(txId);
         // getById would read an unknown prefix as a safeTxHash
         if (type === CreationTransactionMapper.TRANSACTION_TYPE) {
-          if (!isAddress(safeAddress)) {
+          if (!safeAddress) {
             throw new McpToolError('INVALID_INPUT', INVALID_TX_ID);
           }
           return creationOf(

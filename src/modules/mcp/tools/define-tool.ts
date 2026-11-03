@@ -4,6 +4,7 @@ import type { Address } from 'viem';
 import { ZodError, type z } from 'zod';
 import type { IBlocklistService } from '@/config/entities/blocklist.interface';
 import { LogType } from '@/domain/common/entities/log-type.entity';
+import { safeAddressOfTxId } from '@/modules/mcp/tools/summaries';
 import { DataSourceError } from '@/domain/errors/data-source.error';
 import { ILoggingService, LoggingService } from '@/logging/logging.interface';
 
@@ -197,17 +198,22 @@ export function defineTool<I>(definition: ToolDefinition<I>): McpTool {
         );
       }
 
-      const { chainId = null, safeAddress } = parsed.data as {
+      const {
+        chainId = null,
+        safeAddress,
+        txId,
+      } = parsed.data as {
         chainId?: string;
         safeAddress?: Address;
+        txId?: string;
       };
+      // Every CGW transaction id embeds the account, so it is checked too
+      const account =
+        safeAddress ?? (txId === undefined ? null : safeAddressOfTxId(txId));
       let result: { results?: unknown };
       try {
         // Same rule as BlocklistGuard on REST routes keyed on safeAddress
-        if (
-          safeAddress !== undefined &&
-          context?.blocklist?.getBlocklist().includes(safeAddress)
-        ) {
+        if (account && context?.blocklist?.getBlocklist().includes(account)) {
           events.onBlocklistHit(definition.name);
           throw new McpToolError(
             'FORBIDDEN',

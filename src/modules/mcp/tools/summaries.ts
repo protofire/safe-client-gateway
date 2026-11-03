@@ -1,4 +1,4 @@
-import { formatUnits } from 'viem';
+import { type Address, formatUnits, getAddress, isAddress } from 'viem';
 import { z } from 'zod';
 import { PaginationData } from '@/routes/common/pagination/pagination.data';
 import { ExecutionInfoType } from '@/modules/transactions/routes/entities/execution-info.entity';
@@ -75,7 +75,9 @@ function oneLine(text: string): string {
 function assetOf(transfer: Transfer): string {
   if (isErc20Transfer(transfer)) {
     const token = transfer.tokenSymbol ?? transfer.tokenAddress;
-    return typeof transfer.decimals !== 'number'
+    // The schema allows any string; only an integer can be formatted
+    return typeof transfer.decimals !== 'number' ||
+      !/^\d+$/.test(transfer.value)
       ? `${transfer.value} base units of ${token}`
       : `${formatUnits(BigInt(transfer.value), transfer.decimals)} ${token}`;
   }
@@ -117,6 +119,14 @@ export function describeTransaction(txInfo: Transaction['txInfo']): string {
 export function safeTxHashOf(id: string): string | null {
   const [type, , hash] = id.split(TRANSACTION_ID_SEPARATOR);
   return type === 'multisig' ? (hash ?? null) : null;
+}
+
+/** The checksummed account address in a CGW id, or null for a bare hash. */
+export function safeAddressOfTxId(id: string): Address | null {
+  const [, address] = id.split(TRANSACTION_ID_SEPARATOR);
+  return address !== undefined && isAddress(address)
+    ? getAddress(address)
+    : null;
 }
 
 export function summarizeTransaction(transaction: Transaction): {

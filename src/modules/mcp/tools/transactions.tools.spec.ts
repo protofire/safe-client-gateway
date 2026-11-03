@@ -200,6 +200,33 @@ describe('transaction tools', () => {
       );
     });
 
+    it('keeps base units when a token amount is not an integer', async () => {
+      service.getById.mockResolvedValue({
+        txId: `transfer_${safeAddress}_i2`,
+        txStatus: 'SUCCESS',
+        txHash: hash,
+        executedAt: 1,
+        txInfo: transferInfo('INCOMING', {
+          type: 'ERC20',
+          tokenAddress: recipient,
+          value: '1.5',
+          tokenSymbol: 'USDC',
+          decimals: 6,
+        }),
+        txData: null,
+        detailedExecutionInfo: null,
+      });
+
+      const { payload } = await callTool(tools, 'get_transaction', {
+        chainId: '1',
+        txId: `transfer_${safeAddress}_i2`,
+      });
+
+      expect(payload.description).toBe(
+        `INCOMING transfer of 1.5 base units of USDC from ${sender}`,
+      );
+    });
+
     it('describes an outgoing native transfer in get_transaction', async () => {
       service.getById.mockResolvedValue({
         txId: `transfer_${safeAddress}_i1`,

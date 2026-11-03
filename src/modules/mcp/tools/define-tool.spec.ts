@@ -163,6 +163,27 @@ describe('defineTool', () => {
       );
     });
 
+    it('refuses a transaction id of a blocklisted account', async () => {
+      const txTool = defineTool<{ chainId: string; txId: string }>({
+        name: 'read_tx',
+        title: 'Read tx',
+        description: 'Reads a transaction.',
+        inputSchema: z.object({ chainId: z.string(), txId: z.string() }),
+        annotations: READ_ONLY_ANNOTATIONS,
+        useful: true,
+        handler,
+      });
+
+      const result = await txTool.call(
+        { chainId: '1', txId: `creation_${blocked.toLowerCase()}` },
+        events,
+        { blocklist },
+      );
+
+      expect(result.isError).toBe(true);
+      expect(handler).not.toHaveBeenCalled();
+    });
+
     it('serves an address that is not blocklisted', async () => {
       handler.mockResolvedValue({});
 
