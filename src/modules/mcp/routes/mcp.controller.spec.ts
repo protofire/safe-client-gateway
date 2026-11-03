@@ -6,6 +6,7 @@ import request from 'supertest';
 import { getAddress, zeroAddress } from 'viem';
 import { McpAppModule } from '@/mcp-app.module';
 import configuration from '@/config/entities/__tests__/configuration';
+import { IBlocklistService } from '@/config/entities/blocklist.interface';
 import { BlocklistModule } from '@/config/entities/blocklist.module';
 import { TestBlocklistModule } from '@/config/entities/__tests__/test.blocklist.module';
 import { CacheModule } from '@/datasources/cache/cache.module';
@@ -257,6 +258,30 @@ describe('McpController', () => {
     }
   });
 
+  it('rejects a JSON-RPC batch before any tool runs', async () => {
+    const call = {
+      jsonrpc: '2.0',
+      method: 'tools/call',
+      params: { name: 'list_chains', arguments: {} },
+    };
+
+    const response = await request(app.getHttpServer())
+      .post('/mcp')
+      .set('Accept', 'application/json, text/event-stream')
+      .send([
+        { ...call, id: 1 },
+        { ...call, id: 2 },
+      ])
+      .expect(400);
+
+    expect(response.body).toEqual({
+      jsonrpc: '2.0',
+      id: null,
+      error: { code: -32600, message: 'Batch requests are not supported' },
+    });
+    expect(mockGet).not.toHaveBeenCalled();
+  });
+
   it('maps a tx-service 404 to NOT_FOUND with isError', async () => {
     const address = getAddress(faker.finance.ethereumAddress());
     respondWith({
@@ -274,6 +299,22 @@ describe('McpController', () => {
 
     expect(isError).toBe(true);
     expect(payload.code).toBe('NOT_FOUND');
+  });
+
+  it('refuses a blocklisted account with FORBIDDEN, without upstream calls', async () => {
+    const address = getAddress(faker.finance.ethereumAddress());
+    jest
+      .spyOn(app.get<IBlocklistService>(IBlocklistService), 'getBlocklist')
+      .mockReturnValue([address]);
+
+    const { isError, payload } = await callTool('get_safe', {
+      chainId: chain.chainId,
+      safeAddress: address,
+    });
+
+    expect(isError).toBe(true);
+    expect(payload.code).toBe('FORBIDDEN');
+    expect(mockGet).not.toHaveBeenCalled();
   });
 
   it('maps a zod failure to INVALID_INPUT', async () => {

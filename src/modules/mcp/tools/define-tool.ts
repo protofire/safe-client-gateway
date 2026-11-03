@@ -1,6 +1,9 @@
 import { HttpException, Inject, Injectable } from '@nestjs/common';
 import type { CallToolResult } from '@modelcontextprotocol/server';
+import type { Address } from 'viem';
 import { ZodError, type z } from 'zod';
+import type { IBlocklistService } from '@/config/entities/blocklist.interface';
+import { LogType } from '@/domain/common/entities/log-type.entity';
 import { DataSourceError } from '@/domain/errors/data-source.error';
 import { ILoggingService, LoggingService } from '@/logging/logging.interface';
 
@@ -16,6 +19,7 @@ export const READ_ONLY_ANNOTATIONS = {
 export type McpErrorCode =
   | 'INVALID_INPUT'
   | 'NOT_FOUND'
+  | 'FORBIDDEN'
   | 'RATE_LIMITED'
   | 'UPSTREAM_ERROR'
   | 'INTERNAL_ERROR';
@@ -41,7 +45,10 @@ export type McpToolCall = {
 };
 
 /** What the transport knows about the caller of one tool call. */
-export type McpCallContext = { clientName?: string };
+export type McpCallContext = {
+  clientName?: string;
+  blocklist?: Pick<IBlocklistService, 'getBlocklist'>;
+};
 
 @Injectable()
 export class McpToolEvents {
@@ -58,6 +65,11 @@ export class McpToolEvents {
       tool,
       error: error instanceof Error ? error.name : typeof error,
     });
+  }
+
+  onBlocklistHit(tool: string): void {
+    // Unlike BlocklistGuard: no address and no IP in MCP logs
+    this.loggingService.warn({ type: LogType.BlocklistHit, tool });
   }
 }
 
@@ -165,7 +177,7 @@ export function defineTool<I>(definition: ToolDefinition<I>): McpTool {
             latencyMs: performance.now() - startedAt,
             resultCount,
             useful: definition.useful,
-            ...context,
+            clientName: context?.clientName,
           });
         } catch (error) {
           // Reporting never changes what the client gets
@@ -185,9 +197,23 @@ export function defineTool<I>(definition: ToolDefinition<I>): McpTool {
         );
       }
 
-      const { chainId = null } = parsed.data as { chainId?: string };
+      const { chainId = null, safeAddress } = parsed.data as {
+        chainId?: string;
+        safeAddress?: Address;
+      };
       let result: { results?: unknown };
       try {
+        // Same rule as BlocklistGuard on REST routes keyed on safeAddress
+        if (
+          safeAddress !== undefined &&
+          context?.blocklist?.getBlocklist().includes(safeAddress)
+        ) {
+          events.onBlocklistHit(definition.name);
+          throw new McpToolError(
+            'FORBIDDEN',
+            'Access to this account is restricted.',
+          );
+        }
         result = (await handler(parsed.data)) as typeof result;
       } catch (error) {
         const toolError = toToolError(error);

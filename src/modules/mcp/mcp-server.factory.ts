@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { CLIENT_INFO_META_KEY, McpServer } from '@modelcontextprotocol/server';
 import { IConfigurationService } from '@/config/configuration.service.interface';
+import { IBlocklistService } from '@/config/entities/blocklist.interface';
 import { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
 import { BalancesService } from '@/modules/balances/routes/balances.service';
 import { McpFanoutLimit } from '@/modules/mcp/mcp-fanout-limit';
@@ -34,6 +35,8 @@ export class McpServerFactory {
     delegatesRepository: IDelegatesV2Repository,
     private readonly events: McpToolEvents,
     fanoutLimit: McpFanoutLimit,
+    @Inject(IBlocklistService)
+    private readonly blocklistService: IBlocklistService,
   ) {
     this.serverName = configurationService.getOrThrow('mcp.serverName');
     this.version = configurationService.getOrThrow('about.version');
@@ -73,7 +76,10 @@ export class McpServerFactory {
             { name?: string } | undefined
           >;
           const clientInfo = envelope[CLIENT_INFO_META_KEY];
-          return tool.call(args, this.events, { clientName: clientInfo?.name });
+          return tool.call(args, this.events, {
+            clientName: clientInfo?.name,
+            blocklist: this.blocklistService,
+          });
         },
       );
     }

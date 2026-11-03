@@ -1,5 +1,8 @@
+import { faker } from '@faker-js/faker';
 import { z } from 'zod';
 import { NotFoundException } from '@nestjs/common';
+import { getAddress, type Address } from 'viem';
+import { LogType } from '@/domain/common/entities/log-type.entity';
 import { DataSourceError } from '@/domain/errors/data-source.error';
 import type { ILoggingService } from '@/logging/logging.interface';
 import {
@@ -8,9 +11,13 @@ import {
   McpToolEvents,
   READ_ONLY_ANNOTATIONS,
 } from '@/modules/mcp/tools/define-tool';
+import { AddressSchema } from '@/validation/entities/schemas/address.schema';
 
 describe('defineTool', () => {
-  const logging = { error: jest.fn() } as unknown as ILoggingService;
+  const logging = {
+    error: jest.fn(),
+    warn: jest.fn(),
+  } as unknown as ILoggingService;
   const events = new McpToolEvents(logging);
   const onCall = jest.spyOn(events, 'onCall');
   const handler = jest.fn();
@@ -115,6 +122,62 @@ describe('defineTool', () => {
     expect(result.isError).toBeUndefined();
     expect(onCall).toHaveBeenCalledTimes(1);
     expect(logging.error).toHaveBeenCalledTimes(1);
+  });
+
+  describe('blocklist', () => {
+    const blocked = getAddress(faker.finance.ethereumAddress());
+    const safeTool = defineTool<{ chainId: string; safeAddress: Address }>({
+      name: 'read_safe',
+      title: 'Read safe',
+      description: 'Reads a safe.',
+      inputSchema: z.object({
+        chainId: z.string(),
+        safeAddress: AddressSchema,
+      }),
+      annotations: READ_ONLY_ANNOTATIONS,
+      useful: true,
+      handler,
+    });
+    const blocklist = { getBlocklist: (): Array<Address> => [blocked] };
+
+    it('refuses a blocklisted safeAddress and logs neither address nor IP', async () => {
+      const result = await safeTool.call(
+        { chainId: '1', safeAddress: blocked.toLowerCase() },
+        events,
+        { blocklist },
+      );
+      const [{ text }] = result.content as Array<{ text: string }>;
+
+      expect(result.isError).toBe(true);
+      expect(JSON.parse(text)).toEqual({
+        code: 'FORBIDDEN',
+        message: 'Access to this account is restricted.',
+      });
+      expect(handler).not.toHaveBeenCalled();
+      expect(logging.warn).toHaveBeenCalledWith({
+        type: LogType.BlocklistHit,
+        tool: 'read_safe',
+      });
+      expect(onCall).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: 'FORBIDDEN', chainId: null }),
+      );
+    });
+
+    it('serves an address that is not blocklisted', async () => {
+      handler.mockResolvedValue({});
+
+      const result = await safeTool.call(
+        {
+          chainId: '1',
+          safeAddress: getAddress(faker.finance.ethereumAddress()),
+        },
+        events,
+        { blocklist },
+      );
+
+      expect(result.isError).toBeUndefined();
+      expect(handler).toHaveBeenCalled();
+    });
   });
 
   it('hides an unexpected error and logs its name only', async () => {
