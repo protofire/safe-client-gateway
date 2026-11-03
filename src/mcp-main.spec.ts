@@ -27,27 +27,26 @@ import { McpLoggingModule } from '@/modules/mcp/logging/mcp-logging.module';
 import { configureMcpApp } from '@/mcp-main';
 
 describe('configureMcpApp', () => {
-  const originalHops = process.env.MCP_TRUST_PROXY_HOPS;
+  let hops: string | number;
   const app = {
     enableShutdownHooks: jest.fn(),
     use: jest.fn(),
     set: jest.fn(),
+    get: jest.fn(),
   };
 
   beforeEach(() => {
     jest.resetAllMocks();
-    delete process.env.MCP_TRUST_PROXY_HOPS;
+    hops = '1';
+    app.get.mockReturnValue({
+      getOrThrow: (key: string) => {
+        expect(key).toBe('mcp.trustProxyHops');
+        return hops;
+      },
+    });
   });
 
-  afterAll(() => {
-    if (originalHops === undefined) {
-      delete process.env.MCP_TRUST_PROXY_HOPS;
-    } else {
-      process.env.MCP_TRUST_PROXY_HOPS = originalHops;
-    }
-  });
-
-  it('trusts one hop by default and enables shutdown hooks', () => {
+  it('trusts the default hop and enables shutdown hooks', () => {
     configureMcpApp(app as unknown as NestExpressApplication);
 
     expect(app.set).toHaveBeenCalledWith('trust proxy', 1);
@@ -57,8 +56,9 @@ describe('configureMcpApp', () => {
   it.each([
     ['0', 0],
     ['2', 2],
+    [3, 3],
   ])('trusts the configured hop count %s', (value, expected) => {
-    process.env.MCP_TRUST_PROXY_HOPS = value;
+    hops = value;
 
     configureMcpApp(app as unknown as NestExpressApplication);
 
@@ -68,7 +68,7 @@ describe('configureMcpApp', () => {
   it.each(['abc', '-1', '1.5', '', 'true', ' 1', '0x1'])(
     'rejects %j',
     (value) => {
-      process.env.MCP_TRUST_PROXY_HOPS = value;
+      hops = value;
 
       expect(() =>
         configureMcpApp(app as unknown as NestExpressApplication),
@@ -115,7 +115,6 @@ describe('configureMcpApp over real HTTP', () => {
     jest.spyOn(console, 'debug').mockImplementation();
     jest.spyOn(console, 'info').mockImplementation();
     jest.spyOn(console, 'warn').mockImplementation();
-    delete process.env.MCP_TRUST_PROXY_HOPS;
     await start();
   });
 

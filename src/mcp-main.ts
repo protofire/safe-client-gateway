@@ -26,7 +26,11 @@ function allowOnlyMcpPaths(
 }
 
 export function configureMcpApp(app: NestExpressApplication): void {
-  const hops = process.env.MCP_TRUST_PROXY_HOPS ?? '1';
+  const hops = String(
+    app
+      .get<IConfigurationService>(IConfigurationService)
+      .getOrThrow<string | number>('mcp.trustProxyHops'),
+  );
   // NaN would disable proxy trust: every caller would share one rate-limit bucket
   if (!/^\d+$/.test(hops)) {
     throw new Error(
