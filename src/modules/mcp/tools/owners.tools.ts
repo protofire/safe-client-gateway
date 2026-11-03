@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DataSourceError } from '@/domain/errors/data-source.error';
 import {
   defineTool,
   READ_ONLY_ANNOTATIONS,
@@ -34,6 +35,7 @@ export function ownersTools(
       useful: true,
       handler: async ({ ownerAddress, chainIds }) => {
         const byChain: Record<string, Array<string> | null> = {};
+        const unknownChains = new Set<string>();
         if (chainIds) {
           const unique = [...new Set(chainIds)];
           const settled = await Promise.allSettled(
@@ -44,6 +46,14 @@ export function ownersTools(
           settled.forEach((outcome, index) => {
             byChain[unique[index]] =
               outcome.status === 'fulfilled' ? outcome.value.safes : null;
+            // The repository answers a tx-service 404 with no safes: a 404 is the chain config lookup
+            if (
+              outcome.status === 'rejected' &&
+              outcome.reason instanceof DataSourceError &&
+              outcome.reason.code === 404
+            ) {
+              unknownChains.add(unique[index]);
+            }
           });
         } else {
           await fanoutLimit.check();
@@ -54,12 +64,20 @@ export function ownersTools(
         }
 
         const multisigs: Record<string, Array<string>> = {};
-        const coverage: Array<{ chainId: string; error: 'unavailable' }> = [];
+        const coverage: Array<{
+          chainId: string;
+          error: 'unavailable' | 'unknown_chain';
+        }> = [];
         let remaining = MAX_MULTISIGS;
         let truncated = false;
         for (const [chainId, safes] of Object.entries(byChain)) {
           if (safes === null) {
-            coverage.push({ chainId, error: 'unavailable' });
+            coverage.push({
+              chainId,
+              error: unknownChains.has(chainId)
+                ? 'unknown_chain'
+                : 'unavailable',
+            });
             continue;
           }
           if (safes.length > remaining) {

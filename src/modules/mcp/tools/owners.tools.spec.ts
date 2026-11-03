@@ -1,5 +1,6 @@
 import { getAddress } from 'viem';
 import { faker } from '@faker-js/faker';
+import { DataSourceError } from '@/domain/errors/data-source.error';
 import { callTool } from '@/modules/mcp/tools/__tests__/call-tool';
 import { McpFanoutLimit } from '@/modules/mcp/mcp-fanout-limit';
 import type { ClsService } from 'nestjs-cls';
@@ -60,6 +61,24 @@ describe('find_safes_by_owner', () => {
       multisigs: { '1': [safe] },
       coverage: [{ chainId: '10', error: 'unavailable' }],
     });
+  });
+
+  it('names a chain the config service does not know unknown_chain', async () => {
+    repository.getSafesByOwnerV2.mockImplementation(({ chainId }) =>
+      chainId === '1'
+        ? Promise.reject(new DataSourceError('Not found', 404))
+        : Promise.reject(new DataSourceError('Bad gateway', 502)),
+    );
+
+    const { payload } = await callTool(tools, 'find_safes_by_owner', {
+      ownerAddress,
+      chainIds: ['1', '10'],
+    });
+
+    expect(payload.coverage).toEqual([
+      { chainId: '1', error: 'unknown_chain' },
+      { chainId: '10', error: 'unavailable' },
+    ]);
   });
 
   it('rejects 6 chainIds with INVALID_INPUT', async () => {
