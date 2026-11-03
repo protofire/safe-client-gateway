@@ -184,6 +184,24 @@ describe('defineTool', () => {
       expect(handler).not.toHaveBeenCalled();
     });
 
+    it('serves the account when the blocklist cannot be read, like BlocklistGuard', async () => {
+      handler.mockResolvedValue({});
+      const unreadable = {
+        getBlocklist: (): Array<Address> => {
+          throw new Error('decryption failed');
+        },
+      };
+
+      const result = await safeTool.call(
+        { chainId: '1', safeAddress: blocked },
+        events,
+        { blocklist: unreadable },
+      );
+
+      expect(result.isError).toBeUndefined();
+      expect(handler).toHaveBeenCalled();
+    });
+
     it('serves an address that is not blocklisted', async () => {
       handler.mockResolvedValue({});
 

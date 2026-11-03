@@ -157,6 +157,18 @@ function toToolError(error: unknown): McpToolError {
   }
 }
 
+/** Like BlocklistGuard: an unreadable blocklist lets the request through. */
+function isBlocklisted(
+  account: Address,
+  blocklist: Pick<IBlocklistService, 'getBlocklist'> | undefined,
+): boolean {
+  try {
+    return blocklist?.getBlocklist().includes(account) ?? false;
+  } catch {
+    return false;
+  }
+}
+
 export function defineTool<I>(definition: ToolDefinition<I>): McpTool {
   const { inputSchema, handler, ...metadata } = definition;
 
@@ -213,7 +225,7 @@ export function defineTool<I>(definition: ToolDefinition<I>): McpTool {
       let result: { results?: unknown };
       try {
         // Same rule as BlocklistGuard on REST routes keyed on safeAddress
-        if (account && context?.blocklist?.getBlocklist().includes(account)) {
+        if (account && isBlocklisted(account, context?.blocklist)) {
           events.onBlocklistHit(definition.name);
           throw new McpToolError(
             'FORBIDDEN',
