@@ -1,6 +1,7 @@
 import { Controller, Get, Inject, UseGuards } from '@nestjs/common';
 import { ApiExcludeController } from '@nestjs/swagger';
 import { McpUsageAuthGuard } from '@/modules/mcp/routes/guards/mcp-usage-auth.guard';
+import { withTimeout } from '@/modules/mcp/with-timeout';
 import {
   McpUsageStore,
   type IMcpUsageStore,
@@ -66,22 +67,12 @@ export class McpUsageController {
     };
   }
 
-  private async readDay(date: string): Promise<McpUsageDay> {
-    let timeout: NodeJS.Timeout | undefined;
-    try {
-      // With Redis down the client queues commands offline and they never settle
-      return await Promise.race([
-        this.store.getDay(date),
-        new Promise<never>((_, reject) => {
-          timeout = setTimeout(
-            () => reject(new Error('usage read timed out')),
-            READ_TIMEOUT_MS,
-          );
-        }),
-      ]);
-    } finally {
-      clearTimeout(timeout);
-    }
+  private readDay(date: string): Promise<McpUsageDay> {
+    return withTimeout(
+      this.store.getDay(date),
+      READ_TIMEOUT_MS,
+      'usage read timed out',
+    );
   }
 
   private toReportDay(date: string, day: McpUsageDay): UsageReportDay {

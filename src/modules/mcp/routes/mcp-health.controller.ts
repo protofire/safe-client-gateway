@@ -14,6 +14,7 @@ import {
   Health,
   HealthStatus,
 } from '@/modules/health/routes/entities/health.entity';
+import { withTimeout } from '@/modules/mcp/with-timeout';
 
 const PING_TIMEOUT_MS = 2_000;
 
@@ -42,21 +43,12 @@ export class McpHealthController {
   }
 
   private async check(): Promise<Health> {
-    let timeout: NodeJS.Timeout | undefined;
     try {
-      // With Redis down the client queues the ping offline and it never settles
-      await Promise.race([
-        this.cache.ping(),
-        new Promise((_, reject) => {
-          timeout = setTimeout(reject, PING_TIMEOUT_MS);
-        }),
-      ]);
+      await withTimeout(this.cache.ping(), PING_TIMEOUT_MS, 'ping timed out');
       return new Health(HealthStatus.OK);
     } catch {
       this.loggingService.error('Cache service connection is not established');
       throw new ServiceUnavailableException(new Health(HealthStatus.KO));
-    } finally {
-      clearTimeout(timeout);
     }
   }
 }

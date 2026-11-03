@@ -9,6 +9,7 @@ import {
   type McpToolCall,
 } from '@/modules/mcp/tools/define-tool';
 import { clientLabel } from '@/modules/mcp/usage/client-label';
+import { withTimeout } from '@/modules/mcp/with-timeout';
 import {
   McpUsageStore,
   type IMcpUsageStore,
@@ -25,17 +26,6 @@ function chainOf(chainId: string | null): string {
     return 'none';
   }
   return CANONICAL_CHAIN_ID.test(chainId) ? chainId : 'unknown';
-}
-
-function withTimeout<T>(work: Promise<T>): Promise<T> {
-  let timer: NodeJS.Timeout;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout((): void => {
-      reject(new Error('usage write timed out'));
-    }, WRITE_TIMEOUT_MS);
-    timer.unref();
-  });
-  return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
 }
 
 /**
@@ -84,6 +74,8 @@ export class McpUsageService {
     // Fire and forget: Redis may be down and hang commands
     void withTimeout(
       this.write(date, field, countsClient, ip, userAgent),
+      WRITE_TIMEOUT_MS,
+      'usage write timed out',
     ).catch((error: unknown) =>
       this.loggingService.warn({
         message: 'MCP usage write failed',
