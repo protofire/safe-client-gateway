@@ -3,9 +3,28 @@ import { PaginationData } from '@/routes/common/pagination/pagination.data';
 import { ExecutionInfoType } from '@/modules/transactions/routes/entities/execution-info.entity';
 import type { MultisigExecutionInfo } from '@/modules/transactions/routes/entities/multisig-execution-info.entity';
 import type { Transaction } from '@/modules/transactions/routes/entities/transaction.entity';
+import {
+  isTransferTransactionInfo,
+  TransferDirection,
+  type TransferTransactionInfo,
+} from '@/modules/transactions/routes/entities/transfer-transaction-info.entity';
+import { isErc20Transfer } from '@/modules/transactions/routes/entities/transfers/erc20-transfer.entity';
+import { isErc721Transfer } from '@/modules/transactions/routes/entities/transfers/erc721-transfer.entity';
+import type { NativeCoinTransfer } from '@/modules/transactions/routes/entities/transfers/native-coin-transfer.entity';
+import type { Transfer } from '@/modules/transactions/routes/entities/transfers/transfer.entity';
+import { isSwapTransferTransactionInfo } from '@/modules/transactions/routes/swap-transfer-transaction-info.entity';
 import { TRANSACTION_ID_SEPARATOR } from '@/modules/transactions/routes/constants';
+import { AddressSchema } from '@/validation/entities/schemas/address.schema';
+import { NumericStringSchema } from '@/validation/entities/schemas/numeric-string.schema';
 
 export const PAGE_SIZE = 20;
+
+export const chainIdField = NumericStringSchema.describe(
+  'Chain id as a decimal string, from list_chains',
+);
+export const safeAddressField = AddressSchema.describe(
+  'Address of the multisig account',
+);
 const MAX_DESCRIPTION_LENGTH = 200;
 // The service only reads the cursor of this URL; it is never fetched
 const ROUTE_URL = 'https://mcp.invalid/';
@@ -51,12 +70,41 @@ function oneLine(text: string): string {
     : flat;
 }
 
+/** Amounts are as the service gives them: base units, not decimals-adjusted. */
+function assetOf(transfer: Transfer): string {
+  if (isErc20Transfer(transfer)) {
+    return `${transfer.value} ${transfer.tokenSymbol ?? transfer.tokenAddress}`;
+  }
+  if (isErc721Transfer(transfer)) {
+    return `${transfer.tokenSymbol ?? transfer.tokenAddress} #${transfer.tokenId}`;
+  }
+  return `${(transfer as NativeCoinTransfer).value ?? 'unknown amount'} native`;
+}
+
+/** Amounts are as the service gives them: base units, not decimals-adjusted. */
+function describeTransfer(info: TransferTransactionInfo): string {
+  const { transferInfo, direction, sender, recipient } = info;
+  const counterparty = {
+    [TransferDirection.Incoming]: `from ${sender.value}`,
+    [TransferDirection.Outgoing]: `to ${recipient.value}`,
+    [TransferDirection.Unknown]: `from ${sender.value} to ${recipient.value}`,
+  }[direction];
+  return `${direction} transfer of ${assetOf(transferInfo)} ${counterparty}`;
+}
+
 export function describeTransaction(txInfo: Transaction['txInfo']): string {
   const { type, humanDescription } = txInfo;
   const { methodName } = txInfo as { methodName?: string | null };
-  return oneLine(
-    humanDescription ?? (methodName ? `${type}: ${methodName}` : type),
-  );
+  if (humanDescription) {
+    return oneLine(humanDescription);
+  }
+  if (
+    isTransferTransactionInfo(txInfo) ||
+    isSwapTransferTransactionInfo(txInfo)
+  ) {
+    return oneLine(describeTransfer(txInfo));
+  }
+  return oneLine(methodName ? `${type}: ${methodName}` : type);
 }
 
 /** CGW ids read `<type>_<safe>_<id>`; only multisig ids end in a safeTxHash. */

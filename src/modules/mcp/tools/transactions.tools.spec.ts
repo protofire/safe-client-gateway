@@ -10,6 +10,7 @@ describe('transaction tools', () => {
     getTransactionQueue: jest.fn(),
     getTransactionHistory: jest.fn(),
     getById: jest.fn(),
+    getCreationTransaction: jest.fn(),
   };
   const decoder = { getDecodedData: jest.fn() };
   const chains = { getChain: jest.fn() };
@@ -148,6 +149,77 @@ describe('transaction tools', () => {
           onlyTrusted: true,
           showImitations: false,
         }),
+      );
+    });
+  });
+
+  describe('transfer descriptions', () => {
+    const sender = getAddress(faker.finance.ethereumAddress());
+    const recipient = getAddress(faker.finance.ethereumAddress());
+    const transferInfo = (direction: string, transfer: object): object => ({
+      type: 'Transfer',
+      humanDescription: null,
+      sender: { value: sender },
+      recipient: { value: recipient },
+      direction,
+      transferInfo: transfer,
+    });
+
+    it('describes an incoming ERC20 transfer in the history', async () => {
+      service.getTransactionHistory.mockResolvedValue({
+        count: 1,
+        next: null,
+        previous: null,
+        results: [
+          {
+            type: 'TRANSACTION',
+            conflictType: 'None',
+            transaction: transaction(`transfer_${safeAddress}_e1`, {
+              txStatus: 'SUCCESS',
+              executionInfo: null,
+              txInfo: transferInfo('INCOMING', {
+                type: 'ERC20',
+                tokenAddress: recipient,
+                value: '1500000',
+                tokenSymbol: 'USDC',
+              }),
+            }),
+          },
+        ],
+      });
+
+      const { payload } = await callTool(
+        tools,
+        'list_transaction_history',
+        args,
+      );
+
+      expect(payload.results[0].description).toBe(
+        `INCOMING transfer of 1500000 USDC from ${sender}`,
+      );
+    });
+
+    it('describes an outgoing native transfer in get_transaction', async () => {
+      service.getById.mockResolvedValue({
+        txId: `transfer_${safeAddress}_i1`,
+        txStatus: 'SUCCESS',
+        txHash: hash,
+        executedAt: 1,
+        txInfo: transferInfo('OUTGOING', {
+          type: 'NATIVE_COIN',
+          value: '1000000000000000000',
+        }),
+        txData: null,
+        detailedExecutionInfo: null,
+      });
+
+      const { payload } = await callTool(tools, 'get_transaction', {
+        chainId: '1',
+        txId: `transfer_${safeAddress}_i1`,
+      });
+
+      expect(payload.description).toBe(
+        `OUTGOING transfer of 1000000000000000000 native to ${recipient}`,
       );
     });
   });
@@ -301,6 +373,54 @@ describe('transaction tools', () => {
       });
     });
 
+    it('opens a creation id from the history as the creation transaction', async () => {
+      const creator = getAddress(faker.finance.ethereumAddress());
+      const factory = getAddress(faker.finance.ethereumAddress());
+      const singleton = getAddress(faker.finance.ethereumAddress());
+      const created = new Date('2026-01-01T00:00:00.000Z');
+      service.getCreationTransaction.mockResolvedValue({
+        created,
+        creator,
+        transactionHash: hash,
+        factoryAddress: factory,
+        masterCopy: singleton,
+        setupData: '0x',
+        saltNonce: '0',
+        dataDecoded: null,
+      });
+      const txId = `creation_${safeAddress}`;
+
+      const { payload } = await callTool(tools, 'get_transaction', {
+        chainId: '1',
+        txId,
+      });
+
+      expect(service.getCreationTransaction).toHaveBeenCalledWith({
+        chainId: '1',
+        safeAddress,
+      });
+      expect(service.getById).not.toHaveBeenCalled();
+      expect(payload).toMatchObject({
+        id: txId,
+        creator,
+        transactionHash: hash,
+        factory,
+        singleton,
+        created: created.toISOString(),
+      });
+    });
+
+    it('rejects an id that is not a transaction id shape, without a request', async () => {
+      const { isError, payload } = await callTool(tools, 'get_transaction', {
+        chainId: '1',
+        txId: '../../v1/safes',
+      });
+
+      expect(isError).toBe(true);
+      expect(payload.code).toBe('INVALID_INPUT');
+      expect(service.getById).not.toHaveBeenCalled();
+    });
+
     it('maps a malformed id to INVALID_INPUT', async () => {
       service.getById.mockRejectedValue(
         new BadRequestException('Invalid transaction ID'),
@@ -339,6 +459,33 @@ describe('transaction tools', () => {
         method: 'transfer',
         accuracy: 'FULL_MATCH',
       });
+    });
+
+    it('reduces a large decoded batch and keeps the accuracy', async () => {
+      const calls = Array.from({ length: 40 }, () => ({
+        operation: 0,
+        to: safeAddress,
+        value: '0',
+        dataDecoded: { method: 'transfer', parameters: [] },
+        data: `0x${'ab'.repeat(200)}`,
+      }));
+      decoder.getDecodedData.mockResolvedValue({
+        method: 'multiSend',
+        parameters: [{ name: 'transactions', valueDecoded: calls }],
+        accuracy: 'FULL_MATCH',
+      });
+
+      const { payload } = await callTool(tools, 'decode_calldata', {
+        chainId: '1',
+        to: safeAddress,
+        data: '0x8d80ff0a',
+      });
+
+      expect(payload.truncated).toBe(true);
+      expect(payload.accuracy).toBe('FULL_MATCH');
+      expect(payload.totalCalls).toBe(40);
+      expect(payload.calls).toHaveLength(20);
+      expect(payload).not.toHaveProperty('parameters');
     });
 
     it('is NOT_FOUND for a chain that does not resolve, without decoding', async () => {

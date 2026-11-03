@@ -1,4 +1,5 @@
 import { HttpException } from '@nestjs/common';
+import { isAddress } from 'viem';
 import { z } from 'zod';
 import type { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
 import type { IDataDecoderRepository } from '@/modules/data-decoder/domain/v2/data-decoder.repository.interface';
@@ -9,13 +10,16 @@ import {
   type McpTool,
 } from '@/modules/mcp/tools/define-tool';
 import {
+  chainIdField,
   CursorSchema,
   describeTransaction,
   nextCursor,
   pageRequest,
+  safeAddressField,
   safeTxHashOf,
   summarizeTransaction,
 } from '@/modules/mcp/tools/summaries';
+import type { CreationTransaction } from '@/modules/transactions/routes/entities/creation-transaction.entity';
 import { Operation } from '@/modules/safe/domain/entities/operation.entity';
 import { QueuedItemType } from '@/modules/transactions/routes/entities/queued-item.entity';
 import type { TransactionQueuedItem } from '@/modules/transactions/routes/entities/queued-items/transaction-queued-item.entity';
@@ -23,17 +27,16 @@ import type { TransactionItem } from '@/modules/transactions/routes/entities/tra
 import { ExecutionDetailsType } from '@/modules/transactions/routes/entities/transaction-details/execution-details.entity';
 import type { MultisigExecutionDetails } from '@/modules/transactions/routes/entities/transaction-details/multisig-execution-details.entity';
 import type { TransactionDetails } from '@/modules/transactions/routes/entities/transaction-details/transaction-details.entity';
+import { CreationTransactionMapper } from '@/modules/transactions/routes/mappers/creation-transaction/creation-transaction.mapper';
+import { TRANSACTION_ID_SEPARATOR } from '@/modules/transactions/routes/constants';
 import type { TransactionsService } from '@/modules/transactions/routes/transactions.service';
 import { AddressSchema } from '@/validation/entities/schemas/address.schema';
 import { HexSchema } from '@/validation/entities/schemas/hex.schema';
-import { NumericStringSchema } from '@/validation/entities/schemas/numeric-string.schema';
 
-const chainIdField = NumericStringSchema.describe(
-  'Chain id as a decimal string, from list_chains',
-);
-const safeAddressField = AddressSchema.describe(
-  'Address of the multisig account',
-);
+// Ids are `<type>_<safe>_<id>` or a bare hash; the tx-service may join trace addresses with commas
+const TX_ID = /^[\w,-]+$/;
+const INVALID_TX_ID =
+  'Invalid transaction id. Use an id or safeTxHash from list_queued_transactions or list_transaction_history.';
 
 const listInput = z.object({
   chainId: chainIdField,
@@ -98,6 +101,21 @@ function reduceDecoded(
   };
 }
 
+function creationOf(
+  txId: string,
+  creation: CreationTransaction,
+): Record<string, unknown> {
+  return {
+    id: txId,
+    description: 'Creation of the multisig account',
+    creator: creation.creator,
+    transactionHash: creation.transactionHash,
+    factory: creation.factoryAddress,
+    singleton: creation.masterCopy,
+    created: creation.created,
+  };
+}
+
 function detailsOf(details: TransactionDetails): Record<string, unknown> {
   const { txData } = details;
   const multisig =
@@ -140,7 +158,10 @@ function detailsOf(details: TransactionDetails): Record<string, unknown> {
 export function transactionsTools(
   transactionsService: Pick<
     TransactionsService,
-    'getTransactionQueue' | 'getTransactionHistory' | 'getById'
+    | 'getTransactionQueue'
+    | 'getTransactionHistory'
+    | 'getById'
+    | 'getCreationTransaction'
   >,
   dataDecoderRepository: Pick<IDataDecoderRepository, 'getDecodedData'>,
   chainsRepository: Pick<IChainsRepository, 'getChain'>,
@@ -176,7 +197,7 @@ export function transactionsTools(
       name: 'list_transaction_history',
       title: 'List transaction history',
       description:
-        'Lists the executed transactions and incoming transfers of a multisig account, newest first, at most 20 per page. Incoming transfers have an id but no safeTxHash. Pass next as cursor for the following page. Prerequisite: chainId from list_chains and the account address. Next: get_transaction with an id for the details.',
+        'Lists the executed transactions and incoming transfers of a multisig account, newest first. A page holds up to 20 transactions; an executed transaction with several transfers may add more entries. Incoming transfers have an id but no safeTxHash. Pass next as cursor for the following page. Prerequisite: chainId from list_chains and the account address. Next: get_transaction with an id for the details.',
       inputSchema: listInput,
       annotations: READ_ONLY_ANNOTATIONS,
       useful: true,
@@ -210,21 +231,33 @@ export function transactionsTools(
           .string()
           .min(1)
           .max(200)
+          .regex(TX_ID, INVALID_TX_ID)
           .describe('A transaction id, or a bare safeTxHash'),
       }),
       annotations: READ_ONLY_ANNOTATIONS,
       useful: true,
       handler: async ({ chainId, txId }) => {
+        const [type, safeAddress] = txId.split(TRANSACTION_ID_SEPARATOR);
+        // getById would read an unknown prefix as a safeTxHash
+        if (type === CreationTransactionMapper.TRANSACTION_TYPE) {
+          if (!isAddress(safeAddress)) {
+            throw new McpToolError('INVALID_INPUT', INVALID_TX_ID);
+          }
+          return creationOf(
+            txId,
+            await transactionsService.getCreationTransaction({
+              chainId,
+              safeAddress,
+            }),
+          );
+        }
         try {
           return detailsOf(
             await transactionsService.getById({ chainId, txId }),
           );
         } catch (error) {
           if (error instanceof HttpException && error.getStatus() === 400) {
-            throw new McpToolError(
-              'INVALID_INPUT',
-              'Invalid transaction id. Use an id or safeTxHash from list_queued_transactions or list_transaction_history.',
-            );
+            throw new McpToolError('INVALID_INPUT', INVALID_TX_ID);
           }
           throw error;
         }
@@ -234,7 +267,7 @@ export function transactionsTools(
       name: 'decode_calldata',
       title: 'Decode calldata',
       description:
-        'Decodes calldata sent to a contract into method and parameters, with the decoder accuracy (FULL_MATCH is verified for this contract). Prerequisite: chainId from list_chains, the target contract address and the 0x calldata. Next: get_transaction for a queued transaction that carries this calldata.',
+        'Decodes calldata sent to a contract into method and parameters, with the decoder accuracy (FULL_MATCH is verified for this contract); a large batch is reduced to its calls and truncated says so. Prerequisite: chainId from list_chains, the target contract address and the 0x calldata. Next: get_transaction for a queued transaction that carries this calldata.',
       inputSchema: z.object({
         chainId: chainIdField,
         to: AddressSchema.describe('Address of the contract being called'),
@@ -245,13 +278,17 @@ export function transactionsTools(
       handler: async ({ chainId, to, data }) => {
         // The decoder does not resolve the chain; an unknown one is NOT_FOUND
         await chainsRepository.getChain(chainId);
-        const { method, parameters, accuracy } =
-          await dataDecoderRepository.getDecodedData({
-            chainId,
-            to,
-            data: data,
-          });
-        return { method, parameters, accuracy };
+        const dataDecoded = await dataDecoderRepository.getDecodedData({
+          chainId,
+          to,
+          data: data,
+        });
+        const decoded = reduceDecoded(dataDecoded);
+        return {
+          ...(decoded.value as object),
+          accuracy: dataDecoded.accuracy,
+          truncated: decoded.truncated,
+        };
       },
     }),
   ];
