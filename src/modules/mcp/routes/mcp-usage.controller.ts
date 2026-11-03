@@ -1,5 +1,6 @@
 import { Controller, Get, Inject, UseGuards } from '@nestjs/common';
 import { ApiExcludeController } from '@nestjs/swagger';
+import { McpRateLimitGuard } from '@/modules/mcp/routes/guards/mcp-rate-limit.guard';
 import { McpUsageAuthGuard } from '@/modules/mcp/routes/guards/mcp-usage-auth.guard';
 import { withTimeout } from '@/modules/mcp/with-timeout';
 import {
@@ -23,13 +24,13 @@ type UsageReportDay = {
   distinctClients: number;
 };
 
-/** Outside McpController so McpRateLimitGuard does not apply. */
 @Controller()
 @ApiExcludeController()
 export class McpUsageController {
   constructor(@Inject(McpUsageStore) private readonly store: IMcpUsageStore) {}
 
-  @UseGuards(McpUsageAuthGuard)
+  // Rate limit first: failed credential guesses count too
+  @UseGuards(McpRateLimitGuard, McpUsageAuthGuard)
   @Get('mcp/usage.json')
   async report(): Promise<{
     generatedAt: string;

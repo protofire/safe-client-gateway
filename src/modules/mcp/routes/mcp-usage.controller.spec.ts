@@ -2,7 +2,10 @@ import { Test } from '@nestjs/testing';
 import type { INestApplication } from '@nestjs/common';
 import type { Server } from 'net';
 import request from 'supertest';
+import { ClsService } from 'nestjs-cls';
 import { IConfigurationService } from '@/config/configuration.service.interface';
+import { CacheService } from '@/datasources/cache/cache.service.interface';
+import { LoggingService } from '@/logging/logging.interface';
 import { McpRateLimitGuard } from '@/modules/mcp/routes/guards/mcp-rate-limit.guard';
 import { McpUsageController } from '@/modules/mcp/routes/mcp-usage.controller';
 import { McpUsageAuthGuard } from '@/modules/mcp/routes/guards/mcp-usage-auth.guard';
@@ -20,12 +23,17 @@ const today = (): string => new Date().toISOString().slice(0, 10);
 describe('McpUsageController', () => {
   let app: INestApplication<Server>;
   const getDay = jest.fn<ReturnType<IMcpUsageStore['getDay']>, [string]>();
+  const increment = jest.fn();
 
   async function start(usageAuth: string | undefined): Promise<void> {
     const moduleFixture = await Test.createTestingModule({
       controllers: [McpUsageController],
       providers: [
+        McpRateLimitGuard,
         McpUsageAuthGuard,
+        { provide: CacheService, useValue: { increment } },
+        { provide: LoggingService, useValue: { warn: jest.fn() } },
+        { provide: ClsService, useValue: { set: jest.fn() } },
         { provide: McpUsageStore, useValue: { getDay } },
         {
           provide: IConfigurationService,
@@ -40,6 +48,7 @@ describe('McpUsageController', () => {
   beforeEach(() => {
     jest.resetAllMocks();
     getDay.mockResolvedValue({ calls: {}, clients: 0 });
+    increment.mockResolvedValue(1);
   });
 
   afterEach(async () => {
@@ -144,17 +153,14 @@ describe('McpUsageController', () => {
     expect(body.coverage).toEqual({ daysRead: 0, daysFailed: 30 });
   });
 
-  it('the route skips McpRateLimitGuard', () => {
-    const guards = [
-      ...((Reflect.getMetadata('__guards__', McpUsageController) as
-        | Array<unknown>
-        | undefined) ?? []),
-      ...((Reflect.getMetadata(
-        '__guards__',
-        McpUsageController.prototype.report,
-      ) as Array<unknown> | undefined) ?? []),
-    ];
-    expect(guards).toEqual([McpUsageAuthGuard]);
-    expect(guards).not.toContain(McpRateLimitGuard);
+  it('rate-limits the route before checking credentials', async () => {
+    await start(AUTH);
+    increment.mockResolvedValue(61);
+
+    await request(app.getHttpServer())
+      .get('/mcp/usage.json')
+      .set('Authorization', basic(AUTH))
+      .expect(429);
+    expect(getDay).not.toHaveBeenCalled();
   });
 });
