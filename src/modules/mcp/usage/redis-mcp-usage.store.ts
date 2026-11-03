@@ -48,12 +48,9 @@ export class RedisMcpUsageStore implements IMcpUsageStore {
   async getDailySalt(date: string): Promise<string> {
     const key = `mcp:salt:${date}`;
     const fresh = randomBytes(32).toString('hex');
-    // SET NX GET returns the existing value, or null when it stored `fresh`
-    const existing = await this.client.set(key, fresh, {
-      NX: true,
-      EX: SALT_TTL_SECONDS,
-      GET: true,
-    });
-    return existing ?? fresh;
+    // Not SET NX GET: combining NX with GET needs Redis 7.0
+    await this.client.set(key, fresh, { NX: true, EX: SALT_TTL_SECONDS });
+    // The first writer wins; every caller reads its salt
+    return (await this.client.get(key)) ?? fresh;
   }
 }
