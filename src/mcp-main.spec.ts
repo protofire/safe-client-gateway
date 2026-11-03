@@ -16,6 +16,10 @@ import { TestTxAuthNetworkModule } from '@/datasources/network/__tests__/test.tx
 import { NetworkModule } from '@/datasources/network/network.module';
 import { TxAuthNetworkModule } from '@/datasources/network/tx-auth.network.module';
 import { TestLoggingModule } from '@/logging/__tests__/test.logging.module';
+import {
+  type ILoggingService,
+  LoggingService,
+} from '@/logging/logging.interface';
 import { McpAppModule } from '@/mcp-app.module';
 import { FakeMcpUsageStore } from '@/modules/mcp/usage/__tests__/fake-mcp-usage.store';
 import { McpUsageStore } from '@/modules/mcp/usage/mcp-usage.store';
@@ -239,7 +243,8 @@ describe('configureMcpApp over real HTTP', () => {
     });
 
     it('logs the protocol version of a 2025-11-25 tools/call from the header', async () => {
-      const info = jest.mocked(console.info);
+      // Not console.info: CI sets LOG_SILENT, which mutes the test logger
+      const info = jest.spyOn(app.get<ILoggingService>(LoggingService), 'info');
       const legacy = (version: string): request.Test =>
         request(app.getHttpServer())
           .post('/mcp')
