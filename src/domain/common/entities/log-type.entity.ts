@@ -21,6 +21,7 @@ export enum LogType {
   InvalidIp = 'INVALID_IP',
   JobError = 'JOB_ERROR',
   JobEvent = 'JOB_EVENT',
+  McpToolCall = 'MCP_TOOL_CALL',
   MemoryHit = 'MEMORY_HIT',
   MemoryMiss = 'MEMORY_MISS',
   MessagePropose = 'MESSAGE_PROPOSE',

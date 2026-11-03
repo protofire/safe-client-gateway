@@ -78,6 +78,6 @@ async function redisClientFactory(
     { provide: CacheReadiness, useExisting: CacheService },
     { provide: CacheKeyPrefix, useValue: '' },
   ],
-  exports: [CacheService, CacheReadiness],
+  exports: [CacheService, CacheReadiness, 'RedisClient'],
 })
 export class CacheModule {}

@@ -347,6 +347,13 @@ export default () => ({
     // There is no hook to invalidate the owners, so defaulting 0 disables the cache
     ownersTtlSeconds: parseInt(process.env.OWNERS_TTL_SECONDS ?? `${0}`),
   },
+  mcp: {
+    serverName: process.env.MCP_SERVER_NAME || 'multisig',
+    // `user:pass` for basic auth on /mcp/usage.json; unset refuses every request
+    usageAuth: process.env.MCP_USAGE_AUTH,
+    // Proxy hops in front of cgw-mcp; validated as an integer at startup
+    trustProxyHops: process.env.MCP_TRUST_PROXY_HOPS ?? '1',
+  },
   mappings: {
     imitation: {
       lookupDistance: parseInt(process.env.IMITATION_LOOKUP_DISTANCE ?? `${3}`),

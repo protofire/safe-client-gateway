@@ -16,7 +16,7 @@ import { isIP } from 'node:net';
 export class RateLimitGuard implements CanActivate {
   constructor(
     private readonly cacheService: ICacheService,
-    private readonly loggingService: ILoggingService,
+    protected readonly loggingService: ILoggingService,
     private rateLimit: { max: number; windowSeconds: number },
   ) {
     this.rateLimit = rateLimit;
@@ -44,7 +44,7 @@ export class RateLimitGuard implements CanActivate {
     return true;
   }
 
-  private logInvalidIp(req: Request): void {
+  protected logInvalidIp(req: Request): void {
     this.loggingService.warn({
       type: LogType.InvalidIp,
       method: req.method,
@@ -53,7 +53,7 @@ export class RateLimitGuard implements CanActivate {
     });
   }
 
-  private logRateLimitHit(args: {
+  protected logRateLimitHit(args: {
     req: Request;
     currentRequest: number;
   }): void {

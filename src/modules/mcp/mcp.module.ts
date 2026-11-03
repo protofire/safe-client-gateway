@@ -1,0 +1,39 @@
+import { Module } from '@nestjs/common';
+import { BalancesModule } from '@/modules/balances/balances.module';
+import { ChainsModule } from '@/modules/chains/chains.module';
+import { DataDecoderModule } from '@/modules/data-decoder/data-decoder.module';
+import { DelegatesV2RepositoryModule } from '@/modules/delegate/domain/v2/delegates.v2.repository.interface';
+import { McpFanoutLimit } from '@/modules/mcp/mcp-fanout-limit';
+import { McpServerFactory } from '@/modules/mcp/mcp-server.factory';
+import { McpRateLimitGuard } from '@/modules/mcp/routes/guards/mcp-rate-limit.guard';
+import { McpController } from '@/modules/mcp/routes/mcp.controller';
+import { McpUsageController } from '@/modules/mcp/routes/mcp-usage.controller';
+import { McpUsageAuthGuard } from '@/modules/mcp/routes/guards/mcp-usage-auth.guard';
+import { RedisMcpUsageStore } from '@/modules/mcp/usage/redis-mcp-usage.store';
+import { McpUsageService } from '@/modules/mcp/usage/mcp-usage.service';
+import { McpUsageStore } from '@/modules/mcp/usage/mcp-usage.store';
+import { McpToolEvents } from '@/modules/mcp/tools/define-tool';
+import { SafeRepositoryModule } from '@/modules/safe/domain/safe.repository.interface';
+import { TransactionsModule } from '@/modules/transactions/transactions.module';
+
+@Module({
+  imports: [
+    BalancesModule,
+    ChainsModule,
+    DataDecoderModule,
+    DelegatesV2RepositoryModule,
+    SafeRepositoryModule,
+    TransactionsModule,
+  ],
+  controllers: [McpController, McpUsageController],
+  providers: [
+    McpServerFactory,
+    McpToolEvents,
+    McpFanoutLimit,
+    McpRateLimitGuard,
+    McpUsageAuthGuard,
+    McpUsageService,
+    { provide: McpUsageStore, useClass: RedisMcpUsageStore },
+  ],
+})
+export class McpModule {}

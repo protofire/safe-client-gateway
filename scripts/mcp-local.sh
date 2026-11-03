@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Local cgw-mcp run: Redis from docker-compose, built entry; use the Node version in .nvmrc.
+# Placeholders only (they boot the app; they are not real credentials). Needs `yarn build` first.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+docker compose up -d redis
+
+ph() { echo "placeholder"; }
+export SAFE_CONFIG_BASE_URI="${SAFE_CONFIG_BASE_URI:-https://config.dev.safe.protofire.io}"
+export MCP_USAGE_AUTH="${MCP_USAGE_AUTH:-local:local}"
+export MCP_TRUST_PROXY_HOPS="${MCP_TRUST_PROXY_HOPS:-1}"
+export APPLICATION_PORT="${APPLICATION_PORT:-3000}"
+for v in AUTH_TOKEN BLOCKLIST_ENCRYPTED_DATA BLOCKLIST_SECRET_KEY BLOCKLIST_SECRET_SALT \
+  EMAIL_API_APPLICATION_CODE EMAIL_API_KEY EMAIL_TEMPLATE_RECOVERY_TX \
+  EMAIL_TEMPLATE_UNKNOWN_RECOVERY_TX EMAIL_TEMPLATE_VERIFICATION_CODE \
+  FINGERPRINT_ENCRYPTION_KEY INFURA_API_KEY JWT_ISSUER JWT_SECRET \
+  PUSH_NOTIFICATIONS_API_PROJECT PUSH_NOTIFICATIONS_API_SERVICE_ACCOUNT_PRIVATE_KEY \
+  STAKING_API_KEY STAKING_TESTNET_API_KEY BRIDGE_API_KEY \
+  RELAY_PROVIDER_API_KEY_{OPTIMISM,BSC,GNOSIS_CHAIN,POLYGON,POLYGON_ZKEVM,BASE,ARBITRUM_ONE,AVALANCHE,LINEA,BLAST,UNICHAIN,SEPOLIA}; do
+  export "$v=${!v:-$(ph)}"
+done
+export EMAIL_API_FROM_EMAIL="${EMAIL_API_FROM_EMAIL:-placeholder@example.com}"
+export PUSH_NOTIFICATIONS_API_SERVICE_ACCOUNT_CLIENT_EMAIL="${PUSH_NOTIFICATIONS_API_SERVICE_ACCOUNT_CLIENT_EMAIL:-placeholder@example.com}"
+
+exec node dist/src/mcp-main.js

@@ -8,7 +8,7 @@ import { Transaction } from '@/modules/transactions/routes/entities/transaction.
 
 @Injectable()
 export class CreationTransactionMapper {
-  private static readonly TRANSACTION_TYPE = 'creation';
+  static readonly TRANSACTION_TYPE = 'creation';
 
   constructor(private readonly addressInfoHelper: AddressInfoHelper) {}
 
