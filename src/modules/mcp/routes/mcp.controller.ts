@@ -39,6 +39,15 @@ export class McpController implements OnModuleDestroy {
   @UseGuards(McpRateLimitGuard)
   @All('mcp')
   handle(@Req() req: Request, @Res() res: Response): Promise<void> {
+    // MCP dropped batching in 2025-06-18; a batch would also run many calls for one rate-limit charge
+    if (Array.isArray(req.body)) {
+      res.status(400).json({
+        jsonrpc: '2.0',
+        id: null,
+        error: { code: -32600, message: 'Batch requests are not supported' },
+      });
+      return Promise.resolve();
+    }
     this.cls.set(
       MCP_USER_AGENT_KEY,
       req.get('user-agent')?.slice(0, MAX_USER_AGENT_LENGTH),
