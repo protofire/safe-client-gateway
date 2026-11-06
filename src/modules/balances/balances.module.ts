@@ -20,9 +20,11 @@ import { BalancesService } from '@/modules/balances/routes/balances.service';
 import { SafeRepositoryModule } from '@/modules/safe/domain/safe.repository.interface';
 import { ChainsModule } from '@/modules/chains/chains.module';
 import { TxAuthNetworkModule } from '@/datasources/network/tx-auth.network.module';
+import { CacheFirstDataSourceModule } from '@/datasources/cache/cache.first.data.source.module';
 
 @Module({
   imports: [
+    CacheFirstDataSourceModule,
     ConfigApiModule,
     TransactionApiManagerModule,
     TxAuthNetworkModule,

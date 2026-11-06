@@ -2,25 +2,31 @@ import { Module } from '@nestjs/common';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import { getTxAuthHeaders } from '@/datasources/network/auth/tx-auth-headers.helper';
 import { FetchNetworkService } from '@/datasources/network/fetch.network.service';
-import { NetworkService } from '@/datasources/network/network.service.interface';
+import type { INetworkService } from '@/datasources/network/network.service.interface';
 import type { FetchClient } from '@/datasources/network/network.module';
 import { FetchClientToken } from '@/datasources/network/network.module';
 import { ILoggingService, LoggingService } from '@/logging/logging.interface';
 import { CacheFirstDataSource } from '@/datasources/cache/cache.first.data.source';
 import { HttpErrorFactory } from '@/datasources/errors/http-error-factory';
-import { CacheFirstDataSourceModule } from '@/datasources/cache/cache.first.data.source.module';
+import {
+  CacheService,
+  type ICacheService,
+} from '@/datasources/cache/cache.service.interface';
+
+export const TxAuthNetworkService = Symbol('TxAuthNetworkService');
+export const TxAuthCacheFirstDataSource = Symbol('TxAuthCacheFirstDataSource');
 
 /**
- * Provides a NetworkService instance configured with TX Service authentication headers
- * and CacheFirstDataSource that uses this NetworkService.
- * This module should be imported by modules that need to communicate with the Transaction Service
- * in local development mode (when running with local instance of Safe{Wallet}).
+ * Provides a NetworkService that sends the Transaction Service API key (when configured)
+ * and a CacheFirstDataSource that uses it, under their own tokens.
+ * They must never be provided as NetworkService / CacheFirstDataSource: other providers
+ * of an importing module would then send the key to third-party hosts. Only inject them
+ * in clients whose requests go to the Transaction Service of the chain.
  */
 @Module({
-  imports: [CacheFirstDataSourceModule],
   providers: [
     {
-      provide: NetworkService,
+      provide: TxAuthNetworkService,
       useFactory: (
         client: FetchClient,
         loggingService: ILoggingService,
@@ -31,9 +37,30 @@ import { CacheFirstDataSourceModule } from '@/datasources/cache/cache.first.data
       },
       inject: [FetchClientToken, LoggingService, IConfigurationService],
     },
-    CacheFirstDataSource,
+    {
+      provide: TxAuthCacheFirstDataSource,
+      useFactory: (
+        cacheService: ICacheService,
+        networkService: INetworkService,
+        loggingService: ILoggingService,
+        configService: IConfigurationService,
+      ): CacheFirstDataSource => {
+        return new CacheFirstDataSource(
+          cacheService,
+          networkService,
+          loggingService,
+          configService,
+        );
+      },
+      inject: [
+        CacheService,
+        TxAuthNetworkService,
+        LoggingService,
+        IConfigurationService,
+      ],
+    },
     HttpErrorFactory,
   ],
-  exports: [NetworkService, CacheFirstDataSource, HttpErrorFactory],
+  exports: [TxAuthNetworkService, TxAuthCacheFirstDataSource, HttpErrorFactory],
 })
 export class TxAuthNetworkModule {}

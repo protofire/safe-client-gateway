@@ -1,4 +1,9 @@
-import { ApiExtraModels, ApiProperty, getSchemaPath } from '@nestjs/swagger';
+import {
+  ApiExtraModels,
+  ApiProperty,
+  ApiPropertyOptional,
+  getSchemaPath,
+} from '@nestjs/swagger';
 import { CreationTransactionInfo } from '@/modules/transactions/routes/entities/creation-transaction-info.entity';
 import {
   CustomTransactionInfo,
@@ -61,6 +66,12 @@ export class BaseTransaction {
     ],
   })
   txInfo: TransactionInfo;
+  @ApiPropertyOptional({
+    type: Boolean,
+    description:
+      'Present and true when the calldata of this unexecuted transaction is hidden from the caller',
+  })
+  redacted?: true;
 
   constructor(txInfo: TransactionInfo) {
     this.txInfo = txInfo;

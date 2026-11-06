@@ -8,9 +8,10 @@ import {
 } from '@/datasources/cache/cache.service.interface';
 import { HttpErrorFactory } from '@/datasources/errors/http-error-factory';
 import {
-  INetworkService,
-  NetworkService,
-} from '@/datasources/network/network.service.interface';
+  TxAuthCacheFirstDataSource,
+  TxAuthNetworkService,
+} from '@/datasources/network/tx-auth.network.module';
+import { INetworkService } from '@/datasources/network/network.service.interface';
 import { IBalancesApi } from '@/domain/interfaces/balances-api.interface';
 import { IBalancesApiManager } from '@/domain/interfaces/balances-api.manager.interface';
 import { IConfigApi } from '@/domain/interfaces/config-api.interface';
@@ -35,6 +36,7 @@ export class BalancesApiManager implements IBalancesApiManager {
     @Inject(IConfigurationService)
     private readonly configurationService: IConfigurationService,
     @Inject(IConfigApi) private readonly configApi: IConfigApi,
+    @Inject(TxAuthCacheFirstDataSource)
     private readonly dataSource: CacheFirstDataSource,
     @Inject(CacheService) private readonly cacheService: ICacheService,
     private readonly httpErrorFactory: HttpErrorFactory,
@@ -42,7 +44,8 @@ export class BalancesApiManager implements IBalancesApiManager {
     @Inject(IPricesApi) private readonly coingeckoApi: IPricesApi,
     @Inject(ITransactionApiManager)
     private readonly transactionApiManager: ITransactionApiManager,
-    @Inject(NetworkService) private readonly networkService: INetworkService,
+    @Inject(TxAuthNetworkService)
+    private readonly networkService: INetworkService,
   ) {
     this.isCounterFactualBalancesEnabled =
       this.configurationService.getOrThrow<boolean>(

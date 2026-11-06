@@ -46,7 +46,8 @@ export const MultisigTransactionSchema = TransactionBaseSchema.extend({
   transactionHash: NullableHexSchema,
   safeTxHash: HexSchema,
   executor: NullableAddressSchema,
-  isExecuted: z.boolean(),
+  // Absent when the Transaction Service redacted the row (unexecuted, calldata withheld)
+  isExecuted: z.boolean().optional(),
   isSuccessful: z.boolean().nullish().default(null),
   ethGasPrice: NullableNumericStringSchema,
   gasUsed: NullableNumberSchema,

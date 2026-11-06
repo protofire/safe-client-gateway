@@ -119,7 +119,8 @@ describe('Get by id - Transactions Controller', () => {
         code: 500,
       });
 
-    expect(networkService.get).toHaveBeenCalledTimes(1);
+    // Once for the shielded chain check, once for the transaction
+    expect(networkService.get).toHaveBeenCalledTimes(2);
     expect(networkService.get).toHaveBeenCalledWith({ url: getChainUrl });
   });
 

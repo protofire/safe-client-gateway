@@ -1,4 +1,9 @@
-import { BadRequestException, Inject, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { MultisigTransaction as DomainMultisigTransaction } from '@/modules/safe/domain/entities/multisig-transaction.entity';
 import { SafeRepository } from '@/modules/safe/domain/safe.repository';
 import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
@@ -53,6 +58,8 @@ import { ITokenRepository } from '@/modules/tokens/domain/token.repository.inter
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import { IDataDecoderRepository } from '@/modules/data-decoder/domain/v2/data-decoder.repository.interface';
 import type { Address } from 'viem';
+import { AuthPayload } from '@/modules/auth/domain/entities/auth-payload.entity';
+import { ShieldedAccessService } from '@/modules/transactions/routes/shielded-access.service';
 
 @Injectable()
 export class TransactionsService {
@@ -77,6 +84,7 @@ export class TransactionsService {
     private readonly tokenRepository: ITokenRepository,
     @Inject(IConfigurationService)
     private readonly configurationService: IConfigurationService,
+    private readonly shieldedAccessService: ShieldedAccessService,
   ) {
     this.isFilterValueParsingEnabled = this.configurationService.getOrThrow(
       'features.filterValueParsing',
@@ -86,6 +94,7 @@ export class TransactionsService {
   async getById(args: {
     chainId: string;
     txId: string;
+    authPayload: AuthPayload;
   }): Promise<TransactionDetails> {
     const [txType, safeAddress, id] = args.txId.split(TRANSACTION_ID_SEPARATOR);
 
@@ -135,7 +144,7 @@ export class TransactionsService {
           throw new BadRequestException('Invalid transaction ID');
         }
 
-        const [tx, safe] = await Promise.all([
+        const [loadedTx, safe] = await Promise.all([
           this.safeRepository.getMultiSigTransaction({
             chainId: args.chainId,
             safeTransactionHash: id,
@@ -147,9 +156,15 @@ export class TransactionsService {
           }),
         ]);
 
-        if (!isAddressEqual(tx.safe, safe.address)) {
+        if (!isAddressEqual(loadedTx.safe, safe.address)) {
           throw new BadRequestException('Invalid transaction ID');
         }
+
+        const tx = await this.shieldedAccessService.redactTransaction({
+          chainId: args.chainId,
+          authPayload: args.authPayload,
+          transaction: loadedTx,
+        });
 
         const dataDecoded =
           await this.dataDecoderRepository.getTransactionDataDecoded({
@@ -167,9 +182,13 @@ export class TransactionsService {
 
       // txId is safeTxHash
       default: {
-        const tx = await this.safeRepository.getMultiSigTransaction({
+        const tx = await this.shieldedAccessService.redactTransaction({
           chainId: args.chainId,
-          safeTransactionHash: args.txId,
+          authPayload: args.authPayload,
+          transaction: await this.safeRepository.getMultiSigTransaction({
+            chainId: args.chainId,
+            safeTransactionHash: args.txId,
+          }),
         });
         const [safe, dataDecoded] = await Promise.all([
           this.safeRepository.getSafe({
@@ -194,11 +213,20 @@ export class TransactionsService {
   async getDomainMultisigTransactionBySafeTxHash(args: {
     chainId: string;
     safeTxHash: string;
+    authPayload: AuthPayload;
   }): Promise<TXSMultisigTransaction> {
-    const tx = await this.safeRepository.getMultiSigTransactionWithNoCache({
+    const tx = await this.shieldedAccessService.redactTransaction({
       chainId: args.chainId,
-      safeTransactionHash: args.safeTxHash,
+      authPayload: args.authPayload,
+      transaction: await this.safeRepository.getMultiSigTransactionWithNoCache({
+        chainId: args.chainId,
+        safeTransactionHash: args.safeTxHash,
+      }),
     });
+    // Like the Transaction Service, a redacted transaction is not returned by hash
+    if (tx.isExecuted === undefined) {
+      throw new NotFoundException();
+    }
     const dataDecoded =
       await this.dataDecoderRepository.getTransactionDataDecoded({
         chainId: args.chainId,
@@ -218,20 +246,29 @@ export class TransactionsService {
     value?: string;
     nonce?: string;
     executed?: boolean;
+    authPayload: AuthPayload;
   }): Promise<Partial<Page<MultisigTransaction>>> {
-    const domainTransactions =
-      await this.safeRepository.getMultisigTransactions({
-        ...args,
-        ...(this.isFilterValueParsingEnabled &&
-          args.value && {
-            value: await this.parseTokenValue({
-              ...args,
-              value: args.value,
-            }),
+    const { authPayload, ...filters } = args;
+    const page = await this.safeRepository.getMultisigTransactions({
+      ...filters,
+      ...(this.isFilterValueParsingEnabled &&
+        args.value && {
+          value: await this.parseTokenValue({
+            ...filters,
+            value: args.value,
           }),
-        limit: args.paginationData.limit,
-        offset: args.paginationData.offset,
-      });
+        }),
+      limit: args.paginationData.limit,
+      offset: args.paginationData.offset,
+    });
+    const domainTransactions = {
+      ...page,
+      results: await this.shieldedAccessService.redactTransactions({
+        chainId: args.chainId,
+        authPayload,
+        transactions: page.results,
+      }),
+    };
 
     const safeInfo = await this.safeRepository.getSafe({
       chainId: args.chainId,
@@ -310,8 +347,19 @@ export class TransactionsService {
     ordering?: string;
     limit?: number;
     offset?: number;
+    authPayload: AuthPayload;
   }): Promise<TXSMultisigTransactionPage> {
-    return await this.safeRepository.getMultisigTransactionsWithNoCache(args);
+    const { authPayload, ...filters } = args;
+    const page =
+      await this.safeRepository.getMultisigTransactionsWithNoCache(filters);
+    return {
+      ...page,
+      results: await this.shieldedAccessService.redactTransactions({
+        chainId: args.chainId,
+        authPayload,
+        transactions: page.results,
+      }),
+    };
   }
 
   async deleteTransaction(args: {
@@ -326,11 +374,16 @@ export class TransactionsService {
     chainId: string;
     safeTxHash: string;
     addConfirmationDto: AddConfirmationDto;
+    authPayload: AuthPayload;
   }): Promise<TransactionDetails> {
     await this.safeRepository.addConfirmation(args);
-    const transaction = await this.safeRepository.getMultiSigTransaction({
+    const transaction = await this.shieldedAccessService.redactTransaction({
       chainId: args.chainId,
-      safeTransactionHash: args.safeTxHash,
+      authPayload: args.authPayload,
+      transaction: await this.safeRepository.getMultiSigTransaction({
+        chainId: args.chainId,
+        safeTransactionHash: args.safeTxHash,
+      }),
     });
     const [safe, dataDecoded] = await Promise.all([
       this.safeRepository.getSafe({
@@ -472,19 +525,28 @@ export class TransactionsService {
     safeAddress: Address;
     paginationData: PaginationData;
     trusted?: boolean;
+    authPayload: AuthPayload;
   }): Promise<Page<QueuedItem>> {
     const pagination = this.getAdjustedPaginationForQueue(args.paginationData);
     const safeInfo = await this.safeRepository.getSafe({
       chainId: args.chainId,
       address: args.safeAddress,
     });
-    const transactions = await this.safeRepository.getTransactionQueue({
+    const queue = await this.safeRepository.getTransactionQueue({
       chainId: args.chainId,
       safe: safeInfo,
       limit: pagination.limit,
       offset: pagination.offset,
       trusted: args.trusted,
     });
+    const transactions = {
+      ...queue,
+      results: await this.shieldedAccessService.redactTransactions({
+        chainId: args.chainId,
+        authPayload: args.authPayload,
+        transactions: queue.results,
+      }),
+    };
 
     const nextURL = buildNextPageURL(args.routeUrl, transactions.count);
     const previousURL = buildPreviousPageURL(args.routeUrl);
@@ -525,6 +587,7 @@ export class TransactionsService {
     onlyTrusted: boolean;
     showImitations: boolean;
     timezone?: string;
+    authPayload: AuthPayload;
   }): Promise<TransactionItemPage> {
     const paginationDataAdjusted = this.getAdjustedPaginationForHistory(
       args.paginationData,
@@ -556,7 +619,11 @@ export class TransactionsService {
     });
     const results = await this.transactionsHistoryMapper.mapTransactionsHistory(
       args.chainId,
-      domainTransactions.results,
+      await this.shieldedAccessService.redactTransactions({
+        chainId: args.chainId,
+        authPayload: args.authPayload,
+        transactions: domainTransactions.results,
+      }),
       safeInfo,
       args.paginationData.offset,
       args.timezoneOffsetMs,
@@ -577,6 +644,7 @@ export class TransactionsService {
     chainId: string;
     safeAddress: Address;
     proposeTransactionDto: ProposeTransactionDto;
+    authPayload: AuthPayload;
   }): Promise<TransactionDetails> {
     this.logProposeTx(args);
     args.proposeTransactionDto.origin = this.verifyOrigin(
@@ -584,10 +652,15 @@ export class TransactionsService {
     );
     await this.safeRepository.proposeTransaction(args);
 
-    const domainTransaction = await this.safeRepository.getMultiSigTransaction({
-      chainId: args.chainId,
-      safeTransactionHash: args.proposeTransactionDto.safeTxHash,
-    });
+    const domainTransaction =
+      await this.shieldedAccessService.redactTransaction({
+        chainId: args.chainId,
+        authPayload: args.authPayload,
+        transaction: await this.safeRepository.getMultiSigTransaction({
+          chainId: args.chainId,
+          safeTransactionHash: args.proposeTransactionDto.safeTxHash,
+        }),
+      });
     const [safe, dataDecoded] = await Promise.all([
       this.safeRepository.getSafe({
         chainId: args.chainId,
@@ -739,7 +812,7 @@ export class TransactionsService {
     args: Parameters<TransactionsService['proposeTransaction']>[0],
   ): void {
     this.loggingService.info({
-      transaction: args.proposeTransactionDto,
+      safeTxHash: args.proposeTransactionDto.safeTxHash,
       safeAddress: args.safeAddress,
       chainId: args.chainId,
       type: LogType.TransactionPropose,

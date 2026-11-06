@@ -4,7 +4,7 @@ import {
   MultisigTransaction as DomainMultisigTransaction,
 } from '@/modules/safe/domain/entities/multisig-transaction.entity';
 import { Operation } from '@/modules/safe/domain/entities/operation.entity';
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import type { Address, Hash, Hex } from 'viem';
 
 export class TXSMultisigTransaction implements DomainMultisigTransaction {
@@ -52,8 +52,11 @@ export class TXSMultisigTransaction implements DomainMultisigTransaction {
   safeTxHash: Hash;
   @ApiProperty()
   executor: Address | null;
-  @ApiProperty()
-  isExecuted: boolean;
+  @ApiPropertyOptional({
+    description:
+      'Absent on redacted unexecuted transactions, together with data being null',
+  })
+  isExecuted?: boolean;
   @ApiProperty()
   isSuccessful: boolean | null;
   @ApiProperty()
@@ -95,7 +98,7 @@ export class TXSMultisigTransaction implements DomainMultisigTransaction {
     transactionHash: Hash | null;
     safeTxHash: Hash;
     executor: Address | null;
-    isExecuted: boolean;
+    isExecuted?: boolean;
     isSuccessful: boolean | null;
     ethGasPrice: string | null;
     gasUsed: number | null;

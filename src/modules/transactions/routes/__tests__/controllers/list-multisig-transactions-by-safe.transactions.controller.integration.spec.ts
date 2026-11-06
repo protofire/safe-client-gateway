@@ -78,7 +78,7 @@ describe('List multisig transactions by Safe - Transactions Controller', () => {
       ),
       { status: 500 } as Response,
     );
-    networkService.get.mockRejectedValueOnce(error);
+    networkService.get.mockRejectedValue(error);
 
     await request(app.getHttpServer())
       .get(`/v1/chains/${chainId}/safes/${safeAddress}/multisig-transactions`)
@@ -88,7 +88,8 @@ describe('List multisig transactions by Safe - Transactions Controller', () => {
         code: 500,
       });
 
-    expect(networkService.get).toHaveBeenCalledTimes(1);
+    // Once for the shielded chain check, once for the transactions
+    expect(networkService.get).toHaveBeenCalledTimes(2);
     expect(networkService.get).toHaveBeenCalledWith({
       url: `${safeConfigUrl}/api/v1/chains/${chainId}`,
     });

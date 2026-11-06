@@ -69,7 +69,6 @@ describe('MultisigTransaction', () => {
       'nonce' as const,
       'submissionDate' as const,
       'safeTxHash' as const,
-      'isExecuted' as const,
       'confirmationsRequired' as const,
       'trusted' as const,
     ])('should require %s', (key) => {
@@ -82,6 +81,22 @@ describe('MultisigTransaction', () => {
       expect(!result.success && result.error.issues[0].path).toStrictEqual([
         key,
       ]);
+    });
+
+    it('should accept a row redacted by the Transaction Service, without isExecuted', () => {
+      const multisigTransaction = multisigTransactionBuilder()
+        .with('isExecuted', false)
+        .with('data', null)
+        .with('signatures', null)
+        .with('origin', null)
+        .build();
+      delete multisigTransaction.isExecuted;
+
+      const result = MultisigTransactionSchema.safeParse(multisigTransaction);
+
+      expect(result.success).toBe(true);
+      expect(result.success && 'isExecuted' in result.data).toBe(false);
+      expect(result.success && result.data.data).toBe(null);
     });
 
     it.each([
@@ -282,12 +297,6 @@ describe('MultisigTransaction', () => {
         },
         {
           code: 'invalid_type',
-          expected: 'boolean',
-          message: 'Invalid input: expected boolean, received undefined',
-          path: ['isExecuted'],
-        },
-        {
-          code: 'invalid_type',
           expected: 'number',
           message: 'Invalid input: expected number, received undefined',
           path: ['confirmationsRequired'],
@@ -385,12 +394,6 @@ describe('MultisigTransaction', () => {
           expected: 'string',
           message: 'Invalid input: expected string, received undefined',
           path: ['safeTxHash'],
-        },
-        {
-          code: 'invalid_type',
-          expected: 'boolean',
-          message: 'Invalid input: expected boolean, received undefined',
-          path: ['isExecuted'],
         },
         {
           code: 'invalid_type',

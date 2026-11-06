@@ -10,6 +10,8 @@ import {
   ParseIntPipe,
   Post,
   Query,
+  UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import {
   ApiOkResponse,
@@ -55,6 +57,10 @@ import { TXSMultisigTransaction } from '@/modules/transactions/routes/entities/t
 import { TXSMultisigTransactionPage } from '@/modules/transactions/routes/entities/txs-multisig-transaction-page.entity';
 import { TXSCreationTransaction } from '@/modules/transactions/routes/entities/txs-creation-transaction.entity';
 import type { Address } from 'viem';
+import { Auth } from '@/modules/auth/routes/decorators/auth.decorator';
+import { AuthPayload } from '@/modules/auth/domain/entities/auth-payload.entity';
+import { AnonymousFallbackAuthGuard } from '@/modules/auth/routes/guards/anonymous-fallback-auth.guard';
+import { ShieldedCacheControlInterceptor } from '@/modules/transactions/routes/shielded-cache-control.interceptor';
 
 @ApiTags('transactions')
 @Controller({
@@ -89,27 +95,35 @@ export class TransactionsController {
   @ApiNotFoundResponse({
     description: 'Transaction not found',
   })
+  @UseGuards(AnonymousFallbackAuthGuard)
+  @UseInterceptors(ShieldedCacheControlInterceptor)
   @Get(`chains/:chainId/transactions/:id`)
   async getTransactionById(
     @Param('chainId') chainId: string,
     @Param('id') id: string,
+    @Auth() authPayload: AuthPayload,
   ): Promise<TransactionDetails> {
     return this.transactionsService.getById({
       chainId,
       txId: id,
+      authPayload,
     });
   }
 
   @ApiOkResponse({ type: TXSMultisigTransaction })
   @ApiOperation({ deprecated: true, summary: 'Deprecated' })
+  @UseGuards(AnonymousFallbackAuthGuard)
+  @UseInterceptors(ShieldedCacheControlInterceptor)
   @Get('chains/:chainId/multisig-transactions/:safeTxHash/raw')
   async getDomainMultisigTransactionBySafeTxHash(
     @Param('chainId') chainId: string,
     @Param('safeTxHash') safeTxHash: string,
+    @Auth() authPayload: AuthPayload,
   ): Promise<TXSMultisigTransaction> {
     return this.transactionsService.getDomainMultisigTransactionBySafeTxHash({
       chainId,
       safeTxHash,
+      authPayload,
     });
   }
 
@@ -141,8 +155,11 @@ export class TransactionsController {
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiQuery({ name: 'offset', required: false, type: Number })
   @ApiOperation({ deprecated: true, summary: 'Deprecated' })
+  @UseGuards(AnonymousFallbackAuthGuard)
+  @UseInterceptors(ShieldedCacheControlInterceptor)
   @Get('chains/:chainId/safes/:safeAddress/multisig-transactions/raw')
   async getDomainMultisigTransactions(
+    @Auth() authPayload: AuthPayload,
     @Param('chainId') chainId: string,
     @Param('safeAddress', new ValidationPipe(AddressSchema))
     safeAddress: Address,
@@ -210,6 +227,7 @@ export class TransactionsController {
       ordering,
       limit,
       offset,
+      authPayload,
     });
   }
 
@@ -278,8 +296,11 @@ export class TransactionsController {
     type: MultisigTransactionPage,
     description: 'Paginated list of multisig transactions',
   })
+  @UseGuards(AnonymousFallbackAuthGuard)
+  @UseInterceptors(ShieldedCacheControlInterceptor)
   @Get('chains/:chainId/safes/:safeAddress/multisig-transactions')
   async getMultisigTransactions(
+    @Auth() authPayload: AuthPayload,
     @Param('chainId') chainId: string,
     @RouteUrlDecorator() routeUrl: URL,
     @PaginationDataDecorator() paginationData: PaginationData,
@@ -305,6 +326,7 @@ export class TransactionsController {
       value,
       nonce,
       executed,
+      authPayload,
     });
   }
 
@@ -450,17 +472,21 @@ export class TransactionsController {
     description: 'Transaction not found',
   })
   @HttpCode(200)
+  @UseGuards(AnonymousFallbackAuthGuard)
+  @UseInterceptors(ShieldedCacheControlInterceptor)
   @Post('chains/:chainId/transactions/:safeTxHash/confirmations')
   async addConfirmation(
     @Param('chainId') chainId: string,
     @Param('safeTxHash') safeTxHash: string,
     @Body(new ValidationPipe(AddConfirmationDtoSchema))
     addConfirmationDto: AddConfirmationDto,
+    @Auth() authPayload: AuthPayload,
   ): Promise<TransactionDetails> {
     return this.transactionsService.addConfirmation({
       chainId,
       safeTxHash,
       addConfirmationDto,
+      authPayload,
     });
   }
 
@@ -642,8 +668,11 @@ export class TransactionsController {
     type: QueuedItemPage,
     description: 'Paginated list of queued transactions',
   })
+  @UseGuards(AnonymousFallbackAuthGuard)
+  @UseInterceptors(ShieldedCacheControlInterceptor)
   @Get('chains/:chainId/safes/:safeAddress/transactions/queued')
   async getTransactionQueue(
+    @Auth() authPayload: AuthPayload,
     @Param('chainId') chainId: string,
     @RouteUrlDecorator() routeUrl: URL,
     @Param('safeAddress', new ValidationPipe(AddressSchema))
@@ -658,6 +687,7 @@ export class TransactionsController {
       safeAddress,
       paginationData,
       trusted,
+      authPayload,
     });
   }
 
@@ -716,8 +746,11 @@ export class TransactionsController {
     type: TransactionItemPage,
     description: 'Paginated list of historical transactions',
   })
+  @UseGuards(AnonymousFallbackAuthGuard)
+  @UseInterceptors(ShieldedCacheControlInterceptor)
   @Get('chains/:chainId/safes/:safeAddress/transactions/history')
   async getTransactionsHistory(
+    @Auth() authPayload: AuthPayload,
     @Param('chainId') chainId: string,
     @RouteUrlDecorator() routeUrl: URL,
     @Param('safeAddress', new ValidationPipe(AddressSchema))
@@ -741,6 +774,7 @@ export class TransactionsController {
       onlyTrusted: trusted,
       showImitations: imitation,
       timezone,
+      authPayload,
     });
   }
 
@@ -773,6 +807,8 @@ export class TransactionsController {
     description: 'Invalid transaction data or signature',
   })
   @HttpCode(200)
+  @UseGuards(AnonymousFallbackAuthGuard)
+  @UseInterceptors(ShieldedCacheControlInterceptor)
   @Post('chains/:chainId/transactions/:safeAddress/propose')
   async proposeTransaction(
     @Param('chainId') chainId: string,
@@ -780,11 +816,13 @@ export class TransactionsController {
     safeAddress: Address,
     @Body(new ValidationPipe(ProposeTransactionDtoSchema))
     proposeTransactionDto: ProposeTransactionDto,
+    @Auth() authPayload: AuthPayload,
   ): Promise<TransactionDetails> {
     return this.transactionsService.proposeTransaction({
       chainId,
       safeAddress,
       proposeTransactionDto,
+      authPayload,
     });
   }
 

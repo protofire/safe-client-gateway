@@ -85,7 +85,10 @@ export class TransactionVerifierHelper {
   }): void {
     if (
       args.transaction.isExecuted ||
-      args.transaction.nonce < args.safe.nonce
+      args.transaction.nonce < args.safe.nonce ||
+      // Redacted row: no calldata to verify and none is served
+      (args.transaction.isExecuted === undefined &&
+        args.transaction.data === null)
     ) {
       return;
     }

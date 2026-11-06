@@ -62,7 +62,7 @@ export class MultisigTransactionMapper {
     );
     const note = this.noteMapper.mapTxNote(transaction);
 
-    return new Transaction(
+    const mapped = new Transaction(
       `${MULTISIG_TRANSACTION_PREFIX}${TRANSACTION_ID_SEPARATOR}${transaction.safe}${TRANSACTION_ID_SEPARATOR}${transaction.safeTxHash}`,
       (transaction.executionDate ?? transaction.submissionDate).getTime(),
       txStatus,
@@ -72,6 +72,10 @@ export class MultisigTransactionMapper {
       note,
       transaction.transactionHash,
     );
+    if (transaction.isExecuted === undefined) {
+      mapped.redacted = true;
+    }
+    return mapped;
   }
 
   /**

@@ -103,6 +103,7 @@ export class MultisigTransactionDetailsMapper {
       detailedExecutionInfo,
       safeAppInfo,
       note,
+      ...(transaction.isExecuted === undefined && { redacted: true }),
     };
   }
 

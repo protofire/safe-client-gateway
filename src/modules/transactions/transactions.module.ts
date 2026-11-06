@@ -61,11 +61,16 @@ import { BridgeTransactionMapper } from '@/modules/transactions/routes/mappers/c
 import { LiFiDecoderModule } from '@/modules/bridge/domain/contracts/decoders/lifi-decoder.helper';
 import { LiFiHelperModule } from '@/modules/transactions/routes/helpers/lifi-helper';
 import { BridgeModule } from '@/modules/bridge/bridge.module';
+import { AuthModule } from '@/modules/auth/auth.module';
+import { AuthGuard } from '@/modules/auth/routes/guards/auth.guard';
+import { AnonymousFallbackAuthGuard } from '@/modules/auth/routes/guards/anonymous-fallback-auth.guard';
+import { ShieldedAccessService } from '@/modules/transactions/routes/shielded-access.service';
 
 @Module({
   controllers: [TransactionsController],
   imports: [
     AddressInfoModule,
+    AuthModule,
     BridgeModule,
     ChainsModule,
     ContractsModule,
@@ -91,6 +96,8 @@ import { BridgeModule } from '@/modules/bridge/bridge.module';
     TwapOrderMapperModule,
   ],
   providers: [
+    AnonymousFallbackAuthGuard,
+    AuthGuard,
     BridgeTransactionMapper,
     CreationTransactionMapper,
     CustomTransactionMapper,
@@ -115,6 +122,7 @@ import { BridgeModule } from '@/modules/bridge/bridge.module';
     QueuedItemsMapper,
     SafeAppInfoMapper,
     SettingsChangeMapper,
+    ShieldedAccessService,
     SwapTransferInfoMapper,
     TransactionDataMapper,
     TransactionPreviewMapper,

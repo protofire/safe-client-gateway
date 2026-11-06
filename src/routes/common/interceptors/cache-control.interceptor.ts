@@ -19,7 +19,8 @@ export class CacheControlInterceptor implements NestInterceptor {
     return next.handle().pipe(
       tap(() => {
         const response: Response = context.switchToHttp().getResponse();
-        if (!response.headersSent) {
+        // A route-specific value takes precedence
+        if (!response.headersSent && !response.hasHeader('Cache-Control')) {
           response.header('Cache-Control', 'no-cache');
         }
       }),

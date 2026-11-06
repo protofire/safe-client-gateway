@@ -7,9 +7,10 @@ import {
 } from '@/datasources/cache/cache.service.interface';
 import { HttpErrorFactory } from '@/datasources/errors/http-error-factory';
 import {
-  INetworkService,
-  NetworkService,
-} from '@/datasources/network/network.service.interface';
+  TxAuthCacheFirstDataSource,
+  TxAuthNetworkService,
+} from '@/datasources/network/tx-auth.network.module';
+import { INetworkService } from '@/datasources/network/network.service.interface';
 import { TransactionApi } from '@/modules/transactions/datasources/transaction-api.service';
 import { ChainSchema } from '@/modules/chains/domain/entities/schemas/chain.schema';
 import { IConfigApi } from '@/domain/interfaces/config-api.interface';
@@ -26,10 +27,12 @@ export class TransactionApiManager implements ITransactionApiManager {
     @Inject(IConfigurationService)
     private readonly configurationService: IConfigurationService,
     @Inject(IConfigApi) private readonly configApi: IConfigApi,
+    @Inject(TxAuthCacheFirstDataSource)
     private readonly dataSource: CacheFirstDataSource,
     @Inject(CacheService) private readonly cacheService: ICacheService,
     private readonly httpErrorFactory: HttpErrorFactory,
-    @Inject(NetworkService) private readonly networkService: INetworkService,
+    @Inject(TxAuthNetworkService)
+    private readonly networkService: INetworkService,
     @Inject(LoggingService) private readonly loggingService: ILoggingService,
   ) {
     this.useVpcUrl = this.configurationService.getOrThrow<boolean>(
