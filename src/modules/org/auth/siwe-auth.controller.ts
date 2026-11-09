@@ -11,7 +11,11 @@ import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { AuthService, type MeDto } from '@/modules/org/auth/auth.service';
 import { OrgSession, Public } from '@/modules/org/auth/decorators';
-import { SESSION_COOKIE } from '@/modules/org/auth/session.guard';
+import {
+  SESSION_COOKIE,
+  SESSION_COOKIE_OPTIONS,
+  setSessionCookie,
+} from '@/modules/org/auth/session.guard';
 import { ValidationPipe } from '@/validation/pipes/validation.pipe';
 
 const SiweBodySchema = z.object({
@@ -19,8 +23,6 @@ const SiweBodySchema = z.object({
   signature: z.string().regex(/^0x[0-9a-fA-F]+$/),
 });
 type SiweBody = { message: string; signature: `0x${string}` };
-
-const COOKIE_PATH = '/v1/orgs';
 
 @Controller({ path: 'orgs/auth', version: '1' })
 export class SiweAuthController {
@@ -45,13 +47,7 @@ export class SiweAuthController {
       ip: clientIp(req),
       userAgent: req.header('user-agent') ?? null,
     });
-    res.cookie(SESSION_COOKIE, token, {
-      httpOnly: true,
-      secure: true,
-      sameSite: 'lax',
-      path: COOKIE_PATH,
-      maxAge: this.auth.sessionMaxAgeSeconds * 1000,
-    });
+    setSessionCookie(res, token, this.auth.sessionMaxAgeSeconds);
     return { user: { id: userId } };
   }
 
@@ -61,8 +57,13 @@ export class SiweAuthController {
     @OrgSession() session: OrgSession,
     @Body(new ValidationPipe(SiweBodySchema)) body: SiweBody,
     @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
   ): Promise<{ ok: true }> {
-    await this.auth.stepUpWithSiwe(session, { ...body, ip: clientIp(req) });
+    const token = await this.auth.stepUpWithSiwe(session, {
+      ...body,
+      ip: clientIp(req),
+    });
+    setSessionCookie(res, token, this.auth.sessionMaxAgeSeconds);
     return { ok: true };
   }
 
@@ -76,12 +77,7 @@ export class SiweAuthController {
   ): Promise<void> {
     const token: unknown = req.cookies?.[SESSION_COOKIE];
     await this.auth.logout(typeof token === 'string' ? token : undefined);
-    res.clearCookie(SESSION_COOKIE, {
-      httpOnly: true,
-      secure: true,
-      sameSite: 'lax',
-      path: COOKIE_PATH,
-    });
+    res.clearCookie(SESSION_COOKIE, SESSION_COOKIE_OPTIONS);
   }
 
   @Get('me')

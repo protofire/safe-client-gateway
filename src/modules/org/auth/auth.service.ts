@@ -17,9 +17,11 @@ import {
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import type { OrgSession } from '@/modules/org/auth/decorators';
 import { NonceStore } from '@/modules/org/auth/nonce.store';
+import { SecurityEvents } from '@/modules/org/auth/security-events';
 import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
 import { Clock, type IClock } from '@/modules/org/common/clock';
-import { RateLimiter } from '@/modules/org/common/rate-limiter';
+import { ipBucket, RateLimiter } from '@/modules/org/common/rate-limiter';
+import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
 import { ORG_DATA_SOURCE } from '@/modules/org/db/org-data-source';
 
 // spec §8: SIWE verify 10/min per IP. No per-account limit: the account is
@@ -34,7 +36,7 @@ export type MeDto = {
   user: { id: string };
   identities: Array<
     | { id: string; kind: 'wallet'; walletAddress: string }
-    | { id: string; kind: 'oidc'; issuer: string }
+    | { id: string; kind: 'oidc'; issuer: string; email: string | null }
   >;
   hasTotp: boolean;
   lastStrongAuthAt: string | null;
@@ -57,6 +59,8 @@ export class AuthService {
     private readonly sessions: SessionsRepository,
     private readonly rateLimiter: RateLimiter,
     private readonly nonces: NonceStore,
+    private readonly encryption: FieldEncryptionService,
+    private readonly securityEvents: SecurityEvents,
   ) {
     const appUrl = new URL(config.getOrThrow<string>('org.publicAppUrl'));
     this.appOrigin = appUrl.origin;
@@ -75,7 +79,7 @@ export class AuthService {
   }
 
   async createNonce(ip: string): Promise<{ nonce: string }> {
-    await this.limit(`nonce:ip:${ip}`, NONCE_PER_IP);
+    await this.limit(`nonce:ip:${ipBucket(ip)}`, NONCE_PER_IP);
     const nonce = generateSiweNonce();
     try {
       await this.nonces.issue(nonce, this.nonceTtlSeconds);
@@ -101,16 +105,27 @@ export class AuthService {
     const { token } = await this.sessions.create({
       userId,
       amr: ['siwe'],
+      strong: true,
       now: this.clock.now(),
       idleTtlSeconds: this.idleTtlSeconds,
       absoluteTtlSeconds: this.absoluteTtlSeconds,
       userAgent: attempt.userAgent,
     });
+    await this.securityEvents.record(
+      userId,
+      'security.signed_in',
+      { method: 'siwe' },
+      attempt.ip,
+      attempt.userAgent,
+    );
     return { userId, token };
   }
 
-  /** Only a wallet already linked to the session user counts (amendment A5). */
-  async stepUpWithSiwe(session: OrgSession, attempt: Attempt): Promise<void> {
+  /**
+   * Only a wallet already linked to the session user counts (amendment A5).
+   * Returns the rotated session token (the old one stops working).
+   */
+  async stepUpWithSiwe(session: OrgSession, attempt: Attempt): Promise<string> {
     const address = await this.verifySiwe(attempt);
     const [identity] = await this.db.query(
       `SELECT user_id AS "userId" FROM identities
@@ -120,7 +135,18 @@ export class AuthService {
     if (identity?.userId !== session.userId) {
       throw new UnauthorizedException('Wallet is not linked to this account');
     }
-    await this.sessions.markStrong(session.sessionId, 'siwe', this.clock.now());
+    const token = await this.sessions.elevate(
+      session.sessionId,
+      'siwe',
+      this.clock.now(),
+    );
+    await this.securityEvents.record(
+      session.userId,
+      'security.step_up',
+      { method: 'siwe' },
+      attempt.ip,
+    );
+    return token;
   }
 
   /** Revokes the session the token names, if any. */
@@ -134,18 +160,26 @@ export class AuthService {
       kind: 'wallet' | 'oidc';
       walletAddress: string | null;
       issuer: string | null;
+      emailEncrypted: string | null;
     }> = await this.db.query(
-      `SELECT id, kind, wallet_address AS "walletAddress", oidc_issuer AS issuer
+      `SELECT id, kind, wallet_address AS "walletAddress", oidc_issuer AS issuer,
+         email_encrypted AS "emailEncrypted"
        FROM identities WHERE user_id = $1 ORDER BY created_at, id`,
       [session.userId],
     );
     return {
       user: { id: session.userId },
-      // shortcut: OIDC email is not returned until Task 5 wires field decryption
       identities: rows.map((r) =>
         r.kind === 'wallet'
           ? { id: r.id, kind: 'wallet', walletAddress: r.walletAddress! }
-          : { id: r.id, kind: 'oidc', issuer: r.issuer! },
+          : {
+              id: r.id,
+              kind: 'oidc',
+              issuer: r.issuer!,
+              email: r.emailEncrypted
+                ? this.encryption.decrypt(r.emailEncrypted)
+                : null,
+            },
       ),
       hasTotp: await this.hasConfirmedTotp(session.userId),
       lastStrongAuthAt: session.lastStrongAuthAt?.toISOString() ?? null,
@@ -177,7 +211,7 @@ export class AuthService {
    * exactly one concurrent caller wins it.
    */
   private async verifySiwe(attempt: Attempt): Promise<Address> {
-    await this.limit(`siwe:ip:${attempt.ip}`, VERIFY_PER_IP);
+    await this.limit(`siwe:ip:${ipBucket(attempt.ip)}`, VERIFY_PER_IP);
 
     let message: ReturnType<typeof parseSiweMessage>;
     try {

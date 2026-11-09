@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import { AuthService } from '@/modules/org/auth/auth.service';
-import type { OrgRequest } from '@/modules/org/auth/decorators';
+import type { OrgRequest, OrgSession } from '@/modules/org/auth/decorators';
 import { Clock, type IClock } from '@/modules/org/common/clock';
 
 /** Applied by `@RequireStrongAuth()`; runs after the global SessionGuard. */
@@ -28,20 +28,29 @@ export class StrongAuthGuard implements CanActivate {
     const session = context.switchToHttp().getRequest<OrgRequest>().orgSession;
     if (!session) throw new Error('StrongAuthGuard needs SessionGuard first');
 
-    const last = session.lastStrongAuthAt;
-    if (last && this.clock.now().getTime() - last.getTime() <= this.windowMs) {
-      return true;
-    }
+    if (this.isFresh(session)) return true;
+    throw await this.denial(session.userId);
+  }
 
-    const methods = await this.auth.stepUpMethods(session.userId);
+  isFresh(session: OrgSession): boolean {
+    const last = session.lastStrongAuthAt;
+    return (
+      last !== null &&
+      this.clock.now().getTime() - last.getTime() <= this.windowMs
+    );
+  }
+
+  /** The 403 for a session without fresh strong auth. */
+  async denial(userId: string): Promise<ForbiddenException> {
+    const methods = await this.auth.stepUpMethods(userId);
     if (methods.length === 0) {
-      throw new ForbiddenException({
+      return new ForbiddenException({
         statusCode: 403,
         message: 'Enable two-factor authentication first',
         code: 'totp_required',
       });
     }
-    throw new ForbiddenException({
+    return new ForbiddenException({
       statusCode: 403,
       message: 'Fresh strong authentication required',
       code: 'step_up_required',

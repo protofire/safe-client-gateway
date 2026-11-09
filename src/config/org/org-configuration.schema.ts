@@ -47,6 +47,18 @@ const encryptionKeys = z.string().superRefine((value, ctx) => {
 const port = z.coerce.number().int().min(1).max(65535);
 const seconds = z.coerce.number().int().min(1).optional();
 const url = z.url();
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+// https, or http only on a loopback host (local OIDC mock)
+const httpsUrl = url.refine(
+  (v) => {
+    const { protocol, hostname } = new URL(v);
+    return (
+      protocol === 'https:' ||
+      (protocol === 'http:' && LOCAL_HOSTS.has(hostname))
+    );
+  },
+  { error: 'Must be https (plain http only for localhost)' },
+);
 
 /**
  * Environment contract of cgw-org. Deliberately independent of
@@ -93,10 +105,10 @@ export const OrgConfigurationSchema = z
     // HMAC key for email lookup hashes (amendment A14)
     ORG_EMAIL_HASH_KEY: keyBytes,
 
-    ORG_OIDC_ISSUER: url,
+    ORG_OIDC_ISSUER: httpsUrl,
     ORG_OIDC_CLIENT_ID: z.string().min(1),
     ORG_OIDC_CLIENT_SECRET: z.string().min(1),
-    ORG_OIDC_REDIRECT_URI: url,
+    ORG_OIDC_REDIRECT_URI: httpsUrl,
     ORG_OIDC_POST_LOGIN_REDIRECT: url,
 
     ORG_MAIL_API_KEY: z.string().min(1),

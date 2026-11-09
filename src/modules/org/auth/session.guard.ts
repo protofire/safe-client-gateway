@@ -6,12 +6,31 @@ import {
   type ExecutionContext,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import type { Response } from 'express';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import { IS_PUBLIC, type OrgRequest } from '@/modules/org/auth/decorators';
 import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
 import { Clock, type IClock } from '@/modules/org/common/clock';
 
 export const SESSION_COOKIE = 'org_session';
+export const SESSION_COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: true,
+  sameSite: 'lax',
+  path: '/v1/orgs',
+} as const;
+
+/** Sets (or replaces, after rotation) the session cookie. */
+export function setSessionCookie(
+  res: Response,
+  token: string,
+  maxAgeSeconds: number,
+): void {
+  res.cookie(SESSION_COOKIE, token, {
+    ...SESSION_COOKIE_OPTIONS,
+    maxAge: maxAgeSeconds * 1000,
+  });
+}
 const TOUCH_INTERVAL_MS = 60_000;
 
 /** Global for /v1/orgs/**; `@Public()` opts a route out. */
