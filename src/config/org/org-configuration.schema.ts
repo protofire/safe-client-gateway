@@ -111,7 +111,8 @@ export const OrgConfigurationSchema = z
     ORG_OIDC_REDIRECT_URI: httpsUrl,
     ORG_OIDC_POST_LOGIN_REDIRECT: url,
 
-    ORG_MAIL_API_KEY: z.string().min(1),
+    // Optional outside production: without it the invite link is logged instead of mailed
+    ORG_MAIL_API_KEY: z.string().min(1).optional(),
     ORG_MAIL_FROM: z.string().min(1),
     ORG_MAIL_BASE_URL: url,
 
@@ -122,4 +123,15 @@ export const OrgConfigurationSchema = z
     BLOCKLIST_SECRET_KEY: z.string().min(1),
     BLOCKLIST_SECRET_SALT: z.string().min(1),
   })
-  .loose();
+  .loose()
+  .superRefine((env, ctx) => {
+    const production =
+      env.NODE_ENV === 'production' || env.CGW_ENV === 'production';
+    if (production && !env.ORG_MAIL_API_KEY) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['ORG_MAIL_API_KEY'],
+        message: 'Required in production',
+      });
+    }
+  });

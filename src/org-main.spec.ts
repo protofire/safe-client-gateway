@@ -1,4 +1,14 @@
-import { Controller, Get, Global, Module, Post } from '@nestjs/common';
+import {
+  Controller,
+  Delete,
+  Get,
+  Global,
+  Module,
+  Post,
+  type DynamicModule,
+  type Type,
+} from '@nestjs/common';
+import { MODULE_METADATA } from '@nestjs/common/constants';
 import { APP_GUARD } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
@@ -18,6 +28,18 @@ import { RateLimiter } from '@/modules/org/common/rate-limiter';
 import { SecurityEvents } from '@/modules/org/auth/security-events';
 import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
 import { ORG_REDIS } from '@/modules/org/auth/nonce.store';
+import { AccountController } from '@/modules/org/account/account.controller';
+import { OrgAccountModule } from '@/modules/org/account/account.module';
+import { AccountService } from '@/modules/org/account/account.service';
+import { ActivityModule } from '@/modules/org/activity/activity.module';
+import { AddressBookModule } from '@/modules/org/address-book/address-book.module';
+import { InvitationsController } from '@/modules/org/members/invitations.controller';
+import { InvitationsService } from '@/modules/org/members/invitations.service';
+import { MembersController } from '@/modules/org/members/members.controller';
+import { MembersModule } from '@/modules/org/members/members.module';
+import { OrgsModule } from '@/modules/org/orgs/orgs.module';
+import { SafesModule } from '@/modules/org/safes/safes.module';
+import { OrgAppModule } from '@/org-app.module';
 
 const ping = jest.fn();
 const dbQuery = jest.fn();
@@ -313,6 +335,137 @@ describe('route order', () => {
       // the stub is mounted and reachable for real org ids
       await request(app.getHttpServer())
         .get('/v1/orgs/7d3e/members')
+        .set('Cookie', 'org_session=token')
+        .expect(200)
+        .expect({ leaked: true });
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+// /v1/orgs/:orgId routes that would swallow the static account and
+// invitation routes if they were registered first
+@Controller({ path: 'orgs', version: '1' })
+class OrgIdWriteStubController {
+  @Delete(':orgId')
+  delete(): { leaked: boolean } {
+    return { leaked: true };
+  }
+
+  @Post(':orgId/:resource')
+  post(): { leaked: boolean } {
+    return { leaked: true };
+  }
+}
+
+@Module({ controllers: [OrgIdWriteStubController] })
+class OrgIdWriteStubModule {}
+
+describe('route order of static org routes', () => {
+  it('registers the account and invitation modules before every :orgId module in OrgAppModule', () => {
+    const imports = (OrgAppModule.register().imports ?? []) as Array<
+      Type | DynamicModule
+    >;
+    const at = (m: Type): number => imports.indexOf(m);
+
+    for (const staticModule of [OrgAuthModule, OrgAccountModule, MembersModule]) {
+      for (const orgIdModule of [OrgsModule, ActivityModule, SafesModule, AddressBookModule]) {
+        expect(at(staticModule)).toBeGreaterThanOrEqual(0);
+        expect(at(staticModule)).toBeLessThan(at(orgIdModule));
+      }
+    }
+    expect(Reflect.getMetadata(MODULE_METADATA.CONTROLLERS, MembersModule)).toEqual([
+      InvitationsController,
+      MembersController,
+    ]);
+  });
+
+  it('DELETE /v1/orgs/account and POST /v1/orgs/invitations/accept reach their own handlers', async () => {
+    const session = {
+      id: 'session-1',
+      userId: 'user-1',
+      amr: ['siwe'],
+      lastStrongAuthAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const deleteAccount = jest.fn().mockResolvedValue(undefined);
+    const acceptByToken = jest.fn().mockResolvedValue({ orgId: 'org-1' });
+    const config: Record<string, unknown> = {
+      'org.trustProxyHops': 1,
+      'org.publicAppUrl': PUBLIC_APP_URL,
+      'express.jsonLimit': '1mb',
+      'org.session.idleTtlSeconds': 3600,
+      'org.session.strongAuthWindowSeconds': 1800,
+    };
+    @Global()
+    @Module({
+      providers: [
+        {
+          provide: IConfigurationService,
+          useValue: { getOrThrow: (k: string): unknown => config[k] },
+        },
+      ],
+      exports: [IConfigurationService],
+    })
+    class ConfigStubModule {}
+    @Module({
+      controllers: [AccountController],
+      providers: [{ provide: AccountService, useValue: { delete: deleteAccount } }],
+    })
+    class AccountStubModule {}
+    @Module({
+      controllers: [InvitationsController],
+      providers: [{ provide: InvitationsService, useValue: { acceptByToken } }],
+    })
+    class InvitationsStubModule {}
+
+    const moduleRef = await Test.createTestingModule({
+      // same order as OrgAppModule (asserted above)
+      imports: [
+        ConfigStubModule,
+        OrgAuthModule,
+        AccountStubModule,
+        InvitationsStubModule,
+        OrgIdWriteStubModule,
+      ],
+      providers: [{ provide: APP_GUARD, useClass: SessionGuard }],
+    })
+      .overrideProvider(SessionsRepository)
+      .useValue({ findActive: jest.fn().mockResolvedValue(session) })
+      .overrideProvider(AuthService)
+      .useValue({})
+      .overrideProvider(RateLimiter)
+      .useValue({})
+      .overrideProvider(SecurityEvents)
+      .useValue({})
+      .overrideProvider(FieldEncryptionService)
+      .useValue({})
+      .overrideProvider(ORG_REDIS)
+      .useValue({ quit: jest.fn() })
+      .compile();
+    const app = moduleRef.createNestApplication<NestExpressApplication>();
+    configureOrgApp(app);
+    await app.init();
+    try {
+      await request(app.getHttpServer())
+        .delete('/v1/orgs/account')
+        .set('Cookie', 'org_session=token')
+        .expect(204);
+      expect(deleteAccount).toHaveBeenCalledWith('user-1');
+      await request(app.getHttpServer())
+        .post('/v1/orgs/invitations/accept')
+        .set('Cookie', 'org_session=token')
+        .send({ token: 'a'.repeat(43) })
+        .expect(200)
+        .expect({ orgId: 'org-1' });
+      expect(acceptByToken).toHaveBeenCalledWith(
+        'a'.repeat(43),
+        expect.objectContaining({ userId: 'user-1' }),
+      );
+      // the stub is mounted and reachable for real org ids
+      await request(app.getHttpServer())
+        .delete('/v1/orgs/7d3e')
         .set('Cookie', 'org_session=token')
         .expect(200)
         .expect({ leaked: true });

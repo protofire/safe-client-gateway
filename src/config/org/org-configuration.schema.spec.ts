@@ -35,6 +35,18 @@ function validEnv(): Record<string, string> {
 }
 
 describe('OrgConfigurationSchema', () => {
+  it('requires ORG_MAIL_API_KEY only in production', () => {
+    const env: Record<string, string> = validEnv();
+    delete env.ORG_MAIL_API_KEY;
+
+    expect(OrgConfigurationSchema.safeParse(env).success).toBe(true);
+    for (const flag of [{ NODE_ENV: 'production' }, { CGW_ENV: 'production' }]) {
+      expect(OrgConfigurationSchema.safeParse({ ...env, ...flag }).success).toBe(
+        false,
+      );
+    }
+  });
+
   it('accepts a config without JWT_SECRET, AUTH_TOKEN, RELAY_* and POSTGRES_*', () => {
     const env = validEnv();
     for (const name of Object.keys(env)) {

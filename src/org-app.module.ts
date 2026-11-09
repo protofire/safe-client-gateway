@@ -17,6 +17,7 @@ import { CacheModule } from '@/datasources/cache/cache.module';
 import { CircuitBreakerModule } from '@/datasources/circuit-breaker/circuit-breaker.module';
 import { NetworkModule } from '@/datasources/network/network.module';
 import { RequestScopedLoggingModule } from '@/logging/logging.module';
+import { OrgAccountModule } from '@/modules/org/account/account.module';
 import { ActivityModule } from '@/modules/org/activity/activity.module';
 import { AddressBookModule } from '@/modules/org/address-book/address-book.module';
 import { CsrfGuard } from '@/modules/org/auth/csrf.guard';
@@ -26,6 +27,9 @@ import { OrgOidcModule } from '@/modules/org/auth/oidc/oidc.module';
 import { OrgTotpModule } from '@/modules/org/auth/totp/totp.module';
 import { SessionGuard } from '@/modules/org/auth/session.guard';
 import { OrgDatabaseModule } from '@/modules/org/db/org-database.module';
+import { OrgJobsModule } from '@/modules/org/jobs/org-jobs.module';
+import { MembersModule } from '@/modules/org/members/members.module';
+import { OrgsModule } from '@/modules/org/orgs/orgs.module';
 import { OrgHealthController } from '@/modules/org/health/org-health.controller';
 import { OrgMemberGuard } from '@/modules/org/permissions/org-member.guard';
 import { PermissionsModule } from '@/modules/org/permissions/permissions.module';
@@ -83,9 +87,14 @@ export class OrgAppModule implements NestModule {
         OrgAuthModule,
         OrgOidcModule,
         OrgTotpModule,
+        OrgAccountModule,
+        // InvitationsController (static paths) first inside, then :orgId routes
+        MembersModule,
+        OrgsModule,
         ActivityModule,
         SafesModule,
         AddressBookModule,
+        OrgJobsModule,
       ],
       controllers: [OrgHealthController],
       providers: [
