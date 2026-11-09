@@ -28,10 +28,6 @@ export default () => ({
         username: process.env.ORG_DB_APP_USERNAME,
         password: process.env.ORG_DB_APP_PASSWORD,
       },
-      migrator: {
-        username: process.env.ORG_DB_MIGRATOR_USERNAME,
-        password: process.env.ORG_DB_MIGRATOR_PASSWORD,
-      },
     },
     amqp: {
       url: process.env.ORG_AMQP_URL,

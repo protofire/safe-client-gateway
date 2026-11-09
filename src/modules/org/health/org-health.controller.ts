@@ -31,8 +31,9 @@ export class OrgHealthController {
 
   @ApiOkResponse({ type: Health })
   @Get('live')
-  liveness(): Promise<Health> {
-    return this.check();
+  liveness(): Health {
+    // Process-up only: a Redis outage must not make the orchestrator restart us
+    return new Health(HealthStatus.OK);
   }
 
   @ApiOkResponse({ type: Health })

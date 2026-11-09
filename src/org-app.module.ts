@@ -19,6 +19,8 @@ import { RequestScopedLoggingModule } from '@/logging/logging.module';
 import { OrgHealthController } from '@/modules/org/health/org-health.controller';
 import { GlobalErrorFilter } from '@/routes/common/filters/global-error.filter';
 
+export const ORG_CACHE_KEY_PREFIX = 'org:';
+
 /**
  * Root module of cgw-org: Organization API, own Redis/Postgres/AMQP, own
  * configuration. Feature modules are added to `imports` by later tasks.
@@ -31,7 +33,7 @@ export class OrgAppModule implements NestModule {
       imports: [
         // Required by TransactionVerifierHelper in the reused Safe repositories
         BlocklistModule,
-        CacheModule,
+        CacheModule.register(ORG_CACHE_KEY_PREFIX),
         CircuitBreakerModule,
         ClsModule.forRoot({
           global: true,
@@ -40,7 +42,9 @@ export class OrgAppModule implements NestModule {
             idGenerator: () => crypto.randomUUID(),
           },
         }),
-        ConfigurationModule.register(configFactory, OrgConfigurationSchema),
+        ConfigurationModule.register(configFactory, OrgConfigurationSchema, {
+          ignoreEnvFile: true,
+        }),
         InMemoryCacheModule.register({ isGlobal: true }),
         NetworkModule,
         RequestScopedLoggingModule,

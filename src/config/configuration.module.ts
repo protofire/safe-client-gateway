@@ -20,11 +20,14 @@ export class ConfigurationModule {
   static register(
     configFactory: ConfigFactory,
     schema: ZodType = RootConfigurationSchema,
+    options: { ignoreEnvFile?: boolean } = {},
   ): DynamicModule {
     return {
       module: ConfigurationModule,
       imports: [
         ConfigModule.forRoot({
+          // The org process must never pick up a gateway .env next to it
+          ignoreEnvFile: options.ignoreEnvFile ?? false,
           validate: (config: Record<string, unknown>) => {
             return configurationValidator(config, schema);
           },

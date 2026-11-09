@@ -55,18 +55,22 @@ export const OrgConfigurationSchema = z
     // Validated as a non-negative integer at bootstrap (configureOrgApp)
     ORG_TRUST_PROXY_HOPS: z.string().optional(),
     // Exact origin allowed by CORS; a wildcard would be unsafe with credentials
-    ORG_PUBLIC_APP_URL: url,
+    ORG_PUBLIC_APP_URL: url.refine(
+      (v) => URL.canParse(v) && new URL(v).origin === v,
+      {
+        error:
+          'Must be an exact origin: no trailing slash, path, query or hash',
+      },
+    ),
 
     ORG_DB_HOST: z.string().min(1),
     ORG_DB_PORT: port,
     ORG_DB_NAME: z.string().min(1),
     ORG_DB_SSL: z.enum(['true', 'false']).optional(),
-    // Runtime login: not the owner, no BYPASSRLS
+    // Runtime login: not the owner, no BYPASSRLS. The owner (migrator) login is
+    // read only by the one-off migration entry, never by this process.
     ORG_DB_APP_USERNAME: z.string().min(1),
     ORG_DB_APP_PASSWORD: z.string().min(1),
-    // Owner login, used by the migration runner only
-    ORG_DB_MIGRATOR_USERNAME: z.string().min(1),
-    ORG_DB_MIGRATOR_PASSWORD: z.string().min(1),
 
     ORG_REDIS_HOST: z.string().min(1),
     ORG_REDIS_PORT: z.string().optional(),

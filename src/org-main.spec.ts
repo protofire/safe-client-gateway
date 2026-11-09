@@ -8,6 +8,7 @@ import { LoggingService } from '@/logging/logging.interface';
 import { configureOrgApp } from '@/org-main';
 import { OrgHealthController } from '@/modules/org/health/org-health.controller';
 
+const ping = jest.fn();
 const PUBLIC_APP_URL = 'https://app.example.com';
 
 @Controller({ path: 'orgs', version: '1' })
@@ -45,12 +46,31 @@ class GatewayAuthStubController {
   }
 }
 
+// Would answer 200 if the allowlist let a look-alike prefix or a param route through
+@Controller({ path: 'orgsx', version: '1' })
+class LookalikeStubController {
+  @Get()
+  get(): { leaked: boolean } {
+    return { leaked: true };
+  }
+}
+
+@Controller({ version: '1' })
+class ParamStubController {
+  @Get(':x')
+  get(): { leaked: boolean } {
+    return { leaked: true };
+  }
+}
+
 @Module({
   controllers: [
     OrgsStubController,
     ChainsStubController,
     GatewayAuthStubController,
     OrgHealthController,
+    LookalikeStubController,
+    ParamStubController,
   ],
 })
 class StubModule {}
@@ -75,7 +95,7 @@ async function createApp(
       },
       {
         provide: CacheReadiness,
-        useValue: { ping: jest.fn().mockResolvedValue('PONG') },
+        useValue: { ping },
       },
       {
         provide: LoggingService,
@@ -99,6 +119,7 @@ describe('configureOrgApp', () => {
   let app: NestExpressApplication;
 
   beforeAll(async () => {
+    ping.mockResolvedValue('PONG');
     app = await createApp(1);
   });
 
@@ -124,9 +145,24 @@ describe('configureOrgApp', () => {
       .expect({ status: 'OK' });
   });
 
-  it('does not treat /v1/orgsx or /v1/orgs-evil as org paths', async () => {
+  it('answers /health/live without touching Redis, /health/ready needs it', async () => {
+    ping.mockRejectedValue(new Error('redis down'));
+
+    await request(app.getHttpServer())
+      .get('/health/live')
+      .expect(200)
+      .expect({ status: 'OK' });
+    await request(app.getHttpServer()).get('/health/ready').expect(503);
+    expect(ping).toHaveBeenCalledTimes(1);
+
+    ping.mockResolvedValue('PONG');
+    await request(app.getHttpServer()).get('/health/ready').expect(200);
+  });
+
+  it('does not treat /v1/orgsx, /v1/orgs-evil or any /v1/:x as org paths', async () => {
     await request(app.getHttpServer()).get('/v1/orgsx').expect(404);
     await request(app.getHttpServer()).get('/v1/orgs-evil').expect(404);
+    await request(app.getHttpServer()).get('/v1/anything').expect(404);
   });
 
   it('answers a CORS preflight from the public app URL with credentials', async () => {

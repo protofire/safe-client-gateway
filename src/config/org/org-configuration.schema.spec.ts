@@ -10,8 +10,6 @@ function validEnv(): Record<string, string> {
     ORG_DB_NAME: 'org',
     ORG_DB_APP_USERNAME: 'org_app',
     ORG_DB_APP_PASSWORD: 'placeholder',
-    ORG_DB_MIGRATOR_USERNAME: 'org_migrator',
-    ORG_DB_MIGRATOR_PASSWORD: 'placeholder',
     ORG_REDIS_HOST: 'localhost',
     ORG_AMQP_URL: 'amqp://localhost:5672',
     ORG_AMQP_EXCHANGE_NAME: 'safe-transaction-service-events',
@@ -44,12 +42,6 @@ describe('OrgConfigurationSchema', () => {
     }
 
     expect(OrgConfigurationSchema.safeParse(env).success).toBe(true);
-  });
-
-  it('does not require gateway secrets even when they are absent from a minimal env', () => {
-    const result = OrgConfigurationSchema.safeParse(validEnv());
-
-    expect(result.success).toBe(true);
   });
 
   it.each([
@@ -87,12 +79,22 @@ describe('OrgConfigurationSchema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('rejects a non-URL public app URL', () => {
-    const result = OrgConfigurationSchema.safeParse({
-      ...validEnv(),
-      ORG_PUBLIC_APP_URL: '*',
-    });
+  it.each(['*', 'https://app.example.com/', 'https://app.example.com/x'])(
+    'rejects a public app URL that is not an exact origin: %s',
+    (value) => {
+      const result = OrgConfigurationSchema.safeParse({
+        ...validEnv(),
+        ORG_PUBLIC_APP_URL: value,
+      });
 
-    expect(result.success).toBe(false);
+      expect(result.success).toBe(false);
+    },
+  );
+
+  it('does not require the migrator login at runtime', () => {
+    const env = validEnv();
+
+    expect(Object.keys(env).some((k) => k.includes('MIGRATOR'))).toBe(false);
+    expect(OrgConfigurationSchema.safeParse(env).success).toBe(true);
   });
 });
