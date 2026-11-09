@@ -1,6 +1,9 @@
 const int = (value: string | undefined, fallback: number): number =>
   value === undefined || value === '' ? fallback : parseInt(value);
 
+const flag = (name: string): boolean =>
+  process.env[name]?.toLowerCase() === 'true';
+
 /**
  * Configuration of cgw-org. Every key is read from an ORG_* variable (or a
  * shared compliance variable), never from the gateway's secrets. The `redis`,
@@ -61,12 +64,106 @@ export default () => ({
     },
   },
   // ---- keys read by reused gateway modules ----
-  application: { isDevelopment: process.env.NODE_ENV !== 'production' },
+  application: {
+    isDevelopment: process.env.NODE_ENV !== 'production',
+    isProduction: process.env.CGW_ENV === 'production',
+  },
+  contracts: {
+    trustedForDelegateCall: {
+      maxSequentialPages: int(
+        process.env.TRUSTED_CONTRACTS_MAX_SEQUENTIAL_PAGES,
+        3,
+      ),
+    },
+  },
+  etherscan: {
+    baseUri:
+      process.env.ETHERSCAN_BASE_URI || 'https://api.etherscan.io/v2/api',
+    apiKey: process.env.ETHERSCAN_API_KEY,
+    gasPriceCacheTtlSeconds: int(
+      process.env.ETHERSCAN_GAS_PRICE_CACHE_TTL_SECONDS,
+      10,
+    ),
+  },
+  owners: { ownersTtlSeconds: int(process.env.OWNERS_TTL_SECONDS, 0) },
+  safeDataDecoder: {
+    baseUri:
+      process.env.SAFE_DATA_DECODER_BASE_URI ||
+      'https://safe-decoder.safe.global',
+  },
+  safeConfig: {
+    baseUri:
+      process.env.SAFE_CONFIG_BASE_URI || 'https://safe-config.safe.global/',
+    chains: {
+      maxSequentialPages: int(
+        process.env.SAFE_CONFIG_CHAINS_MAX_SEQUENTIAL_PAGES,
+        3,
+      ),
+    },
+    safes: {
+      maxSequentialPages: int(
+        process.env.SAFE_CONFIG_SAFES_MAX_SEQUENTIAL_PAGES,
+        10,
+      ),
+    },
+  },
+  safeTransaction: {
+    useVpcUrl: process.env.USE_TX_SERVICE_VPC_URL?.toLowerCase() === 'true',
+    apiKey: process.env.TX_SERVICE_API_KEY,
+  },
   auth: { nonceTtlSeconds: int(process.env.AUTH_NONCE_TTL_SECONDS, 5 * 60) },
   balances: {
     providers: {
       safe: {
-        prices: { apiKey: process.env.ORG_PRICES_PROVIDER_API_KEY },
+        prices: {
+          baseUri:
+            process.env.PRICES_PROVIDER_API_BASE_URI ||
+            'https://api.coingecko.com/api/v3',
+          apiKey: process.env.ORG_PRICES_PROVIDER_API_KEY,
+          pricesTtlSeconds: int(process.env.PRICES_TTL_SECONDS, 300),
+          nativeCoinPricesTtlSeconds: int(
+            process.env.NATIVE_COINS_PRICES_TTL_SECONDS,
+            100,
+          ),
+          notFoundPriceTtlSeconds: int(
+            process.env.NOT_FOUND_PRICE_TTL_SECONDS,
+            72 * 60 * 60,
+          ),
+          highRefreshRateTokens:
+            process.env.HIGH_REFRESH_RATE_TOKENS?.split(',') ?? [],
+          highRefreshRateTokensTtlSeconds: int(
+            process.env.HIGH_REFRESH_RATE_TOKENS_TTL_SECONDS,
+            30,
+          ),
+        },
+      },
+      // Zerion stays off (features.zerionBalancesEnabled); the keys exist because the reused module reads them
+      zerion: {
+        apiKey: process.env.ZERION_API_KEY,
+        baseUri: process.env.ZERION_BASE_URI || 'https://api.zerion.io',
+        currencies: [
+          'USD',
+          'EUR',
+          'ETH',
+          'AUD',
+          'BTC',
+          'CAD',
+          'CHF',
+          'CNY',
+          'GBP',
+          'INR',
+          'JPY',
+          'KRW',
+          'NZD',
+          'RUB',
+          'TRY',
+          'ZAR',
+        ],
+        limitPeriodSeconds: int(
+          process.env.ZERION_RATE_LIMIT_PERIOD_SECONDS,
+          10,
+        ),
+        limitCalls: int(process.env.ZERION_RATE_LIMIT_CALLS_BY_PERIOD, 2),
       },
     },
   },
@@ -89,6 +186,14 @@ export default () => ({
   expirationTimeInSeconds: {
     deviatePercent: int(process.env.EXPIRATION_DEVIATE_PERCENT, 10),
     default: int(process.env.EXPIRATION_TIME_DEFAULT_SECONDS, 60),
+    rpc: int(process.env.EXPIRATION_TIME_RPC_SECONDS, 15),
+    hoodi: int(process.env.HOODI_EXPIRATION_TIME_SECONDS, 60),
+    indexing: int(process.env.EXPIRATION_TIME_INDEXING_SECONDS, 5),
+    notFound: {
+      default: int(process.env.DEFAULT_NOT_FOUND_EXPIRE_TIME_SECONDS, 30),
+      contract: int(process.env.CONTRACT_NOT_FOUND_EXPIRE_TIME_SECONDS, 60),
+      token: int(process.env.TOKEN_NOT_FOUND_EXPIRE_TIME_SECONDS, 60),
+    },
   },
   express: { jsonLimit: process.env.EXPRESS_JSON_LIMIT ?? '1mb' },
   features: {
@@ -96,10 +201,33 @@ export default () => ({
       process.env.HTTP_CLIENT_CACHE_IN_FLIGHT_REQUESTS?.toLowerCase() ===
       'true',
     debugLogs: process.env.FF_DEBUG_LOGS?.toLowerCase() === 'true',
+    configHooksDebugLogs:
+      process.env.FF_CONFIG_HOOKS_DEBUG_LOGS?.toLowerCase() === 'true',
+    // Zerion and counterfactual balances are out of scope for the org process
+    zerionBalancesEnabled: false,
+    counterfactualBalances: false,
+    // Read by the reused TransactionVerifierHelper; same names as the gateway, off by default
+    hashVerification: {
+      api: flag('FF_HASH_VERIFICATION_API'),
+      proposal: flag('FF_HASH_VERIFICATION_PROPOSAL'),
+    },
+    signatureVerification: {
+      api: flag('FF_SIGNATURE_VERIFICATION_API'),
+      proposal: flag('FF_SIGNATURE_VERIFICATION_PROPOSAL'),
+    },
+    ethSign: flag('FF_ETH_SIGN'),
+    trustedDelegateCall: flag('FF_TRUSTED_DELEGATE_CALL'),
+    trustedForDelegateCallContractsList: flag(
+      'FF_TRUSTED_FOR_DELEGATE_CALL_CONTRACTS_LIST',
+    ),
   },
   httpClient: {
     requestTimeout: int(
       process.env.HTTP_CLIENT_REQUEST_TIMEOUT_MILLISECONDS,
+      5_000,
+    ),
+    ownersTimeout: int(
+      process.env.HTTP_CLIENT_REQUEST_TIMEOUT_MILLISECONDS_OWNERS,
       5_000,
     ),
   },
