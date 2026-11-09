@@ -18,6 +18,7 @@ import { NetworkModule } from '@/datasources/network/network.module';
 import { RequestScopedLoggingModule } from '@/logging/logging.module';
 import { OrgDatabaseModule } from '@/modules/org/db/org-database.module';
 import { OrgHealthController } from '@/modules/org/health/org-health.controller';
+import { PermissionsModule } from '@/modules/org/permissions/permissions.module';
 import { GlobalErrorFilter } from '@/routes/common/filters/global-error.filter';
 
 export const ORG_CACHE_KEY_PREFIX = 'org:';
@@ -49,6 +50,7 @@ export class OrgAppModule implements NestModule {
         InMemoryCacheModule.register({ isGlobal: true }),
         NetworkModule,
         OrgDatabaseModule,
+        PermissionsModule,
         RequestScopedLoggingModule,
       ],
       controllers: [OrgHealthController],

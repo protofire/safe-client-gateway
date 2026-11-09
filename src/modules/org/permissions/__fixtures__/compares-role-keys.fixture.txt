@@ -1,0 +1,10 @@
+// Not compiled: input for no-role-names.spec.ts, which must flag every line below.
+export function canRemove(roleKey: string, other: string): boolean {
+  if (roleKey === 'admin') return true;
+  if ("member" !== other) return false;
+  switch (roleKey) {
+    case `member`:
+      return false;
+  }
+  return 'admin' == roleKey;
+}
