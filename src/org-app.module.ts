@@ -3,6 +3,7 @@ import {
   MiddlewareConsumer,
   Module,
   NestModule,
+  type Provider,
   RequestMethod,
 } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
@@ -16,7 +17,9 @@ import { CacheModule } from '@/datasources/cache/cache.module';
 import { CircuitBreakerModule } from '@/datasources/circuit-breaker/circuit-breaker.module';
 import { NetworkModule } from '@/datasources/network/network.module';
 import { RequestScopedLoggingModule } from '@/logging/logging.module';
+import { CsrfGuard } from '@/modules/org/auth/csrf.guard';
 import { OrgAuthModule } from '@/modules/org/auth/org-auth.module';
+import { SessionGuard } from '@/modules/org/auth/session.guard';
 import { OrgDatabaseModule } from '@/modules/org/db/org-database.module';
 import { OrgHealthController } from '@/modules/org/health/org-health.controller';
 import { OrgMemberGuard } from '@/modules/org/permissions/org-member.guard';
@@ -25,6 +28,19 @@ import { GlobalErrorFilter } from '@/routes/common/filters/global-error.filter';
 import { ZodErrorFilter } from '@/routes/common/filters/zod-error.filter';
 
 export const ORG_CACHE_KEY_PREFIX = 'org:';
+
+/**
+ * The single source of global guard order: Nest runs APP_GUARDs in
+ * registration order (pinned by org-guards.integration.spec.ts). CSRF first,
+ * so a forged request never reaches a session lookup; the session before the
+ * tenant guard, which needs `req.orgSession`. Route-level guards
+ * (`@RequireStrongAuth()`) run after all of these.
+ */
+export const ORG_APP_GUARDS: Array<Provider> = [
+  { provide: APP_GUARD, useClass: CsrfGuard },
+  { provide: APP_GUARD, useClass: SessionGuard },
+  { provide: APP_GUARD, useClass: OrgMemberGuard },
+];
 
 /**
  * Root module of cgw-org: Organization API, own Redis/Postgres/AMQP, own
@@ -64,9 +80,7 @@ export class OrgAppModule implements NestModule {
       providers: [
         { provide: APP_FILTER, useClass: GlobalErrorFilter },
         { provide: APP_FILTER, useClass: ZodErrorFilter },
-        // APP_GUARDs run in this order; it is the single source of guard order.
-        // SessionGuard (Task 4) and CsrfGuard go BEFORE this line
-        { provide: APP_GUARD, useClass: OrgMemberGuard },
+        ...ORG_APP_GUARDS,
       ],
     };
   }

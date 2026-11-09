@@ -1,9 +1,6 @@
 import { Global, Module } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
 import { AuthService } from '@/modules/org/auth/auth.service';
-import { CsrfGuard } from '@/modules/org/auth/csrf.guard';
 import { NonceStore, orgRedisProvider } from '@/modules/org/auth/nonce.store';
-import { SessionGuard } from '@/modules/org/auth/session.guard';
 import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
 import { SiweAuthController } from '@/modules/org/auth/siwe-auth.controller';
 import { StrongAuthGuard } from '@/modules/org/auth/strong-auth.guard';
@@ -11,8 +8,9 @@ import { Clock, systemClock } from '@/modules/org/common/clock';
 import { RateLimiter } from '@/modules/org/common/rate-limiter';
 
 /**
- * Global so `@RequireStrongAuth()` (StrongAuthGuard and its deps), Clock and
- * RateLimiter resolve in every org feature module. Needs the global
+ * Global so `@RequireStrongAuth()` (StrongAuthGuard and its deps), Clock,
+ * RateLimiter and SessionsRepository (for the global SessionGuard, registered
+ * with CsrfGuard in OrgAppModule's ORG_APP_GUARDS) resolve everywhere. Needs the global
  * CacheService (CacheModule) and the 'org' DataSource; opens its own Redis
  * connection for nonces (NonceStore).
  */
@@ -20,9 +18,6 @@ import { RateLimiter } from '@/modules/org/common/rate-limiter';
 @Module({
   controllers: [SiweAuthController],
   providers: [
-    // order matters: CSRF is checked before the session
-    { provide: APP_GUARD, useClass: CsrfGuard },
-    { provide: APP_GUARD, useClass: SessionGuard },
     { provide: Clock, useValue: systemClock },
     AuthService,
     NonceStore,
@@ -31,6 +26,12 @@ import { RateLimiter } from '@/modules/org/common/rate-limiter';
     SessionsRepository,
     StrongAuthGuard,
   ],
-  exports: [AuthService, Clock, RateLimiter, StrongAuthGuard],
+  exports: [
+    AuthService,
+    Clock,
+    RateLimiter,
+    SessionsRepository,
+    StrongAuthGuard,
+  ],
 })
 export class OrgAuthModule {}

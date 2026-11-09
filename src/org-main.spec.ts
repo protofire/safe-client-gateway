@@ -1,4 +1,5 @@
 import { Controller, Get, Global, Module, Post } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -11,6 +12,7 @@ import { getDataSourceToken } from '@nestjs/typeorm';
 import { ORG_DATA_SOURCE } from '@/modules/org/db/org-data-source';
 import { AuthService } from '@/modules/org/auth/auth.service';
 import { OrgAuthModule } from '@/modules/org/auth/org-auth.module';
+import { SessionGuard } from '@/modules/org/auth/session.guard';
 import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
 import { RateLimiter } from '@/modules/org/common/rate-limiter';
 import { ORG_REDIS } from '@/modules/org/auth/nonce.store';
@@ -278,6 +280,8 @@ describe('route order', () => {
 
     const moduleRef = await Test.createTestingModule({
       imports: [ConfigStubModule, OrgAuthModule, OrgIdStubModule],
+      // only the session guard of ORG_APP_GUARDS: /auth/me needs req.orgSession
+      providers: [{ provide: APP_GUARD, useClass: SessionGuard }],
     })
       .overrideProvider(SessionsRepository)
       .useValue({ findActive: jest.fn().mockResolvedValue(session) })

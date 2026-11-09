@@ -23,6 +23,8 @@ import {
 } from '@/modules/org/db/__tests__/org-test-db';
 import { ORG_DATA_SOURCE } from '@/modules/org/db/org-data-source';
 import { configureOrgApp } from '@/org-main';
+import { ORG_APP_GUARDS } from '@/org-app.module';
+import { PermissionsModule } from '@/modules/org/permissions/permissions.module';
 import { runOrgMigrations } from '@/org-migrate';
 import { GlobalErrorFilter } from '@/routes/common/filters/global-error.filter';
 import { ZodErrorFilter } from '@/routes/common/filters/zod-error.filter';
@@ -114,11 +116,13 @@ describe('SIWE auth (org)', () => {
           name: ORG_DATA_SOURCE,
         }),
         OrgAuthModule,
+        PermissionsModule,
       ],
       controllers: [StrongTestController],
       providers: [
         { provide: APP_FILTER, useClass: GlobalErrorFilter },
         { provide: APP_FILTER, useClass: ZodErrorFilter },
+        ...ORG_APP_GUARDS,
       ],
     })
       .overrideProvider(Clock)
