@@ -16,6 +16,7 @@ import {
 } from 'viem/siwe';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import type { OrgSession } from '@/modules/org/auth/decorators';
+import { attachIdentity } from '@/modules/org/auth/identities';
 import { NonceStore } from '@/modules/org/auth/nonce.store';
 import { SecurityEvents } from '@/modules/org/auth/security-events';
 import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
@@ -147,6 +148,41 @@ export class AuthService {
       attempt.ip,
     );
     return token;
+  }
+
+  /**
+   * Links the signing wallet to the session user (Task 12; the route needs
+   * strong auth). A new link ends the user's other sessions.
+   */
+  async linkWallet(
+    session: OrgSession,
+    attempt: Attempt & { userAgent: string | null },
+  ): Promise<void> {
+    const address = await this.verifySiwe(attempt);
+    const linked = await this.db.transaction(async (em) => {
+      const added = await attachIdentity(em, session.userId, {
+        kind: 'wallet',
+        walletAddress: address,
+      });
+      if (added) {
+        await this.sessions.revokeOthers(
+          session.userId,
+          session.sessionId,
+          this.clock.now(),
+          em,
+        );
+      }
+      return added;
+    });
+    if (linked) {
+      await this.securityEvents.record(
+        session.userId,
+        'security.identity_linked',
+        { kind: 'wallet' },
+        attempt.ip,
+        attempt.userAgent,
+      );
+    }
   }
 
   /** Revokes the session the token names, if any. */

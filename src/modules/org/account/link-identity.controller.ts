@@ -1,0 +1,93 @@
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+  Query,
+  Req,
+  Res,
+} from '@nestjs/common';
+import type { Request, Response } from 'express';
+import { AccountService } from '@/modules/org/account/account.service';
+import { AuthService } from '@/modules/org/auth/auth.service';
+import { OrgSession, RequireStrongAuth } from '@/modules/org/auth/decorators';
+import {
+  AuthorizeQuerySchema,
+  redirectToIssuer,
+  type AuthorizeQuery,
+} from '@/modules/org/auth/oidc/oidc.controller';
+import { OidcService } from '@/modules/org/auth/oidc/oidc.service';
+import {
+  SiweBodySchema,
+  type SiweBody,
+} from '@/modules/org/auth/siwe-auth.controller';
+import { ValidationPipe } from '@/validation/pipes/validation.pipe';
+
+/**
+ * Task 12 / A6: adding or removing a sign-in method needs fresh strong auth
+ * (only the first identity is enrolled without it, at sign-up).
+ */
+@Controller({ path: 'orgs/account', version: '1' })
+export class LinkIdentityController {
+  constructor(
+    private readonly auth: AuthService,
+    private readonly oidc: OidcService,
+    private readonly account: AccountService,
+  ) {}
+
+  /** 409 `identity_taken` if the wallet belongs to another user. */
+  @Post('link/siwe')
+  @HttpCode(200)
+  @RequireStrongAuth()
+  async linkSiwe(
+    @OrgSession() session: OrgSession,
+    @Body(new ValidationPipe(SiweBodySchema)) body: SiweBody,
+    @Req() req: Request,
+  ): Promise<{ ok: true }> {
+    await this.auth.linkWallet(session, { ...body, ...client(req) });
+    return { ok: true };
+  }
+
+  /** Same flow as sign-in; the shared callback attaches the identity to this session's user. */
+  @Get('link/oidc/authorize')
+  @RequireStrongAuth()
+  async linkOidc(
+    @OrgSession() session: OrgSession,
+    @Query(new ValidationPipe(AuthorizeQuerySchema)) query: AuthorizeQuery,
+    @Req() req: Request,
+    @Res() res: Response,
+  ): Promise<void> {
+    redirectToIssuer(
+      res,
+      await this.oidc.start({
+        connection: query.connection,
+        returnTo: query.returnTo,
+        ip: client(req).ip,
+        sessionId: session.sessionId,
+      }),
+    );
+  }
+
+  /** 409 `last_identity` for the only identity. */
+  @Delete('identities/:identityId')
+  @HttpCode(204)
+  @RequireStrongAuth()
+  async removeIdentity(
+    @OrgSession() session: OrgSession,
+    @Param('identityId') identityId: string,
+    @Req() req: Request,
+  ): Promise<void> {
+    await this.account.removeIdentity(session, identityId, client(req));
+  }
+}
+
+// req.ip honours the configured proxy hop count (configureOrgApp)
+function client(req: Request): { ip: string; userAgent: string | null } {
+  return {
+    ip: req.ip ?? 'unknown',
+    userAgent: req.header('user-agent') ?? null,
+  };
+}

@@ -351,10 +351,8 @@ describe('OrgEventsHandler', () => {
 
     // The permission re-check is covered by the safes specs; here it always passes
     const allowLink = {
-      effective: async () => ({
-        orgStatus: 'active',
-        permissions: ['safes.link'],
-      }),
+      effective: () =>
+        Promise.resolve({ orgStatus: 'active', permissions: ['safes.link'] }),
     } as never;
 
     it('seeds at link time so the first change emits an event (F3)', async () => {

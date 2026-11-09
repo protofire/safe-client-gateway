@@ -7,5 +7,6 @@ import { OidcService } from '@/modules/org/auth/oidc/oidc.service';
 @Module({
   controllers: [OidcController],
   providers: [OidcClient, OidcService],
+  exports: [OidcService],
 })
 export class OrgOidcModule {}

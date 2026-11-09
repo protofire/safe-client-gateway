@@ -18,6 +18,7 @@ import {
   OidcClient,
   type OidcConnection,
 } from '@/modules/org/auth/oidc/oidc.client';
+import { attachIdentity } from '@/modules/org/auth/identities';
 import { SecurityEvents } from '@/modules/org/auth/security-events';
 import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
 import { Clock, type IClock } from '@/modules/org/common/clock';
@@ -98,11 +99,16 @@ export class OidcService {
     return this.absoluteTtlSeconds;
   }
 
-  /** Stores the state record; `tx` goes into the browser-binding cookie. */
+  /**
+   * Stores the state record; `tx` goes into the browser-binding cookie.
+   * `sessionId` starts a linking flow (A6): the callback then attaches the
+   * identity to that session's user instead of signing in.
+   */
   async start(args: {
     connection: OidcConnection;
     returnTo: unknown;
     ip: string;
+    sessionId?: string;
   }): Promise<{ redirectUrl: string; tx: string }> {
     await this.limit(
       `oidc:authorize:ip:${ipBucket(args.ip)}`,
@@ -117,6 +123,7 @@ export class OidcService {
       nonce,
       txHash: sha256Hex(tx),
       returnTo: safeReturnTo(args.returnTo),
+      ...(args.sessionId ? { sessionId: args.sessionId } : {}),
     };
     await this.redis.set(this.statePrefix + state, JSON.stringify(record), {
       EX: OIDC_TX_TTL_SECONDS,
@@ -133,15 +140,19 @@ export class OidcService {
 
   /**
    * The state is consumed before any other check, so it is single-use even
-   * when the request is rejected. Every failure is a bare 401.
+   * when the request is rejected. Every failure is a bare 401, except 409
+   * `identity_taken` in a linking flow. `token` is null after linking (the
+   * current session stays).
    */
   async complete(args: {
     code: unknown;
     state: unknown;
     tx: unknown;
+    /** The `org_session` cookie; only read in linking flows. */
+    sessionToken: unknown;
     ip: string;
     userAgent: string | null;
-  }): Promise<{ token: string; redirectUrl: string }> {
+  }): Promise<{ token: string | null; redirectUrl: string }> {
     await this.limit(`oidc:callback:ip:${ipBucket(args.ip)}`, CALLBACK_PER_IP);
     if (typeof args.state !== 'string' || args.state === '') throw failed();
     const raw = await this.redis.getDel(this.statePrefix + args.state);
@@ -156,8 +167,16 @@ export class OidcService {
     ) {
       throw failed();
     }
-    // shortcut: linking (Task 12) is not built; refuse its records until it is
-    if (record.sessionId !== undefined) throw failed();
+    // A6: a linking flow must come back to the session that started it
+    let linkUserId: string | undefined;
+    if (record.sessionId !== undefined) {
+      const session =
+        typeof args.sessionToken === 'string'
+          ? await this.sessions.findActive(args.sessionToken, this.clock.now())
+          : null;
+      if (session?.id !== record.sessionId) throw failed();
+      linkUserId = session.userId;
+    }
     if (typeof args.code !== 'string' || args.code === '') throw failed();
 
     let identity: { subject: string; email: string };
@@ -169,6 +188,15 @@ export class OidcService {
       );
     } catch {
       throw failed();
+    }
+
+    const redirectUrl = new URL(
+      record.returnTo,
+      this.postLoginRedirect,
+    ).toString();
+    if (linkUserId !== undefined) {
+      await this.link(linkUserId, record.sessionId!, identity, args);
+      return { token: null, redirectUrl };
     }
 
     const userId = await this.findOrCreateUser(
@@ -191,10 +219,43 @@ export class OidcService {
       args.ip,
       args.userAgent,
     );
-    return {
-      token,
-      redirectUrl: new URL(record.returnTo, this.postLoginRedirect).toString(),
-    };
+    return { token, redirectUrl };
+  }
+
+  /** Attaches the IdP identity to the user; a new link ends their other sessions. */
+  private async link(
+    userId: string,
+    sessionId: string,
+    identity: { subject: string; email: string },
+    client: { ip: string; userAgent: string | null },
+  ): Promise<void> {
+    const linked = await this.db.transaction(async (em) => {
+      const added = await attachIdentity(em, userId, {
+        kind: 'oidc',
+        issuer: this.client.issuerId,
+        subject: identity.subject,
+        emailEncrypted: this.encryption.encrypt(identity.email),
+        emailHash: hmacEmail(identity.email, this.emailHashKey),
+      });
+      if (added) {
+        await this.sessions.revokeOthers(
+          userId,
+          sessionId,
+          this.clock.now(),
+          em,
+        );
+      }
+      return added;
+    });
+    if (linked) {
+      await this.securityEvents.record(
+        userId,
+        'security.identity_linked',
+        { kind: 'oidc' },
+        client.ip,
+        client.userAgent,
+      );
+    }
   }
 
   /**

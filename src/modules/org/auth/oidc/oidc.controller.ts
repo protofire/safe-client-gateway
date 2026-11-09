@@ -7,7 +7,10 @@ import {
   OIDC_TX_TTL_SECONDS,
   OidcService,
 } from '@/modules/org/auth/oidc/oidc.service';
-import { setSessionCookie } from '@/modules/org/auth/session.guard';
+import {
+  SESSION_COOKIE,
+  setSessionCookie,
+} from '@/modules/org/auth/session.guard';
 import { ValidationPipe } from '@/validation/pipes/validation.pipe';
 
 export const OIDC_TX_COOKIE = 'org_oidc_tx';
@@ -19,11 +22,23 @@ const OIDC_TX_COOKIE_OPTIONS = {
   path: '/v1/orgs/auth/oidc',
 } as const;
 
-const AuthorizeQuerySchema = z.object({
+export const AuthorizeQuerySchema = z.object({
   connection: z.enum(['email', 'google-oauth2']),
   returnTo: z.string().optional(),
 });
-type AuthorizeQuery = { connection: OidcConnection; returnTo?: string };
+export type AuthorizeQuery = { connection: OidcConnection; returnTo?: string };
+
+/** Sets the browser-binding cookie and redirects to the issuer. */
+export function redirectToIssuer(
+  res: Response,
+  started: { redirectUrl: string; tx: string },
+): void {
+  res.cookie(OIDC_TX_COOKIE, started.tx, {
+    ...OIDC_TX_COOKIE_OPTIONS,
+    maxAge: OIDC_TX_TTL_SECONDS * 1000,
+  });
+  res.redirect(302, started.redirectUrl);
+}
 
 @Controller({ path: 'orgs/auth/oidc', version: '1' })
 export class OidcController {
@@ -36,16 +51,14 @@ export class OidcController {
     @Req() req: Request,
     @Res() res: Response,
   ): Promise<void> {
-    const { redirectUrl, tx } = await this.oidc.start({
-      connection: query.connection,
-      returnTo: query.returnTo,
-      ip: clientIp(req),
-    });
-    res.cookie(OIDC_TX_COOKIE, tx, {
-      ...OIDC_TX_COOKIE_OPTIONS,
-      maxAge: OIDC_TX_TTL_SECONDS * 1000,
-    });
-    res.redirect(302, redirectUrl);
+    redirectToIssuer(
+      res,
+      await this.oidc.start({
+        connection: query.connection,
+        returnTo: query.returnTo,
+        ip: clientIp(req),
+      }),
+    );
   }
 
   @Public()
@@ -61,10 +74,11 @@ export class OidcController {
       code: query.code,
       state: query.state,
       tx: req.cookies?.[OIDC_TX_COOKIE],
+      sessionToken: req.cookies?.[SESSION_COOKIE],
       ip: clientIp(req),
       userAgent: req.header('user-agent') ?? null,
     });
-    setSessionCookie(res, token, this.oidc.sessionMaxAgeSeconds);
+    if (token) setSessionCookie(res, token, this.oidc.sessionMaxAgeSeconds);
     res.redirect(302, redirectUrl);
   }
 }

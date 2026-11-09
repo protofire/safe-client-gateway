@@ -18,11 +18,11 @@ import {
 } from '@/modules/org/auth/session.guard';
 import { ValidationPipe } from '@/validation/pipes/validation.pipe';
 
-const SiweBodySchema = z.object({
+export const SiweBodySchema = z.object({
   message: z.string().min(1).max(4096),
   signature: z.string().regex(/^0x[0-9a-fA-F]+$/),
 });
-type SiweBody = { message: string; signature: `0x${string}` };
+export type SiweBody = { message: string; signature: `0x${string}` };
 
 @Controller({ path: 'orgs/auth', version: '1' })
 export class SiweAuthController {

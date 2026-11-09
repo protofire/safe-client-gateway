@@ -6,11 +6,20 @@ import { Clock, type IClock } from '@/modules/org/common/clock';
 import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
 import { ORG_DATA_SOURCE } from '@/modules/org/db/org-data-source';
 
-/** The `security.*` subset of the activity event types (one list). */
-export type SecurityEventType = Extract<
-  ActivityEventType,
-  `security.${string}`
->;
+/**
+ * Identity changes stay in the user's own log: they are not in the org
+ * activity log, so not in ACTIVITY_EVENT_TYPES (the UI's activity filter).
+ */
+const PER_USER_ONLY = [
+  'security.signed_in',
+  'security.identity_linked',
+  'security.identity_removed',
+] as const;
+
+/** The `security.*` activity event types plus the per-user-only ones. */
+export type SecurityEventType =
+  | Extract<ActivityEventType, `security.${string}`>
+  | (typeof PER_USER_ONLY)[number];
 
 /**
  * User-scoped security events (`user_security_events`, amendment A3); the IP
@@ -33,8 +42,8 @@ export class SecurityEvents {
     userAgent?: string | null,
   ): Promise<void> {
     // One statement, so the user event and its copy in every org where the
-    // user is an active member commit together. Sign-ins stay per user
-    // (plan Task 7); step-up and factor changes are fanned out.
+    // user is an active member commit together. Sign-ins (plan Task 7) and
+    // identity changes stay per user; step-up and factor changes fan out.
     await this.db.query(
       `WITH event AS (
          INSERT INTO user_security_events (user_id, type, payload, ip_encrypted, user_agent, created_at)
@@ -45,7 +54,7 @@ export class SecurityEvents {
        FROM event e
        JOIN members m ON m.user_id = e.user_id AND m.status = 'active'
        JOIN organizations o ON o.id = m.org_id AND o.status = 'active'
-       WHERE e.type <> 'security.signed_in'`,
+       WHERE e.type <> ALL($7::text[])`,
       [
         userId,
         type,
@@ -53,6 +62,7 @@ export class SecurityEvents {
         ip ? this.encryption.encrypt(ip) : null,
         userAgent ?? null,
         this.clock.now(),
+        PER_USER_ONLY,
       ],
     );
   }

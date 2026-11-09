@@ -70,6 +70,13 @@ export async function createAuthTestApp(args: {
     }),
     'org.emailHashKey': randomBytes(32).toString('base64'),
     'auth.nonceTtlSeconds': 300,
+    // OrgOidcModule (also imported by OrgAccountModule); the OIDC specs override these
+    'org.oidc.issuer': 'https://idp.example.com/',
+    'org.oidc.clientId': 'test-client',
+    'org.oidc.clientSecret': 'test-secret',
+    'org.oidc.redirectUri':
+      'https://api.example.com/v1/orgs/auth/oidc/callback',
+    'org.oidc.postLoginRedirect': `${APP_URL}/`,
     'redis.host': '127.0.0.1',
     'redis.port': `6379/${args.redisDb}`,
     'redis.connectTimeout': 10_000,

@@ -1,0 +1,1025 @@
+{
+  "openapi": "3.0.0",
+  "paths": {
+    "/v1/orgs": {
+      "post": {
+        "operationId": "OrgsController_create_v1",
+        "parameters": [],
+        "responses": { "201": { "description": "" } },
+        "tags": ["Orgs"]
+      },
+      "get": {
+        "operationId": "OrgsController_list_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Orgs"]
+      }
+    },
+    "/v1/orgs/{invitedOrgId}/members/accept": {
+      "post": {
+        "operationId": "InvitationsController_acceptById_v1",
+        "parameters": [
+          {
+            "name": "invitedOrgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Invitations"]
+      }
+    },
+    "/v1/orgs/{invitedOrgId}/members/decline": {
+      "post": {
+        "operationId": "InvitationsController_declineById_v1",
+        "parameters": [
+          {
+            "name": "invitedOrgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Invitations"]
+      }
+    },
+    "/v1/orgs/{orgId}": {
+      "get": {
+        "operationId": "OrgsController_get_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Orgs"]
+      },
+      "patch": {
+        "operationId": "OrgsController_rename_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Orgs"]
+      },
+      "delete": {
+        "operationId": "OrgsController_delete_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Orgs"]
+      }
+    },
+    "/v1/orgs/{orgId}/activity": {
+      "get": {
+        "operationId": "ActivityController_list_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Activity"]
+      }
+    },
+    "/v1/orgs/{orgId}/activity.csv": {
+      "get": {
+        "operationId": "ActivityController_exportCsv_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Activity"]
+      }
+    },
+    "/v1/orgs/{orgId}/contact-requests": {
+      "get": {
+        "operationId": "ContactsController_listRequests_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Contacts"]
+      },
+      "post": {
+        "operationId": "ContactsController_createRequest_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "201": { "description": "" } },
+        "tags": ["Contacts"]
+      }
+    },
+    "/v1/orgs/{orgId}/contact-requests/{requestId}/approve": {
+      "post": {
+        "operationId": "ContactsController_approve_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Contacts"]
+      }
+    },
+    "/v1/orgs/{orgId}/contact-requests/{requestId}/reject": {
+      "post": {
+        "operationId": "ContactsController_reject_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Contacts"]
+      }
+    },
+    "/v1/orgs/{orgId}/contacts": {
+      "get": {
+        "operationId": "ContactsController_list_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Contacts"]
+      },
+      "post": {
+        "operationId": "ContactsController_create_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "201": { "description": "" } },
+        "tags": ["Contacts"]
+      }
+    },
+    "/v1/orgs/{orgId}/contacts.csv": {
+      "get": {
+        "operationId": "ContactsController_exportCsv_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Contacts"]
+      }
+    },
+    "/v1/orgs/{orgId}/contacts/{contactId}": {
+      "patch": {
+        "operationId": "ContactsController_update_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "contactId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Contacts"]
+      },
+      "delete": {
+        "operationId": "ContactsController_remove_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "contactId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "204": { "description": "" } },
+        "tags": ["Contacts"]
+      }
+    },
+    "/v1/orgs/{orgId}/contacts/import": {
+      "post": {
+        "operationId": "ContactsController_import_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Contacts"]
+      }
+    },
+    "/v1/orgs/{orgId}/me": {
+      "get": {
+        "operationId": "OrgsController_me_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Orgs"]
+      }
+    },
+    "/v1/orgs/{orgId}/members": {
+      "get": {
+        "operationId": "MembersController_list_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Members"]
+      }
+    },
+    "/v1/orgs/{orgId}/members/{memberId}": {
+      "delete": {
+        "operationId": "MembersController_remove_v1",
+        "parameters": [
+          {
+            "name": "memberId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "204": { "description": "" } },
+        "tags": ["Members"]
+      }
+    },
+    "/v1/orgs/{orgId}/members/{memberId}/factors/reset": {
+      "post": {
+        "operationId": "MembersController_resetFactors_v1",
+        "parameters": [
+          {
+            "name": "memberId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "204": { "description": "" } },
+        "tags": ["Members"]
+      }
+    },
+    "/v1/orgs/{orgId}/members/{memberId}/invite/renew": {
+      "post": {
+        "operationId": "MembersController_renew_v1",
+        "parameters": [
+          {
+            "name": "memberId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Members"]
+      }
+    },
+    "/v1/orgs/{orgId}/members/{memberId}/role": {
+      "patch": {
+        "operationId": "MembersController_changeRole_v1",
+        "parameters": [
+          {
+            "name": "memberId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "204": { "description": "" } },
+        "tags": ["Members"]
+      }
+    },
+    "/v1/orgs/{orgId}/members/invite": {
+      "post": {
+        "operationId": "MembersController_invite_v1",
+        "parameters": [],
+        "responses": { "201": { "description": "" } },
+        "tags": ["Members"]
+      }
+    },
+    "/v1/orgs/{orgId}/members/leave": {
+      "post": {
+        "operationId": "MembersController_leave_v1",
+        "parameters": [],
+        "responses": { "204": { "description": "" } },
+        "tags": ["Members"]
+      }
+    },
+    "/v1/orgs/{orgId}/overview": {
+      "get": {
+        "operationId": "LinkedSafesController_getOverview_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["LinkedSafes"]
+      }
+    },
+    "/v1/orgs/{orgId}/restore": {
+      "post": {
+        "operationId": "OrgsController_restore_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Orgs"]
+      }
+    },
+    "/v1/orgs/{orgId}/safes": {
+      "post": {
+        "operationId": "LinkedSafesController_link_v1",
+        "parameters": [],
+        "responses": { "201": { "description": "" } },
+        "tags": ["LinkedSafes"]
+      },
+      "get": {
+        "operationId": "LinkedSafesController_list_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["LinkedSafes"]
+      }
+    },
+    "/v1/orgs/{orgId}/safes/{linkedSafeId}": {
+      "delete": {
+        "operationId": "LinkedSafesController_unlink_v1",
+        "parameters": [
+          {
+            "name": "linkedSafeId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "204": { "description": "" } },
+        "tags": ["LinkedSafes"]
+      }
+    },
+    "/v1/orgs/account": {
+      "delete": {
+        "operationId": "AccountController_delete_v1",
+        "parameters": [],
+        "responses": { "204": { "description": "" } },
+        "tags": ["Account"]
+      }
+    },
+    "/v1/orgs/account/identities/{identityId}": {
+      "delete": {
+        "operationId": "LinkIdentityController_removeIdentity_v1",
+        "parameters": [
+          {
+            "name": "identityId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "204": { "description": "" } },
+        "tags": ["LinkIdentity"]
+      }
+    },
+    "/v1/orgs/account/link/oidc/authorize": {
+      "get": {
+        "operationId": "LinkIdentityController_linkOidc_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["LinkIdentity"]
+      }
+    },
+    "/v1/orgs/account/link/siwe": {
+      "post": {
+        "operationId": "LinkIdentityController_linkSiwe_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["LinkIdentity"]
+      }
+    },
+    "/v1/orgs/auth/logout": {
+      "post": {
+        "operationId": "SiweAuthController_logout_v1",
+        "parameters": [],
+        "responses": { "204": { "description": "" } },
+        "tags": ["SiweAuth"]
+      }
+    },
+    "/v1/orgs/auth/me": {
+      "get": {
+        "operationId": "SiweAuthController_me_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["SiweAuth"]
+      }
+    },
+    "/v1/orgs/auth/nonce": {
+      "get": {
+        "operationId": "SiweAuthController_nonce_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["SiweAuth"]
+      }
+    },
+    "/v1/orgs/auth/oidc/authorize": {
+      "get": {
+        "operationId": "OidcController_authorize_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Oidc"]
+      }
+    },
+    "/v1/orgs/auth/oidc/callback": {
+      "get": {
+        "operationId": "OidcController_callback_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Oidc"]
+      }
+    },
+    "/v1/orgs/auth/siwe": {
+      "post": {
+        "operationId": "SiweAuthController_signIn_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["SiweAuth"]
+      }
+    },
+    "/v1/orgs/auth/step-up/siwe": {
+      "post": {
+        "operationId": "SiweAuthController_stepUp_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["SiweAuth"]
+      }
+    },
+    "/v1/orgs/auth/step-up/totp": {
+      "post": {
+        "operationId": "TotpController_stepUp_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Totp"]
+      }
+    },
+    "/v1/orgs/auth/totp": {
+      "delete": {
+        "operationId": "TotpController_remove_v1",
+        "parameters": [],
+        "responses": { "204": { "description": "" } },
+        "tags": ["Totp"]
+      }
+    },
+    "/v1/orgs/auth/totp/confirm": {
+      "post": {
+        "operationId": "TotpController_confirm_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Totp"]
+      }
+    },
+    "/v1/orgs/auth/totp/enroll": {
+      "post": {
+        "operationId": "TotpController_enroll_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Totp"]
+      }
+    },
+    "/v1/orgs/invitations/accept": {
+      "post": {
+        "operationId": "InvitationsController_accept_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Invitations"]
+      }
+    },
+    "/v1/orgs/invitations/decline": {
+      "post": {
+        "operationId": "InvitationsController_decline_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Invitations"]
+      }
+    }
+  },
+  "info": {
+    "title": "cgw-org",
+    "description": "Organization API. Cookie session `org_session`; non-GET requests need `X-Org-Request: 1`. SIWE accepts EOA signatures only in phase 1.",
+    "version": "1.0.0",
+    "contact": {}
+  },
+  "tags": [],
+  "servers": [],
+  "components": {
+    "schemas": {
+      "NativeToken": {
+        "type": "object",
+        "properties": {
+          "address": { "type": "object" },
+          "decimals": { "type": "number" },
+          "logoUri": { "type": "string" },
+          "name": { "type": "string" },
+          "symbol": { "type": "string" },
+          "type": { "type": "string", "enum": ["NATIVE_TOKEN"] }
+        },
+        "required": ["address", "decimals", "logoUri", "name", "symbol", "type"]
+      },
+      "Erc20Token": {
+        "type": "object",
+        "properties": {
+          "address": { "type": "object" },
+          "decimals": { "type": "number" },
+          "logoUri": { "type": "string" },
+          "name": { "type": "string" },
+          "symbol": { "type": "string" },
+          "type": { "type": "string", "enum": ["ERC20"] }
+        },
+        "required": ["address", "decimals", "logoUri", "name", "symbol", "type"]
+      },
+      "Erc721Token": {
+        "type": "object",
+        "properties": {
+          "address": { "type": "object" },
+          "decimals": { "type": "number" },
+          "logoUri": { "type": "string" },
+          "name": { "type": "string" },
+          "symbol": { "type": "string" },
+          "type": { "type": "string", "enum": ["ERC721"] }
+        },
+        "required": ["address", "decimals", "logoUri", "name", "symbol", "type"]
+      },
+      "Balance": {
+        "type": "object",
+        "properties": {
+          "balance": { "type": "string" },
+          "fiatBalance": { "type": "string" },
+          "fiatConversion": { "type": "string" },
+          "tokenInfo": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/NativeToken" },
+              { "$ref": "#/components/schemas/Erc20Token" },
+              { "$ref": "#/components/schemas/Erc721Token" }
+            ]
+          },
+          "fiatBalance24hChange": { "type": "string", "nullable": true }
+        },
+        "required": ["balance", "fiatBalance", "fiatConversion", "tokenInfo"]
+      },
+      "Balances": {
+        "type": "object",
+        "properties": {
+          "fiatTotal": { "type": "string" },
+          "items": {
+            "type": "array",
+            "items": { "oneOf": [{ "$ref": "#/components/schemas/Balance" }] }
+          }
+        },
+        "required": ["fiatTotal", "items"]
+      },
+      "GasPriceOracle": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string", "enum": ["oracle"] },
+          "gasParameter": { "type": "string" },
+          "gweiFactor": { "type": "string" },
+          "uri": { "type": "string" }
+        },
+        "required": ["type", "gasParameter", "gweiFactor", "uri"]
+      },
+      "GasPriceFixed": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string", "enum": ["fixed"] },
+          "weiValue": { "type": "string" }
+        },
+        "required": ["type", "weiValue"]
+      },
+      "GasPriceFixedEIP1559": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string", "enum": ["fixed1559"] },
+          "maxFeePerGas": { "type": "string" },
+          "maxPriorityFeePerGas": { "type": "string" }
+        },
+        "required": ["type", "maxFeePerGas", "maxPriorityFeePerGas"]
+      },
+      "NativeCurrency": {
+        "type": "object",
+        "properties": {
+          "decimals": { "type": "number" },
+          "logoUri": { "type": "string" },
+          "name": { "type": "string" },
+          "symbol": { "type": "string" }
+        },
+        "required": ["decimals", "logoUri", "name", "symbol"]
+      },
+      "BlockExplorerUriTemplate": {
+        "type": "object",
+        "properties": {
+          "address": { "type": "string" },
+          "api": { "type": "string" },
+          "txHash": { "type": "string" }
+        },
+        "required": ["address", "api", "txHash"]
+      },
+      "BalancesProvider": {
+        "type": "object",
+        "properties": {
+          "chainName": { "type": "string", "nullable": true },
+          "enabled": { "type": "boolean" }
+        },
+        "required": ["chainName", "enabled"]
+      },
+      "ContractAddresses": {
+        "type": "object",
+        "properties": {
+          "safeSingletonAddress": { "type": "string", "nullable": true },
+          "safeProxyFactoryAddress": { "type": "string", "nullable": true },
+          "multiSendAddress": { "type": "string", "nullable": true },
+          "multiSendCallOnlyAddress": { "type": "string", "nullable": true },
+          "fallbackHandlerAddress": { "type": "string", "nullable": true },
+          "signMessageLibAddress": { "type": "string", "nullable": true },
+          "createCallAddress": { "type": "string", "nullable": true },
+          "simulateTxAccessorAddress": { "type": "string", "nullable": true },
+          "safeWebAuthnSignerFactoryAddress": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "RpcUri": {
+        "type": "object",
+        "properties": {
+          "authentication": {
+            "type": "string",
+            "enum": ["API_KEY_PATH", "NO_AUTHENTICATION", "UNKNOWN"]
+          },
+          "value": { "type": "string" }
+        },
+        "required": ["authentication", "value"]
+      },
+      "Theme": {
+        "type": "object",
+        "properties": {
+          "backgroundColor": { "type": "string" },
+          "textColor": { "type": "string" }
+        },
+        "required": ["backgroundColor", "textColor"]
+      },
+      "Chain": {
+        "type": "object",
+        "properties": {
+          "chainId": { "type": "string" },
+          "chainName": { "type": "string" },
+          "description": { "type": "string" },
+          "chainLogoUri": { "type": "string", "nullable": true },
+          "l2": { "type": "boolean" },
+          "isTestnet": { "type": "boolean" },
+          "zk": { "type": "boolean" },
+          "nativeCurrency": { "$ref": "#/components/schemas/NativeCurrency" },
+          "transactionService": { "type": "string" },
+          "blockExplorerUriTemplate": {
+            "$ref": "#/components/schemas/BlockExplorerUriTemplate"
+          },
+          "beaconChainExplorerUriTemplate": { "type": "object" },
+          "disabledWallets": { "type": "array", "items": { "type": "string" } },
+          "ensRegistryAddress": { "type": "string", "nullable": true },
+          "balancesProvider": {
+            "$ref": "#/components/schemas/BalancesProvider"
+          },
+          "contractAddresses": {
+            "$ref": "#/components/schemas/ContractAddresses"
+          },
+          "features": { "type": "array", "items": { "type": "string" } },
+          "gasPrice": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                { "$ref": "#/components/schemas/GasPriceOracle" },
+                { "$ref": "#/components/schemas/GasPriceFixed" },
+                { "$ref": "#/components/schemas/GasPriceFixedEIP1559" }
+              ]
+            }
+          },
+          "publicRpcUri": { "$ref": "#/components/schemas/RpcUri" },
+          "rpcUri": { "$ref": "#/components/schemas/RpcUri" },
+          "safeAppsRpcUri": { "$ref": "#/components/schemas/RpcUri" },
+          "shortName": { "type": "string" },
+          "theme": { "$ref": "#/components/schemas/Theme" },
+          "recommendedMasterCopyVersion": { "type": "string", "nullable": true }
+        },
+        "required": [
+          "chainId",
+          "chainName",
+          "description",
+          "l2",
+          "isTestnet",
+          "zk",
+          "nativeCurrency",
+          "transactionService",
+          "blockExplorerUriTemplate",
+          "beaconChainExplorerUriTemplate",
+          "disabledWallets",
+          "balancesProvider",
+          "contractAddresses",
+          "features",
+          "gasPrice",
+          "publicRpcUri",
+          "rpcUri",
+          "safeAppsRpcUri",
+          "shortName",
+          "theme"
+        ]
+      },
+      "ChainPage": {
+        "type": "object",
+        "properties": {
+          "count": { "type": "number", "nullable": true },
+          "next": { "type": "string", "nullable": true },
+          "previous": { "type": "string", "nullable": true },
+          "results": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Chain" }
+          }
+        },
+        "required": ["results"]
+      },
+      "AboutChain": {
+        "type": "object",
+        "properties": {
+          "transactionServiceBaseUri": { "type": "string" },
+          "name": { "type": "string" },
+          "version": { "type": "string" },
+          "buildNumber": { "type": "string" }
+        },
+        "required": [
+          "transactionServiceBaseUri",
+          "name",
+          "version",
+          "buildNumber"
+        ]
+      },
+      "Backbone": {
+        "type": "object",
+        "properties": {
+          "api_version": { "type": "string" },
+          "headers": { "type": "string", "nullable": true },
+          "host": { "type": "string" },
+          "name": { "type": "string" },
+          "secure": { "type": "boolean" },
+          "settings": { "type": "object", "nullable": true },
+          "version": { "type": "string" }
+        },
+        "required": [
+          "api_version",
+          "host",
+          "name",
+          "secure",
+          "settings",
+          "version"
+        ]
+      },
+      "MasterCopy": {
+        "type": "object",
+        "properties": {
+          "address": { "type": "string" },
+          "version": { "type": "string" }
+        },
+        "required": ["address", "version"]
+      },
+      "IndexingStatus": {
+        "type": "object",
+        "properties": {
+          "currentBlockNumber": { "type": "number" },
+          "currentBlockTimestamp": { "format": "date-time", "type": "string" },
+          "erc20BlockNumber": { "type": "number" },
+          "erc20BlockTimestamp": { "format": "date-time", "type": "string" },
+          "erc20Synced": { "type": "boolean" },
+          "masterCopiesBlockNumber": { "type": "number" },
+          "masterCopiesBlockTimestamp": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "masterCopiesSynced": { "type": "boolean" },
+          "synced": { "type": "boolean" },
+          "lastSync": { "type": "number" }
+        },
+        "required": [
+          "currentBlockNumber",
+          "currentBlockTimestamp",
+          "erc20BlockNumber",
+          "erc20BlockTimestamp",
+          "erc20Synced",
+          "masterCopiesBlockNumber",
+          "masterCopiesBlockTimestamp",
+          "masterCopiesSynced",
+          "synced",
+          "lastSync"
+        ]
+      },
+      "GasPriceResult": {
+        "type": "object",
+        "properties": {
+          "LastBlock": {
+            "type": "string",
+            "description": "Last block number",
+            "example": "23467872"
+          },
+          "SafeGasPrice": {
+            "type": "string",
+            "description": "Safe gas price recommendation (Gwei)",
+            "example": "0.496839934"
+          },
+          "ProposeGasPrice": {
+            "type": "string",
+            "description": "Proposed gas price (Gwei)",
+            "example": "0.496840168"
+          },
+          "FastGasPrice": {
+            "type": "string",
+            "description": "Fast gas price recommendation (Gwei)",
+            "example": "0.55411917"
+          },
+          "suggestBaseFee": {
+            "type": "string",
+            "description": "Base fee of the next pending block (Gwei)",
+            "example": "0.496839934"
+          },
+          "gasUsedRatio": {
+            "type": "string",
+            "description": "Gas used ratio to estimate network congestion",
+            "example": "0.5,0.6,0.7"
+          }
+        },
+        "required": [
+          "LastBlock",
+          "SafeGasPrice",
+          "ProposeGasPrice",
+          "FastGasPrice",
+          "suggestBaseFee",
+          "gasUsedRatio"
+        ]
+      },
+      "GasPriceResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Status code (\"1\" = success)",
+            "example": "1"
+          },
+          "message": {
+            "type": "string",
+            "description": "Response message",
+            "example": "OK"
+          },
+          "result": {
+            "description": "Gas price data",
+            "allOf": [{ "$ref": "#/components/schemas/GasPriceResult" }]
+          }
+        },
+        "required": ["status", "message", "result"]
+      },
+      "Contract": {
+        "type": "object",
+        "properties": {
+          "address": { "type": "object" },
+          "name": { "type": "string" },
+          "displayName": { "type": "string" },
+          "logoUri": { "type": "string" },
+          "contractAbi": { "type": "object", "nullable": true },
+          "trustedForDelegateCall": { "type": "boolean" }
+        },
+        "required": [
+          "address",
+          "name",
+          "displayName",
+          "logoUri",
+          "trustedForDelegateCall"
+        ]
+      },
+      "TransactionDataDto": {
+        "type": "object",
+        "properties": {
+          "data": { "type": "object", "description": "Hexadecimal value" },
+          "to": {
+            "type": "object",
+            "description": "The target Ethereum address"
+          }
+        },
+        "required": ["data"]
+      },
+      "Operation": {
+        "type": "number",
+        "enum": [0, 1],
+        "description": "Operation type: 0 for CALL, 1 for DELEGATE"
+      },
+      "BaseDataDecoded": {
+        "type": "object",
+        "properties": {
+          "method": { "type": "string" },
+          "parameters": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/DataDecodedParameter" }
+          }
+        },
+        "required": ["method"]
+      },
+      "MultiSend": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "description": "Operation type: 0 for CALL, 1 for DELEGATE",
+            "allOf": [{ "$ref": "#/components/schemas/Operation" }]
+          },
+          "value": { "type": "string" },
+          "dataDecoded": { "$ref": "#/components/schemas/BaseDataDecoded" },
+          "to": { "type": "object" },
+          "data": {
+            "type": "string",
+            "nullable": true,
+            "description": "Hexadecimal encoded data",
+            "pattern": "^0x[0-9a-fA-F]*$"
+          }
+        },
+        "required": ["operation", "value", "to", "data"]
+      },
+      "DataDecodedParameter": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "type": { "type": "string" },
+          "value": {
+            "description": "Parameter value - typically a string, but may be an array of strings for array types (e.g., address[], uint256[])",
+            "oneOf": [
+              { "type": "string" },
+              { "type": "array", "items": { "type": "string" } }
+            ]
+          },
+          "valueDecoded": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/BaseDataDecoded" },
+              {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/MultiSend" }
+              },
+              { "type": "null" }
+            ]
+          }
+        },
+        "required": ["name", "type", "value"]
+      },
+      "DataDecoded": {
+        "type": "object",
+        "properties": {
+          "method": { "type": "string" },
+          "parameters": {
+            "nullable": true,
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/DataDecodedParameter" }
+          },
+          "accuracy": {
+            "type": "string",
+            "enum": [
+              "FULL_MATCH",
+              "PARTIAL_MATCH",
+              "ONLY_FUNCTION_MATCH",
+              "NO_MATCH",
+              "UNKNOWN"
+            ],
+            "default": "UNKNOWN"
+          }
+        },
+        "required": ["method"]
+      }
+    }
+  }
+}
