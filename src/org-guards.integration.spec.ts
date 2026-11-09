@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Controller, Get, Global, Module, Post, Req } from '@nestjs/common';
 import { APP_FILTER } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
@@ -13,6 +14,12 @@ import { IConfigurationService } from '@/config/configuration.service.interface'
 import { CacheModule } from '@/datasources/cache/cache.module';
 import { LoggingService } from '@/logging/logging.interface';
 import { Public } from '@/modules/org/auth/decorators';
+import { clearPrefix } from '@/modules/org/auth/__tests__/auth-test-app';
+import {
+  ORG_REDIS,
+  OrgKeyPrefix,
+  type OrgRedisClient,
+} from '@/modules/org/auth/nonce.store';
 import { OrgAuthModule } from '@/modules/org/auth/org-auth.module';
 import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
 import {
@@ -29,11 +36,13 @@ import { runOrgMigrations } from '@/org-migrate';
 import { GlobalErrorFilter } from '@/routes/common/filters/global-error.filter';
 import { ZodErrorFilter } from '@/routes/common/filters/zod-error.filter';
 
+// Redis DB 2 is shared with other lanes: a private prefix, cleaned by SCAN+DEL
+const CACHE_PREFIX = `org:test:${randomUUID()}:`;
+
 /**
  * Pins the global guard order of OrgAppModule (ORG_APP_GUARDS):
  * CsrfGuard → SessionGuard → OrgMemberGuard, with a real SIWE session.
  */
-
 const APP_URL = 'https://app.example.com';
 
 @Controller({ path: 'orgs/:orgId', version: '1' })
@@ -162,7 +171,7 @@ describe('org global guard order', () => {
     const moduleRef = await Test.createTestingModule({
       imports: [
         TestProvidersModule,
-        CacheModule.register('org:'),
+        CacheModule.register(CACHE_PREFIX),
         TypeOrmModule.forRoot({
           ...(db.app().options as PostgresConnectionOptions),
           name: ORG_DATA_SOURCE,
@@ -176,7 +185,10 @@ describe('org global guard order', () => {
         { provide: APP_FILTER, useClass: ZodErrorFilter },
         ...ORG_APP_GUARDS,
       ],
-    }).compile();
+    })
+      .overrideProvider(OrgKeyPrefix)
+      .useValue(CACHE_PREFIX)
+      .compile();
     app = moduleRef.createNestApplication<NestExpressApplication>();
     configureOrgApp(app);
     await app.init();
@@ -223,6 +235,8 @@ describe('org global guard order', () => {
   });
 
   afterAll(async () => {
+    const redis = app?.get<OrgRedisClient>(ORG_REDIS, { strict: false });
+    if (redis?.isReady) await clearPrefix(redis, CACHE_PREFIX);
     await app?.close();
     await db?.drop();
   });

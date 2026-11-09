@@ -3,8 +3,9 @@ import type { EntityManager } from 'typeorm';
 import type { ActivityEventType } from '@/modules/org/activity/activity-event-types';
 import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
 
+/** Org-scoped only: user-scoped `security.*` events are written by SecurityEvents. */
 export type ActivityEvent = {
-  orgId: string | null;
+  orgId: string;
   actorUserId: string | null;
   type: ActivityEventType;
   targetType?: string;
@@ -29,18 +30,6 @@ export class ActivityLog implements IActivityLog {
     }
     const ip = e.ip === undefined ? null : this.encryption.encrypt(e.ip);
     const payload = JSON.stringify(e.payload ?? {});
-    if (e.orgId === null) {
-      // No org: a per-user security event (amendment A3)
-      if (e.actorUserId === null) {
-        throw new Error('An event without an org needs an actor');
-      }
-      await em.query(
-        `INSERT INTO user_security_events (user_id, type, payload, ip_encrypted, user_agent)
-         VALUES ($1, $2, $3::jsonb, $4, $5)`,
-        [e.actorUserId, e.type, payload, ip, e.userAgent ?? null],
-      );
-      return;
-    }
     await em.query(
       `INSERT INTO activity_events
          (org_id, actor_user_id, type, target_type, target_id, payload, ip_encrypted, user_agent)

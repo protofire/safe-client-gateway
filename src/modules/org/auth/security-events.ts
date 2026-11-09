@@ -1,15 +1,16 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import type { DataSource } from 'typeorm';
+import type { ActivityEventType } from '@/modules/org/activity/activity-event-types';
 import { Clock, type IClock } from '@/modules/org/common/clock';
 import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
 import { ORG_DATA_SOURCE } from '@/modules/org/db/org-data-source';
 
-export type SecurityEventType =
-  | 'security.signed_in'
-  | 'security.step_up'
-  | 'security.totp_enrolled'
-  | 'security.totp_removed';
+/** The `security.*` subset of the activity event types (one list). */
+export type SecurityEventType = Extract<
+  ActivityEventType,
+  `security.${string}`
+>;
 
 /**
  * User-scoped security events (`user_security_events`, amendment A3); the IP

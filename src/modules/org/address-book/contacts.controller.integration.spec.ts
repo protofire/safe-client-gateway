@@ -15,6 +15,7 @@ import { CacheModule } from '@/datasources/cache/cache.module';
 import { LoggingService } from '@/logging/logging.interface';
 import { ActivityModule } from '@/modules/org/activity/activity.module';
 import { AddressBookModule } from '@/modules/org/address-book/address-book.module';
+import { OrgKeyPrefix } from '@/modules/org/auth/nonce.store';
 import { OrgAuthModule } from '@/modules/org/auth/org-auth.module';
 import {
   createOrgTestDb,
@@ -236,7 +237,10 @@ describe('org address book', () => {
         { provide: APP_FILTER, useClass: ZodErrorFilter },
         ...ORG_APP_GUARDS,
       ],
-    }).compile();
+    })
+      .overrideProvider(OrgKeyPrefix)
+      .useValue(CACHE_PREFIX)
+      .compile();
     app = moduleRef.createNestApplication<NestExpressApplication>();
     configureOrgApp(app);
     await app.init();

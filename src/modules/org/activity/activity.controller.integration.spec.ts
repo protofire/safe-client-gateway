@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Global, Module } from '@nestjs/common';
 import { APP_FILTER } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
@@ -13,6 +14,12 @@ import { CacheModule } from '@/datasources/cache/cache.module';
 import { LoggingService } from '@/logging/logging.interface';
 import { ActivityLog } from '@/modules/org/activity/activity-log.service';
 import { ActivityModule } from '@/modules/org/activity/activity.module';
+import { clearPrefix } from '@/modules/org/auth/__tests__/auth-test-app';
+import {
+  ORG_REDIS,
+  OrgKeyPrefix,
+  type OrgRedisClient,
+} from '@/modules/org/auth/nonce.store';
 import { OrgAuthModule } from '@/modules/org/auth/org-auth.module';
 import {
   createOrgTestDb,
@@ -26,6 +33,8 @@ import { runOrgMigrations } from '@/org-migrate';
 import { GlobalErrorFilter } from '@/routes/common/filters/global-error.filter';
 import { ZodErrorFilter } from '@/routes/common/filters/zod-error.filter';
 
+// Redis DB 2 is shared with other lanes: a private prefix, cleaned by SCAN+DEL
+const CACHE_PREFIX = `org:test:${randomUUID()}:`;
 const APP_URL = 'https://app.example.com';
 
 const config: Record<string, unknown> = {
@@ -164,7 +173,7 @@ describe('org activity log', () => {
     const moduleRef = await Test.createTestingModule({
       imports: [
         TestProvidersModule,
-        CacheModule.register('org:'),
+        CacheModule.register(CACHE_PREFIX),
         TypeOrmModule.forRoot({
           ...(db.app().options as PostgresConnectionOptions),
           name: ORG_DATA_SOURCE,
@@ -178,7 +187,10 @@ describe('org activity log', () => {
         { provide: APP_FILTER, useClass: ZodErrorFilter },
         ...ORG_APP_GUARDS,
       ],
-    }).compile();
+    })
+      .overrideProvider(OrgKeyPrefix)
+      .useValue(CACHE_PREFIX)
+      .compile();
     app = moduleRef.createNestApplication<NestExpressApplication>();
     configureOrgApp(app);
     await app.init();
@@ -198,6 +210,8 @@ describe('org activity log', () => {
   });
 
   afterAll(async () => {
+    const redis = app?.get<OrgRedisClient>(ORG_REDIS, { strict: false });
+    if (redis?.isReady) await clearPrefix(redis, CACHE_PREFIX);
     await app?.close();
     await db?.drop();
   });
@@ -337,23 +351,6 @@ describe('org activity log', () => {
         type: 'org.renamed',
       }),
     ).rejects.toThrow('transaction');
-  });
-
-  it('stores an event without an org as a user security event', async () => {
-    await sql.transaction((em) =>
-      log.record(em, {
-        orgId: null,
-        actorUserId: admin.userId,
-        type: 'security.signed_in',
-        ip: '192.0.2.5',
-      }),
-    );
-    const rows = await sql.query(
-      `SELECT type, ip_encrypted FROM user_security_events WHERE user_id = $1`,
-      [admin.userId],
-    );
-    expect(rows).toHaveLength(1);
-    expect(rows[0].ip_encrypted).not.toContain('192.0.2.5');
   });
 
   describe('CSV', () => {

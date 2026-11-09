@@ -20,6 +20,7 @@ import { DataSourceError } from '@/domain/errors/data-source.error';
 import { IBalancesRepository } from '@/modules/balances/domain/balances.repository.interface';
 import { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
 import { ActivityLog } from '@/modules/org/activity/activity-log.service';
+import { OrgKeyPrefix } from '@/modules/org/auth/nonce.store';
 import { OrgAuthModule } from '@/modules/org/auth/org-auth.module';
 import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
 import {
@@ -260,7 +261,10 @@ describe('linked Safes and overview', () => {
         { provide: APP_FILTER, useClass: ZodErrorFilter },
         ...ORG_APP_GUARDS,
       ],
-    }).compile();
+    })
+      .overrideProvider(OrgKeyPrefix)
+      .useValue(CACHE_PREFIX)
+      .compile();
     app = moduleRef.createNestApplication<NestExpressApplication>();
     configureOrgApp(app);
     await app.init();
