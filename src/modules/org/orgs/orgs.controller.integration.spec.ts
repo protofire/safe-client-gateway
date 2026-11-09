@@ -307,6 +307,29 @@ describe('organizations (org)', () => {
       expect(await purge.purgeDue()).toContain(orgId);
     });
 
+    it('drops processed_events older than 30 days in the same job (final gate F4)', async () => {
+      const key = `test-${Date.now()}-${Math.random()}`;
+      await t.sql.query(
+        `INSERT INTO processed_events (event_key) VALUES ($1)`,
+        [key],
+      );
+      const purge = t.app.get(PurgeProcessor);
+      const exists = async (): Promise<boolean> =>
+        (
+          await t.sql.query(
+            `SELECT 1 FROM processed_events WHERE event_key = $1`,
+            [key],
+          )
+        ).length === 1;
+
+      t.setOffset(29 * DAY_MS);
+      await purge.run();
+      expect(await exists()).toBe(true);
+      t.setOffset(31 * DAY_MS);
+      await purge.run();
+      expect(await exists()).toBe(false);
+    });
+
     it('refuses restore once purge_after passed, also racing the purge', async () => {
       const { orgId, admin } = await deletedOrg();
       // moved in the DB, not with the Clock: the admin's session must stay fresh

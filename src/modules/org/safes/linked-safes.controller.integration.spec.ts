@@ -5,6 +5,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import { getDataSourceToken, TypeOrmModule } from '@nestjs/typeorm';
 import request from 'supertest';
+import { listenForTests } from '@/modules/org/auth/__tests__/auth-test-app';
 import type { DataSource } from 'typeorm';
 import type { PostgresConnectionOptions } from 'typeorm/driver/postgres/PostgresConnectionOptions';
 import { getAddress, type Address } from 'viem';
@@ -267,7 +268,7 @@ describe('linked Safes and overview', () => {
       .compile();
     app = moduleRef.createNestApplication<NestExpressApplication>();
     configureOrgApp(app);
-    await app.init();
+    await listenForTests(app);
     sql = moduleRef.get<DataSource>(getDataSourceToken(ORG_DATA_SOURCE), {
       strict: false,
     });

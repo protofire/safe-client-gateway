@@ -410,6 +410,39 @@ describe('members and invitations (org)', () => {
     });
   });
 
+  describe('final gate fixes', () => {
+    it('refuses a token rotated by a renew committed between lookup and claim (F2)', async () => {
+      const admin = await t.user({ wallet: true });
+      const orgId = await t.createOrg(admin);
+      const to = email();
+      const { memberId, token } = await inviteEmail(orgId, admin, to);
+      const invitee = await t.user({ email: to });
+
+      // the accept has looked the token up and now waits on the org lock;
+      // the renew's rotation commits before it may claim
+      const lock = await t.holdOrgLock(orgId);
+      let pending: Promise<{ status: number }> | undefined;
+      try {
+        pending = accept(invitee, token).then((r) => r);
+        await lock.blocked();
+      } finally {
+        await lock.release(async (q) => {
+          await q.query(
+            `UPDATE invitations SET token_hash = $2 WHERE member_id = $1`,
+            [memberId, randomBytes(32).toString('hex')],
+          );
+        });
+      }
+
+      expect((await pending).status).toBe(404);
+      const [member] = await t.sql.query(
+        `SELECT status FROM members WHERE id = $1`,
+        [memberId],
+      );
+      expect(member.status).toBe('invited');
+    });
+  });
+
   describe('members list', () => {
     it('shows identities, masking emails for members who are not admins or self', async () => {
       const adminEmail = `boss.${randomBytes(3).toString('hex')}@example.com`;

@@ -101,6 +101,7 @@ export class FactorsService {
       { length: RECOVERY_CODES },
       newRecoveryCode,
     );
+    let token: string | undefined;
     await this.attempt(userId, () =>
       this.db.transaction(async (em) => {
         await this.lockUser(em, userId);
@@ -140,23 +141,21 @@ export class FactorsService {
         );
         // F3: a new factor ends every other session
         await this.sessions.revokeOthers(userId, session.sessionId, now, em);
+        // F2: fresh possession of the new factor rotates the session token;
+        // rotation and audit commit with the factor or not at all
+        token = await this.sessions.elevate(session.sessionId, 'totp', now, em);
+        await this.securityEvents.record(
+          userId,
+          'security.totp_enrolled',
+          {},
+          client.ip,
+          client.userAgent,
+          em,
+        );
         return true;
       }),
     );
-    // F2: fresh possession of the new factor rotates the session token
-    const token = await this.sessions.elevate(
-      session.sessionId,
-      'totp',
-      this.clock.now(),
-    );
-    await this.securityEvents.record(
-      userId,
-      'security.totp_enrolled',
-      {},
-      client.ip,
-      client.userAgent,
-    );
-    return { recoveryCodes, token };
+    return { recoveryCodes, token: token! };
   }
 
   async stepUp(
@@ -210,14 +209,15 @@ export class FactorsService {
         this.clock.now(),
         em,
       );
+      await this.securityEvents.record(
+        userId,
+        'security.totp_removed',
+        {},
+        client.ip,
+        client.userAgent,
+        em,
+      );
     });
-    await this.securityEvents.record(
-      userId,
-      'security.totp_removed',
-      {},
-      client.ip,
-      client.userAgent,
-    );
   }
 
   /** A7: the step is accepted by exactly one caller. */

@@ -15,6 +15,7 @@ import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.se
 import { hmacEmail } from '@/modules/org/crypto/hashing';
 import { ORG_PG_POOL } from '@/modules/org/db/org-database.module';
 import { OrgJobsModule } from '@/modules/org/jobs/org-jobs.module';
+import { PurgeProcessor } from '@/modules/org/jobs/purge.processor';
 import { MembersModule } from '@/modules/org/members/members.module';
 import { OrgsModule } from '@/modules/org/orgs/orgs.module';
 
@@ -88,6 +89,8 @@ export async function createOrgTestApp(redisDb: number): Promise<OrgTestApp> {
       OrgJobsModule,
     ],
   });
+  // tests call the jobs directly; a background run would race them
+  t.app.get(PurgeProcessor).onModuleDestroy();
   const encryption = t.app.get(FieldEncryptionService);
   const key = Buffer.from(EMAIL_HASH_KEY, 'base64');
 

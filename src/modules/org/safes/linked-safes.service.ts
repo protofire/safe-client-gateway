@@ -77,9 +77,10 @@ export class LinkedSafesService {
     }
 
     const row = await this.tx.runInOrgTx(async (em) => {
-      await em.query(`SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE`, [
-        orgId,
-      ]);
+      await em.query(
+        `SELECT 1 FROM organizations WHERE id = $1 FOR NO KEY UPDATE`,
+        [orgId],
+      );
       await recheckPermission(
         this.resolver,
         em,
@@ -158,9 +159,10 @@ export class LinkedSafesService {
     actor: Actor,
   ): Promise<void> {
     await this.tx.runInOrgTx(async (em) => {
-      await em.query(`SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE`, [
-        orgId,
-      ]);
+      await em.query(
+        `SELECT 1 FROM organizations WHERE id = $1 FOR NO KEY UPDATE`,
+        [orgId],
+      );
       await recheckPermission(
         this.resolver,
         em,

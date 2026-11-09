@@ -81,9 +81,14 @@ export class SessionsRepository {
    * copy of the pre-step-up cookie stops working. Returns the new token; 401
    * if the session was revoked meanwhile.
    */
-  async elevate(id: string, method: string, now: Date): Promise<string> {
+  async elevate(
+    id: string,
+    method: string,
+    now: Date,
+    em: Pick<EntityManager, 'query'> = this.db,
+  ): Promise<string> {
     const token = generateToken();
-    const [, updated] = await this.db.query(
+    const [, updated] = await em.query(
       `UPDATE sessions
        SET last_strong_auth_at = $3, updated_at = $3, token_hash = $4,
          amr = CASE WHEN $2 = ANY(amr) THEN amr ELSE array_append(amr, $2) END

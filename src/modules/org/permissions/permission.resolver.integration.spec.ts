@@ -5,6 +5,7 @@ import { getDataSourceToken } from '@nestjs/typeorm';
 import type { Request } from 'express';
 import type { Server } from 'net';
 import request from 'supertest';
+import { listenForTests } from '@/modules/org/auth/__tests__/auth-test-app';
 import type { DataSource, EntityManager } from 'typeorm';
 import {
   createOrgTestDb,
@@ -126,7 +127,7 @@ describe('permissions (through the app login)', () => {
       }
       next();
     });
-    await app.init();
+    await listenForTests(app);
   });
 
   afterAll(async () => {

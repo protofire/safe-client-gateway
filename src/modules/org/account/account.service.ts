@@ -74,15 +74,25 @@ export class AccountService {
       await this.tx.runInOrgTx(async (em) => {
         // A4: every org the user has a row in, locked in id order, before
         // the membership deletes the last-admin trigger checks at commit
-        const memberships: Array<{ orgId: string; status: string }> =
-          await em.query(
+        const read = (): Promise<Array<{ orgId: string; status: string }>> =>
+          em.query(
             `SELECT org_id AS "orgId", status FROM members WHERE user_id = $1`,
             [userId],
           );
-        await lockOrgs(
-          em,
-          memberships.map((m) => m.orgId),
-        );
+        let memberships = await read();
+        const locked = new Set<string>();
+        // a membership committed while we waited (e.g. an accept) gets its
+        // org locked too; shortcut: gives up after 3 rounds and relies on the
+        // last-admin trigger, raise if accounts join orgs that fast
+        for (let round = 0; round < 3; round++) {
+          const fresh = [...new Set(memberships.map((m) => m.orgId))].filter(
+            (id) => !locked.has(id),
+          );
+          if (fresh.length === 0) break;
+          await lockOrgs(em, fresh);
+          fresh.forEach((id) => locked.add(id));
+          memberships = await read();
+        }
         // UPDATE … RETURNING resolves to [rows, affected] in TypeORM's postgres driver
         const [[user]]: [Array<{ id: string }>, number] = await em.query(
           `UPDATE users SET status = 'deleted', deleted_at = $2, updated_at = $2

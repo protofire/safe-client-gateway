@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import type { EntityManager } from 'typeorm';
+import type { Address } from 'viem';
 import { ILoggingService, LoggingService } from '@/logging/logging.interface';
 import { IBalancesRepository } from '@/modules/balances/domain/balances.repository.interface';
 import type { ActivityEventType } from '@/modules/org/activity/activity-event-types';
@@ -24,6 +25,34 @@ const sameSet = (a: Array<string>, b: Array<string>): boolean =>
   a.length === b.length && a.every((x) => b.some((y) => lower(x) === lower(y)));
 const minus = (a: Array<string>, b: Array<string>): Array<string> =>
   a.filter((x) => !b.some((y) => lower(x) === lower(y)));
+
+/**
+ * One Safe at a time across events and reconcile runs; held to commit.
+ * Bounded wait: lock_timeout.
+ */
+async function lockSafe(
+  em: EntityManager,
+  chainId: string,
+  address: string,
+): Promise<void> {
+  await em.query(`SET LOCAL lock_timeout = '10s'`);
+  await em.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
+    `${chainId}:${lower(address)}`,
+  ]);
+}
+
+async function readSnapshot(
+  em: EntityManager,
+  chainId: string,
+  address: string,
+): Promise<Snapshot | null> {
+  const rows: Array<Snapshot> = await em.query(
+    `SELECT owners, threshold, modules, guard, version
+       FROM linked_safe_snapshots WHERE chain_id = $1 AND address = $2`,
+    [chainId, address],
+  );
+  return rows[0] ?? null;
+}
 
 @Injectable()
 export class OrgEventsHandler {
@@ -75,18 +104,10 @@ export class OrgEventsHandler {
     orgIds: Array<string>,
     isConfigCandidate: boolean,
   ): Promise<void> {
-    await em.query(`SET LOCAL lock_timeout = '10s'`);
-    await em.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
-      `${e.chainId}:${lower(e.address)}`,
-    ]);
+    await lockSafe(em, e.chainId, e.address);
     await this.invalidate(e);
 
-    const rows: Array<Snapshot> = await em.query(
-      `SELECT owners, threshold, modules, guard, version
-         FROM linked_safe_snapshots WHERE chain_id = $1 AND address = $2`,
-      [e.chainId, e.address],
-    );
-    const previous = rows[0] ?? null;
+    const previous = await readSnapshot(em, e.chainId, e.address);
     if (!isConfigCandidate && previous !== null) return;
 
     if (isConfigCandidate) {
@@ -137,22 +158,54 @@ export class OrgEventsHandler {
     await overwriteSnapshot(em, e.chainId, e.address, current);
   }
 
+  /**
+   * Catches up on changes whose events were lost (dropped after the last
+   * retry, consumer down): same lock and diff as `process`, from a fresh
+   * `getSafe`. Seeds a Safe whose link-time seed failed, without events.
+   * Throws on infrastructure failures; the caller logs and moves on.
+   */
+  async reconcile(chainId: string, address: Address): Promise<void> {
+    const orgIds = await this.linkingOrgs(chainId, address);
+    if (orgIds.length === 0) return;
+    await this.tx.runInOrgTx(async (em) => {
+      await lockSafe(em, chainId, address);
+      // a missed event also missed its cache invalidation
+      await this.safeRepository.clearSafe({ chainId, address });
+      const previous = await readSnapshot(em, chainId, address);
+      const current = toSnapshot(
+        await this.safeRepository.getSafe({ chainId, address }),
+      );
+      if (previous === null) {
+        await seedSnapshotIfAbsent(em, chainId, address, current);
+        return;
+      }
+      const safe = { chainId, address };
+      for (const orgId of orgIds) {
+        await this.emitDiff(em, orgId, safe, previous, current, {
+          source: 'reconcile',
+        });
+      }
+      await overwriteSnapshot(em, chainId, address, current);
+    });
+  }
+
   private async emitDiff(
     em: EntityManager,
     orgId: string,
-    e: TxEvent,
+    safe: { chainId: string; address: string },
     prev: Snapshot,
     cur: Snapshot,
+    extra: object = {},
   ): Promise<void> {
-    const base = { chainId: e.chainId, address: e.address };
+    const base = { chainId: safe.chainId, address: safe.address };
     const record = (type: ActivityEventType, payload: object): Promise<void> =>
       this.activityLog.record(em, {
         orgId,
         actorUserId: null,
         type,
         targetType: 'safe',
-        targetId: e.address,
-        payload: { ...base, ...payload },
+        targetId: safe.address,
+        payload: { ...base, ...payload, ...extra },
       });
 
     if (!sameSet(prev.owners, cur.owners)) {

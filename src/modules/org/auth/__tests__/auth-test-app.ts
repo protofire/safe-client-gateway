@@ -1,8 +1,15 @@
-import { Global, Module, type DynamicModule, type Type } from '@nestjs/common';
+import {
+  Global,
+  Module,
+  type DynamicModule,
+  type INestApplication,
+  type Type,
+} from '@nestjs/common';
 import { APP_FILTER } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import { getDataSourceToken, TypeOrmModule } from '@nestjs/typeorm';
+import type { Server } from 'node:http';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { createClient } from 'redis';
 import request from 'supertest';
@@ -155,7 +162,7 @@ export async function createAuthTestApp(args: {
     .compile();
   const app = moduleRef.createNestApplication<NestExpressApplication>();
   configureOrgApp(app);
-  await app.init();
+  await listenForTests(app);
   const sql = moduleRef.get<DataSource>(getDataSourceToken(ORG_DATA_SOURCE), {
     strict: false,
   });
@@ -191,6 +198,20 @@ export async function createAuthTestApp(args: {
       await db.drop();
     },
   };
+}
+
+/**
+ * Listens once on a fixed loopback port for the app's lifetime. Given a
+ * server that is not listening, supertest calls `listen(0)` and `close()` per
+ * request on the same server, so parallel requests race: a request can reach
+ * a closed (ETIMEDOUT/ECONNREFUSED) or reused port (another server's 404), or
+ * a kept-alive socket the close just dropped (socket hang up).
+ */
+export async function listenForTests(app: INestApplication): Promise<void> {
+  await app.listen(0, '127.0.0.1');
+  // above the client agent's 5 s idle timeout: the client always drops an
+  // idle kept-alive socket first, never the server mid-reuse
+  (app.getHttpServer() as Server).keepAliveTimeout = 65_000;
 }
 
 /** Deletes this test app's keys only (other lanes share the Redis server). */

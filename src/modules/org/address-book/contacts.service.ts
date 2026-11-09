@@ -251,9 +251,10 @@ export class ContactsService {
     userId: string,
     permission: Permission,
   ): Promise<void> {
-    await em.query(`SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE`, [
-      orgId,
-    ]);
+    await em.query(
+      `SELECT 1 FROM organizations WHERE id = $1 FOR NO KEY UPDATE`,
+      [orgId],
+    );
     // the guard checked before the lock wait; a concurrent demotion may have happened since
     await recheckPermission(this.resolver, em, orgId, userId, permission);
   }

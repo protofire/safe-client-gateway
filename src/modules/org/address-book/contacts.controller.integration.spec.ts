@@ -6,6 +6,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import { getDataSourceToken, TypeOrmModule } from '@nestjs/typeorm';
 import request from 'supertest';
+import { listenForTests } from '@/modules/org/auth/__tests__/auth-test-app';
 import type { DataSource, EntityManager } from 'typeorm';
 import type { PostgresConnectionOptions } from 'typeorm/driver/postgres/PostgresConnectionOptions';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
@@ -243,7 +244,7 @@ describe('org address book', () => {
       .compile();
     app = moduleRef.createNestApplication<NestExpressApplication>();
     configureOrgApp(app);
-    await app.init();
+    await listenForTests(app);
     sql = moduleRef.get<DataSource>(getDataSourceToken(ORG_DATA_SOURCE), {
       strict: false,
     });

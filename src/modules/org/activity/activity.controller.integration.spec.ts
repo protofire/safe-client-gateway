@@ -14,7 +14,10 @@ import { CacheModule } from '@/datasources/cache/cache.module';
 import { LoggingService } from '@/logging/logging.interface';
 import { ActivityLog } from '@/modules/org/activity/activity-log.service';
 import { ActivityModule } from '@/modules/org/activity/activity.module';
-import { clearPrefix } from '@/modules/org/auth/__tests__/auth-test-app';
+import {
+  clearPrefix,
+  listenForTests,
+} from '@/modules/org/auth/__tests__/auth-test-app';
 import {
   ORG_REDIS,
   OrgKeyPrefix,
@@ -193,7 +196,7 @@ describe('org activity log', () => {
       .compile();
     app = moduleRef.createNestApplication<NestExpressApplication>();
     configureOrgApp(app);
-    await app.init();
+    await listenForTests(app);
     sql = moduleRef.get<DataSource>(getDataSourceToken(ORG_DATA_SOURCE), {
       strict: false,
     });

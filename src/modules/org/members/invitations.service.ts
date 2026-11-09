@@ -325,12 +325,14 @@ export class InvitationsService {
       );
       if (caller?.status !== 'active') throw new UnauthorizedException();
 
-      // A9: single use, decided under the org lock by this conditional update
+      // A9: single use, decided under the org lock by this conditional update;
+      // by token, a renew committed since find() has rotated it: refused
       const [[claimed]]: [Array<{ id: string }>, number] = await em.query(
         `UPDATE invitations SET ${action === 'accept' ? 'accepted_at' : 'declined_at'} = $2, updated_at = $2
          WHERE id = $1 AND accepted_at IS NULL AND declined_at IS NULL AND expires_at > $2
+           AND ($3::text IS NULL OR token_hash = $3)
          RETURNING id`,
-        [invitation.id, now],
+        [invitation.id, now, tokenHash],
       );
       if (!claimed) {
         throw invitation.expiresAt <= now ? expired() : invalidInvitation();

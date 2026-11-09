@@ -9,6 +9,7 @@ import {
   seedUser,
   type AuthTestApp,
 } from '@/modules/org/auth/__tests__/auth-test-app';
+import { SecurityEvents } from '@/modules/org/auth/security-events';
 import { sha256Hex } from '@/modules/org/crypto/hashing';
 
 // Independent RFC 6238 generator (SHA-1, 6 digits, 30 s), so the test does not trust totp.ts
@@ -379,5 +380,47 @@ describe('TOTP factors (org)', () => {
     await t.del('/v1/orgs/auth/totp').set('Cookie', current).expect(204);
     await t.http().get('/v1/orgs/auth/me').set('Cookie', later).expect(401);
     await t.http().get('/v1/orgs/auth/me').set('Cookie', current).expect(200);
+  });
+
+  it('commits nothing of a TOTP confirm or delete whose audit write fails (final gate F3)', async () => {
+    const events = t.app.get(SecurityEvents);
+    const user = await seedUser(t.sql);
+    const { body } = await t
+      .post('/v1/orgs/auth/totp/enroll')
+      .set('Cookie', user.cookie)
+      .expect(200);
+    const failing = jest
+      .spyOn(events, 'record')
+      .mockRejectedValueOnce(new Error('audit down'));
+    try {
+      await t
+        .post('/v1/orgs/auth/totp/confirm')
+        .set('Cookie', user.cookie)
+        .send({ code: totpCode(body.secret as string, at()) })
+        .expect(500);
+    } finally {
+      failing.mockRestore();
+    }
+    // the old cookie still works: the session was not rotated either
+    expect((await me(user.cookie)).hasTotp).toBe(false);
+    const [{ n }] = await t.sql.query(
+      `SELECT count(*)::int AS n FROM recovery_codes WHERE user_id = $1`,
+      [user.userId],
+    );
+    expect(n).toBe(0);
+
+    const enrolledUser = await enrolled();
+    const failingRemove = jest
+      .spyOn(events, 'record')
+      .mockRejectedValueOnce(new Error('audit down'));
+    try {
+      await t
+        .del('/v1/orgs/auth/totp')
+        .set('Cookie', enrolledUser.cookie)
+        .expect(500);
+    } finally {
+      failingRemove.mockRestore();
+    }
+    expect((await me(enrolledUser.cookie)).hasTotp).toBe(true);
   });
 });

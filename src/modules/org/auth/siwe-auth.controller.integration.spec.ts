@@ -17,7 +17,10 @@ import { LoggingService } from '@/logging/logging.interface';
 import { RequireStrongAuth } from '@/modules/org/auth/decorators';
 import { OrgKeyPrefix } from '@/modules/org/auth/nonce.store';
 import { OrgAuthModule } from '@/modules/org/auth/org-auth.module';
-import { clearPrefix } from '@/modules/org/auth/__tests__/auth-test-app';
+import {
+  clearPrefix,
+  listenForTests,
+} from '@/modules/org/auth/__tests__/auth-test-app';
 import { Clock } from '@/modules/org/common/clock';
 import { sha256Hex } from '@/modules/org/crypto/hashing';
 import {
@@ -141,7 +144,7 @@ describe('SIWE auth (org)', () => {
       .compile();
     app = moduleRef.createNestApplication<NestExpressApplication>();
     configureOrgApp(app);
-    await app.init();
+    await listenForTests(app);
     sql = moduleRef.get<DataSource>(getDataSourceToken(ORG_DATA_SOURCE), {
       strict: false,
     });

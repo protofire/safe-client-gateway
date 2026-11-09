@@ -10,6 +10,7 @@ import {
 } from '@/modules/org/db/__tests__/org-test-db';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import { OrgEventsHandler } from '@/modules/org/events/org-events.handler';
+import { OrgEventsReconciler } from '@/modules/org/events/org-events.reconciler';
 import {
   seedSnapshotIfAbsent,
   toSnapshot,
@@ -401,6 +402,82 @@ describe('OrgEventsHandler', () => {
         ),
       ).resolves.toMatchObject({ address: SAFE });
       expect(logger.warn).toHaveBeenCalled();
+    });
+  });
+
+  describe('reconcile (final gate F1)', () => {
+    let reconciler: OrgEventsReconciler;
+    beforeAll(() => {
+      reconciler = new OrgEventsReconciler(sql, handler, logger as never);
+    });
+    const snapshotThreshold = async (): Promise<Array<{ threshold: number }>> =>
+      sql.query(
+        `SELECT threshold FROM linked_safe_snapshots WHERE address = $1`,
+        [SAFE],
+      );
+
+    it('emits a change the consumer missed, marked source reconcile, and skips a failing Safe', async () => {
+      await seed(); // threshold 2
+      await sql.query(
+        `INSERT INTO linked_safes (org_id, chain_id, address) VALUES ($1, $2, $3)`,
+        [orgA, CHAIN, OTHER],
+      );
+      safeRepo.getSafe.mockImplementation(({ address }: { address: string }) =>
+        address.toLowerCase() === OTHER.toLowerCase()
+          ? Promise.reject(new Error('node down'))
+          : Promise.resolve(safeState({ threshold: 3 })),
+      );
+
+      expect(await reconciler.run()).toBe(2);
+
+      for (const org of [orgA, orgB]) {
+        expect(await events(org)).toEqual([
+          {
+            type: 'onchain.threshold_changed',
+            payload: {
+              chainId: CHAIN,
+              address: SAFE,
+              from: 2,
+              to: 3,
+              source: 'reconcile',
+            },
+          },
+        ]);
+      }
+      expect(await snapshotThreshold()).toEqual([{ threshold: 3 }]);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'org_reconcile_safe_failed' }),
+      );
+
+      // nothing new on the next run
+      await reconciler.run();
+      expect(await events(orgA)).toHaveLength(1);
+    });
+
+    it('seeds a Safe whose link-time seed failed, then diffs it on a later run', async () => {
+      safeRepo.getSafe.mockResolvedValueOnce(safeState());
+      await reconciler.run();
+      expect(await events(orgA)).toEqual([]);
+      expect(await snapshotThreshold()).toEqual([{ threshold: 2 }]);
+
+      safeRepo.getSafe.mockResolvedValueOnce(safeState({ owners: [O1, O3] }));
+      await reconciler.run();
+      expect((await events(orgA)).map((e) => e.type)).toEqual([
+        'onchain.owners_changed',
+      ]);
+    });
+
+    it('skips the run while another replica holds the run lock', async () => {
+      const runner = sql.createQueryRunner();
+      await runner.connect();
+      try {
+        await runner.query(`SELECT pg_advisory_lock(${0x6f7267}, 1)`);
+        expect(await reconciler.run()).toBeNull();
+        expect(safeRepo.getSafe).not.toHaveBeenCalled();
+      } finally {
+        await runner.query(`SELECT pg_advisory_unlock(${0x6f7267}, 1)`);
+        await runner.release();
+      }
     });
   });
 });

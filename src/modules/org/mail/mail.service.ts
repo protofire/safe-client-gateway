@@ -16,7 +16,7 @@ export class MailService {
   private readonly apiKey: string | undefined;
   private readonly from: string | undefined;
   private readonly baseUrl: string | undefined;
-  private readonly isProduction: boolean;
+  private readonly isDevelopment: boolean;
 
   constructor(
     @Inject(NetworkService) private readonly network: INetworkService,
@@ -26,15 +26,16 @@ export class MailService {
     this.apiKey = config.get<string>('org.mail.apiKey') || undefined;
     this.from = config.get<string>('org.mail.from');
     this.baseUrl = config.get<string>('org.mail.baseUrl');
-    this.isProduction =
-      process.env.NODE_ENV === 'production' ||
-      config.get<boolean>('application.isProduction') === true;
+    this.isDevelopment =
+      config.get<boolean>('application.isDevelopment') === true;
   }
 
   async sendInvite(to: string, mail: InviteMail): Promise<void> {
     if (!this.apiKey) {
-      // the URL carries the invitation token: never logged in production
-      if (this.isProduction) throw new Error('ORG_MAIL_API_KEY is not set');
+      // the URL carries the invitation token: logged in development only
+      if (!this.isDevelopment) {
+        throw new Error('org mail is not configured (ORG_MAIL_API_KEY)');
+      }
       this.logger.info(
         `[org mail] no ORG_MAIL_API_KEY, invite link: ${mail.acceptUrl}`,
       );

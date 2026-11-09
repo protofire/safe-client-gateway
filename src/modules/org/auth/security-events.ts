@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
-import type { DataSource } from 'typeorm';
+import type { DataSource, EntityManager } from 'typeorm';
 import type { ActivityEventType } from '@/modules/org/activity/activity-event-types';
 import { Clock, type IClock } from '@/modules/org/common/clock';
 import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
@@ -40,11 +40,13 @@ export class SecurityEvents {
     payload: Record<string, unknown> = {},
     ip?: string,
     userAgent?: string | null,
+    /** The caller's transaction, so the event commits with the change it records. */
+    em: Pick<EntityManager, 'query'> = this.db,
   ): Promise<void> {
     // One statement, so the user event and its copy in every org where the
     // user is an active member commit together. Sign-ins (plan Task 7) and
     // identity changes stay per user; step-up and factor changes fan out.
-    await this.db.query(
+    await em.query(
       `WITH event AS (
          INSERT INTO user_security_events (user_id, type, payload, ip_encrypted, user_agent, created_at)
          VALUES ($1, $2, $3, $4, $5, $6)
