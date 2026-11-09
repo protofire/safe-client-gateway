@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -13,13 +14,17 @@ import {
   ContactPatchSchema,
   ContactSchema,
   type CreateRequestSchema,
+  MAX_PENDING_PER_ORG,
+  MAX_PENDING_PER_REQUESTER,
 } from '@/modules/org/address-book/contacts.schemas';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
 
 type Status = 'pending' | 'approved' | 'rejected';
+type CursorKey = [string, string];
 type Row = {
   id: string;
   contact_id: string | null;
+  contact_version: number | null;
   action: 'create' | 'update' | 'delete';
   payload: Record<string, unknown>;
   requested_by: string | null;
@@ -27,6 +32,7 @@ type Row = {
   decided_by: string | null;
   decided_at: Date | null;
   created_at: Date;
+  ts: string;
 };
 export type ContactRequest = {
   id: string;
@@ -40,7 +46,8 @@ export type ContactRequest = {
   createdAt: string;
 };
 
-const COLUMNS = `id, contact_id, action, payload, requested_by, status, decided_by, decided_at, created_at`;
+const COLUMNS = `id, contact_id, contact_version, action, payload, requested_by, status, decided_by, decided_at, created_at,
+  to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS ts`;
 
 function toRequest(r: Row): ContactRequest {
   return {
@@ -56,6 +63,16 @@ function toRequest(r: Row): ContactRequest {
   };
 }
 
+function decodeCursor(raw: string): CursorKey {
+  try {
+    return z
+      .tuple([z.string().min(1), z.uuid()])
+      .parse(JSON.parse(Buffer.from(raw, 'base64url').toString('utf8')));
+  } catch {
+    throw new BadRequestException('Invalid cursor');
+  }
+}
+
 @Injectable()
 export class ContactRequestsService {
   constructor(
@@ -64,15 +81,37 @@ export class ContactRequestsService {
     private readonly log: ActivityLog,
   ) {}
 
-  list(orgId: string, status?: Status): Promise<Array<ContactRequest>> {
+  async list(
+    orgId: string,
+    q: { status: Status | 'all'; cursor?: string; limit: number },
+  ): Promise<{ items: Array<ContactRequest>; nextCursor: string | null }> {
+    const after = q.cursor ? decodeCursor(q.cursor) : null;
     return this.tx.runInOrgTx(async (em) => {
+      // created_at stays text so microseconds survive the keyset cursor
       const rows: Array<Row> = await em.query(
         `SELECT ${COLUMNS} FROM contact_requests
           WHERE org_id = $1 AND ($2::text IS NULL OR status = $2)
-          ORDER BY created_at DESC, id DESC`,
-        [orgId, status ?? null],
+            AND ($3::timestamptz IS NULL OR (created_at, id) < ($3::timestamptz, $4::uuid))
+          ORDER BY created_at DESC, id DESC LIMIT $5`,
+        [
+          orgId,
+          q.status === 'all' ? null : q.status,
+          after?.[0] ?? null,
+          after?.[1] ?? null,
+          q.limit + 1,
+        ],
       );
-      return rows.map(toRequest);
+      const page = rows.slice(0, q.limit);
+      const last = page[page.length - 1];
+      return {
+        items: page.map(toRequest),
+        nextCursor:
+          rows.length > q.limit
+            ? Buffer.from(JSON.stringify([last.ts, last.id])).toString(
+                'base64url',
+              )
+            : null,
+      };
     }, orgId);
   }
 
@@ -82,6 +121,7 @@ export class ContactRequestsService {
     actor: Actor,
   ): Promise<ContactRequest> {
     return this.tx.runInOrgTx(async (em) => {
+      await this.contacts.lockOrg(em, orgId);
       // The FK cannot enforce the org (FKs bypass RLS): look the contact up
       // through the org-scoped query, which answers 404 for another org's id.
       const contactId = input.action === 'create' ? null : input.contactId;
@@ -90,10 +130,46 @@ export class ContactRequestsService {
           ? null
           : await this.contacts.find(em, orgId, contactId);
       const payload = input.action === 'delete' ? {} : input.payload;
+      const version = existing?.version ?? null;
+
+      const [same]: Array<Row> = await em.query(
+        `SELECT ${COLUMNS} FROM contact_requests
+          WHERE org_id = $1 AND status = 'pending' AND action = $2
+            AND contact_id IS NOT DISTINCT FROM $3::uuid
+            AND contact_version IS NOT DISTINCT FROM $4::int
+            AND payload = $5::jsonb
+          LIMIT 1`,
+        [orgId, input.action, contactId, version, JSON.stringify(payload)],
+      );
+      if (same) return toRequest(same);
+
+      const [counts]: Array<{ org: number; mine: number }> = await em.query(
+        `SELECT count(*)::int AS org, (count(*) FILTER (WHERE requested_by = $2))::int AS mine
+           FROM contact_requests WHERE org_id = $1 AND status = 'pending'`,
+        [orgId, actor.userId],
+      );
+      if (
+        counts.org >= MAX_PENDING_PER_ORG ||
+        counts.mine >= MAX_PENDING_PER_REQUESTER
+      ) {
+        throw new ConflictException({
+          statusCode: 409,
+          message: 'Too many pending requests',
+          code: 'request_limit',
+        });
+      }
+
       const [row]: Array<Row> = await em.query(
-        `INSERT INTO contact_requests (org_id, contact_id, action, payload, requested_by)
-         VALUES ($1, $2, $3, $4::jsonb, $5) RETURNING ${COLUMNS}`,
-        [orgId, contactId, input.action, JSON.stringify(payload), actor.userId],
+        `INSERT INTO contact_requests (org_id, contact_id, contact_version, action, payload, requested_by)
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6) RETURNING ${COLUMNS}`,
+        [
+          orgId,
+          contactId,
+          version,
+          input.action,
+          JSON.stringify(payload),
+          actor.userId,
+        ],
       );
       const shown =
         input.action === 'create'
@@ -109,26 +185,34 @@ export class ContactRequestsService {
 
   approve(orgId: string, id: string, actor: Actor): Promise<ContactRequest> {
     return this.tx.runInOrgTx(async (em) => {
-      const req = await this.lockPending(em, orgId, id);
       await this.contacts.lockOrg(em, orgId);
+      const req = await this.lockPending(em, orgId, id);
       let result: Pick<Contact, 'name' | 'address'>;
       if (req.action === 'create') {
-        const c = await this.contacts.insert(
-          em,
-          orgId,
-          ContactSchema.parse(req.payload),
-        );
+        const input = ContactSchema.safeParse(req.payload);
+        if (!input.success) throw this.invalid();
+        const c = await this.contacts.insert(em, orgId, input.data);
         await this.contacts.event(em, orgId, 'contact.created', c, actor);
         result = c;
       } else {
         // contact_id is SET NULL when the contact was deleted after the request
         if (req.contact_id === null) throw this.gone();
+        const current = await this.contacts.find(em, orgId, req.contact_id);
+        if (current.version !== req.contact_version) {
+          throw new ConflictException({
+            statusCode: 409,
+            message: 'The contact changed after this request was made',
+            code: 'request_stale',
+          });
+        }
         if (req.action === 'update') {
+          const patch = ContactPatchSchema.safeParse(req.payload);
+          if (!patch.success) throw this.invalid();
           const c = await this.contacts.applyUpdate(
             em,
             orgId,
             req.contact_id,
-            ContactPatchSchema.parse(req.payload),
+            patch.data,
           );
           await this.contacts.event(em, orgId, 'contact.updated', c, actor);
           result = c;
@@ -146,6 +230,7 @@ export class ContactRequestsService {
 
   reject(orgId: string, id: string, actor: Actor): Promise<ContactRequest> {
     return this.tx.runInOrgTx(async (em) => {
+      await this.contacts.lockOrg(em, orgId);
       const req = await this.lockPending(em, orgId, id);
       let subject: { name?: string; address?: string } = req.payload;
       if (req.action !== 'create') {
@@ -158,6 +243,14 @@ export class ContactRequestsService {
       await this.event(em, orgId, 'rejected', decided, subject, actor);
       return toRequest(decided);
     }, orgId);
+  }
+
+  private invalid(): ConflictException {
+    return new ConflictException({
+      statusCode: 409,
+      message: 'The stored request is no longer valid',
+      code: 'request_invalid',
+    });
   }
 
   private gone(): ConflictException {

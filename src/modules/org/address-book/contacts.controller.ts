@@ -192,7 +192,7 @@ export class ContactsController {
     @Param('orgId') orgId: string,
     @Query() query: unknown,
   ): ReturnType<ContactRequestsService['list']> {
-    return this.requests.list(orgId, parse(RequestsQuerySchema, query).status);
+    return this.requests.list(orgId, parse(RequestsQuerySchema, query));
   }
 
   @Post('contact-requests')

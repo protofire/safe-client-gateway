@@ -1,3 +1,5 @@
+import { randomUUID } from 'crypto';
+import { createClient } from 'redis';
 import { Global, Module } from '@nestjs/common';
 import { APP_FILTER } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
@@ -78,6 +80,11 @@ class TestProvidersModule {}
 const ADDR = '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed';
 const ADDR2 = '0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359';
 const ADDR3 = '0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB';
+
+// Redis DB 2 is shared with other lanes: a private prefix, cleaned by SCAN+DEL
+const CACHE_PREFIX = `org:test:${randomUUID()}:`;
+
+jest.setTimeout(60_000);
 
 describe('org address book', () => {
   let db: OrgTestDb;
@@ -184,9 +191,10 @@ describe('org address book', () => {
       [method](`/v1/orgs/${path}`)
       .set('Cookie', who.cookie)
       .set('X-Org-Request', '1')
+      .timeout(15_000)
       .send(body);
   const get = (path: string, who: { cookie: string }): request.Test =>
-    http().get(`/v1/orgs/${path}`).set('Cookie', who.cookie);
+    http().get(`/v1/orgs/${path}`).set('Cookie', who.cookie).timeout(15_000);
   const listOf = async (
     path: string,
     who: { cookie: string },
@@ -213,7 +221,7 @@ describe('org address book', () => {
     const moduleRef = await Test.createTestingModule({
       imports: [
         TestProvidersModule,
-        CacheModule.register('org:'),
+        CacheModule.register(CACHE_PREFIX),
         TypeOrmModule.forRoot({
           ...(db.app().options as PostgresConnectionOptions),
           name: ORG_DATA_SOURCE,
@@ -252,6 +260,21 @@ describe('org address book', () => {
   });
 
   afterAll(async () => {
+    const redis = createClient({
+      socket: { host: '127.0.0.1', port: 6379 },
+      database: 2,
+    });
+    await redis.connect();
+    try {
+      for await (const keys of redis.scanIterator({
+        MATCH: `${CACHE_PREFIX}*`,
+        COUNT: 100,
+      })) {
+        if (keys.length > 0) await redis.del(keys);
+      }
+    } finally {
+      await redis.quit();
+    }
     await app?.close();
     await db?.drop();
   });
@@ -363,9 +386,9 @@ describe('org address book', () => {
       `${orgA}/contact-requests?status=pending`,
       admin,
     ).expect(200);
-    expect((after.body as Array<{ id: string }>).map((r) => r.id)).toEqual([
-      bad.body.id,
-    ]);
+    expect(
+      (after.body.items as Array<{ id: string }>).map((r) => r.id),
+    ).toEqual([bad.body.id]);
     const names = (await listOf(`${orgA}/contacts`, admin)).map((c) => c.name);
     expect(names).toEqual(['New', 'Other']);
     expect(await events('contact_request.approved')).toHaveLength(1);
@@ -587,5 +610,228 @@ describe('org address book', () => {
     expect(await names('?chainId=1&tag=team')).toEqual(['Alice 100%']);
     const all = await listOf(`${orgA}/contacts`, member);
     expect(all.map((c) => c.address)).toEqual([ADDR, ADDR2]);
+  });
+
+  describe('concurrency, staleness and limits', () => {
+    const requestOn = async (
+      action: 'update' | 'delete',
+      contactId: string,
+      payload: object = { name: 'Edited' },
+    ): Promise<string> =>
+      (
+        await write('post', `${orgA}/contact-requests`, member, {
+          action,
+          contactId,
+          payload,
+        }).expect(201)
+      ).body.id;
+    const approve = (id: string): request.Test =>
+      write('post', `${orgA}/contact-requests/${id}/approve`, admin);
+
+    it('does not deadlock when decisions and edits on one contact race', async () => {
+      for (let round = 0; round < 5; round++) {
+        const id = await seed(orgA, `C${round}`, ADDR, ['1']);
+        const upd = await requestOn('update', id);
+        const del = await requestOn('delete', id);
+        const first = await Promise.all([approve(upd), approve(del)]);
+        for (const r of first) expect([200, 409]).toContain(r.status);
+        expect(first.map((r) => r.status)).toContain(200);
+
+        const id2 = await seed(orgA, `D${round}`, ADDR2, ['1']);
+        const upd2 = await requestOn('update', id2);
+        const second = await Promise.all([
+          approve(upd2),
+          write('delete', `${orgA}/contacts/${id2}`, admin),
+          write('patch', `${orgA}/contacts/${id2}`, admin, { name: 'Z' }),
+        ]);
+        for (const r of second)
+          expect([200, 204, 404, 409]).toContain(r.status);
+        await asOrg(orgA, (em) => em.query(`DELETE FROM contacts`));
+      }
+    });
+
+    it('answers 404, not 500, when the contact is deleted just before an update', async () => {
+      const id = await seed(orgA, 'Racy', ADDR);
+      let patched: Promise<number> | undefined;
+      await sql.transaction(async (em) => {
+        // bounded: a lock wait can never hang the suite
+        await em.query(`SET LOCAL lock_timeout = '5s'`);
+        await em.query(`SET LOCAL statement_timeout = '10s'`);
+        await em.query(`SELECT set_config('app.org_id', $1, true)`, [orgA]);
+        await em.query(`SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE`, [
+          orgA,
+        ]);
+        await em.query(`DELETE FROM contacts WHERE id = $1`, [id]);
+        patched = write('patch', `${orgA}/contacts/${id}`, admin, {
+          name: 'Late',
+        }).then((r) => r.status);
+        // let the PATCH reach the org lock; it must not be awaited in here,
+        // the lock is only released when this transaction commits
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      });
+      expect(await patched).toBe(404);
+    });
+
+    it('rejects approving a request made against an older version of the contact', async () => {
+      const id = await seed(orgA, 'Old', ADDR);
+      const upd = await requestOn('update', id);
+      const del = await requestOn('delete', id);
+      await write('patch', `${orgA}/contacts/${id}`, admin, {
+        name: 'Edited by admin',
+      }).expect(200);
+      for (const r of [upd, del]) {
+        const res = await approve(r).expect(409);
+        expect(res.body.code).toBe('request_stale');
+      }
+      expect((await listOf(`${orgA}/contacts`, admin))[0].name).toBe(
+        'Edited by admin',
+      );
+      const pending = await get(`${orgA}/contact-requests`, admin).expect(200);
+      expect(pending.body.items).toHaveLength(2);
+    });
+
+    it('rejects approving a request whose stored payload no longer validates', async () => {
+      const req = await write('post', `${orgA}/contact-requests`, member, {
+        action: 'create',
+        payload: { name: 'Bob', address: ADDR, chainIds: ['1'] },
+      }).expect(201);
+      await asOrg(orgA, (em) =>
+        em.query(`UPDATE contact_requests SET payload = '{"name":""}'`),
+      );
+      const res = await approve((req.body as { id: string }).id).expect(409);
+      expect(res.body.code).toBe('request_invalid');
+    });
+
+    it('limits pending requests per requester and per org, and dedupes identical ones', async () => {
+      const body = (n: number): object => ({
+        action: 'create',
+        payload: {
+          name: `N${n}`,
+          address: `0x${n.toString(16).padStart(40, '0')}`,
+          chainIds: ['1'],
+        },
+      });
+      const first = await write(
+        'post',
+        `${orgA}/contact-requests`,
+        member,
+        body(1),
+      ).expect(201);
+      const again = await write(
+        'post',
+        `${orgA}/contact-requests`,
+        member,
+        body(1),
+      ).expect(201);
+      expect(again.body.id).toBe(first.body.id);
+      for (let n = 2; n <= 20; n++) {
+        await write('post', `${orgA}/contact-requests`, member, body(n)).expect(
+          201,
+        );
+      }
+      const over = await write(
+        'post',
+        `${orgA}/contact-requests`,
+        member,
+        body(21),
+      ).expect(409);
+      expect(over.body.code).toBe('request_limit');
+      // the admin has their own per-requester quota, but the org total is 100
+      await asOrg(orgA, (em) =>
+        em.query(
+          `INSERT INTO contact_requests (org_id, action, payload)
+           SELECT $1, 'create', '{}' FROM generate_series(1, 80)`,
+          [orgA],
+        ),
+      );
+      const org = await write(
+        'post',
+        `${orgA}/contact-requests`,
+        admin,
+        body(99),
+      ).expect(409);
+      expect(org.body.code).toBe('request_limit');
+    });
+
+    it('paginates requests, pending by default', async () => {
+      const ids: Array<string> = [];
+      for (let n = 1; n <= 3; n++) {
+        const r = await write('post', `${orgA}/contact-requests`, member, {
+          action: 'create',
+          payload: {
+            name: `P${n}`,
+            address: `0x${n.toString(16).padStart(40, '0')}`,
+            chainIds: ['1'],
+          },
+        }).expect(201);
+        ids.push((r.body as { id: string }).id);
+      }
+      await approve(ids[0]).expect(200);
+      const page1 = await get(`${orgA}/contact-requests?limit=1`, admin).expect(
+        200,
+      );
+      expect(
+        (page1.body as { items: Array<{ id: string }> }).items.map((r) => r.id),
+      ).toEqual([ids[2]]);
+      const page2 = await get(
+        `${orgA}/contact-requests?limit=1&cursor=${page1.body.nextCursor}`,
+        admin,
+      ).expect(200);
+      expect(
+        (page2.body as { items: Array<{ id: string }> }).items.map((r) => r.id),
+      ).toEqual([ids[1]]);
+      expect(page2.body.nextCursor).toBeNull();
+      const all = await get(
+        `${orgA}/contact-requests?status=all`,
+        admin,
+      ).expect(200);
+      expect(all.body.items).toHaveLength(3);
+      await get(`${orgA}/contact-requests?limit=101`, admin).expect(400);
+      await get(`${orgA}/contact-requests?cursor=junk`, admin).expect(400);
+    });
+
+    it('stops importing new addresses at the cap with one summary, real lines, and caps chains', async () => {
+      await asOrg(orgA, (em) =>
+        em.query(
+          `INSERT INTO contacts (org_id, name, address, chain_ids)
+           SELECT $1, 'c' || n, '0x' || lpad(to_hex(n), 40, '0'), '{1}' FROM generate_series(1, 1000) n`,
+          [orgA],
+        ),
+      );
+      const existing = `0x${(5).toString(16).padStart(40, '0')}`;
+      const csv = [
+        'address,name,chainId',
+        `${ADDR},A,1`,
+        `${ADDR2},B,1`,
+        `${ADDR},A,10`,
+        `${existing},Renamed,10`,
+        `${ADDR3},C,1`,
+      ].join('\n');
+      const res = await upload(orgA, admin, csv).expect(200);
+      expect(res.body.created).toBe(0);
+      expect(res.body.updated).toBe(1);
+      expect(res.body.skipped).toHaveLength(1);
+      expect(res.body.skipped[0]).toMatchObject({
+        line: 2,
+        lines: [2, 3, 4, 6],
+        reason: expect.stringContaining('3 addresses'),
+      });
+      await asOrg(orgA, (em) => em.query(`DELETE FROM contacts`));
+
+      const many = ['address,name,chainId'];
+      for (let c = 1; c <= 101; c++) many.push(`${ADDR},Many,${c}`);
+      await upload(orgA, admin, many.join('\n')).expect(200);
+      const [c] = await asOrg(orgA, (em) =>
+        em.query(`SELECT chain_ids FROM contacts`),
+      );
+      expect(c.chain_ids).toHaveLength(100);
+    });
+
+    it('has a unique index on (org, address)', async () => {
+      await seed(orgA, 'One', ADDR);
+      await expect(seed(orgA, 'Two', ADDR.toLowerCase())).rejects.toThrow(
+        /contacts_org_address_key/,
+      );
+    });
   });
 });

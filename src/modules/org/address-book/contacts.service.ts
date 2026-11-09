@@ -11,6 +11,7 @@ import {
   type Contact,
   type ContactInput,
   type ContactPatch,
+  MAX_CHAINS,
   MAX_CONTACTS,
 } from '@/modules/org/address-book/contacts.schemas';
 import { parseSafeAddressBookCsv } from '@/modules/org/address-book/safe-csv.parser';
@@ -22,11 +23,12 @@ type Row = {
   address: string;
   chain_ids: Array<string>;
   tags: Array<string>;
+  version: number;
   created_at: Date;
   updated_at: Date;
 };
 
-const COLUMNS = `id, name, address::text AS address, chain_ids, tags, created_at, updated_at`;
+const COLUMNS = `id, name, address::text AS address, chain_ids, tags, version, created_at, updated_at`;
 
 function toContact(r: Row): Contact {
   return {
@@ -35,6 +37,7 @@ function toContact(r: Row): Contact {
     address: getAddress(r.address),
     chainIds: r.chain_ids,
     tags: r.tags,
+    version: r.version,
     createdAt: r.created_at.toISOString(),
     updatedAt: r.updated_at.toISOString(),
   };
@@ -112,6 +115,7 @@ export class ContactsService {
 
   create(orgId: string, input: ContactInput, actor: Actor): Promise<Contact> {
     return this.tx.runInOrgTx(async (em) => {
+      await this.lockOrg(em, orgId);
       const c = await this.insert(em, orgId, input);
       await this.event(em, orgId, 'contact.created', c, actor);
       return c;
@@ -134,6 +138,7 @@ export class ContactsService {
 
   remove(orgId: string, id: string, actor: Actor): Promise<void> {
     return this.tx.runInOrgTx(async (em) => {
+      await this.lockOrg(em, orgId);
       const c = await this.applyDelete(em, orgId, id);
       await this.event(em, orgId, 'contact.deleted', c, actor);
     }, orgId);
@@ -146,51 +151,60 @@ export class ContactsService {
   ): Promise<{
     created: number;
     updated: number;
-    skipped: Array<{ line: number; reason: string }>;
+    skipped: Array<{ line: number; reason: string; lines?: Array<number> }>;
   }> {
     const parsed = parseSafeAddressBookCsv(text);
-    const skipped = [...parsed.errors];
+    const skipped: Array<{
+      line: number;
+      reason: string;
+      lines?: Array<number>;
+    }> = [...parsed.errors];
     // One contact per address: its chains are the union of the CSV rows
     const byAddress = new Map<
       string,
-      { name: string; chainIds: Set<string>; lines: number }
+      { name: string; chainIds: Set<string>; lines: Array<number> }
     >();
     for (const r of parsed.rows) {
       const key = r.address.toLowerCase();
       const g = byAddress.get(key) ?? {
         name: r.name,
         chainIds: new Set<string>(),
-        lines: 0,
+        lines: [],
       };
       g.name = r.name;
       g.chainIds.add(r.chainId);
-      g.lines++;
+      g.lines.push(r.line);
       byAddress.set(key, g);
     }
     return this.tx.runInOrgTx(async (em) => {
       await this.lockOrg(em, orgId);
-      let count = await this.count(em, orgId);
+      const rows: Array<{ id: string; address: string }> = await em.query(
+        `SELECT id, address::text AS address FROM contacts WHERE org_id = $1`,
+        [orgId],
+      );
+      const existing = new Map(
+        rows.map((r) => [r.address.toLowerCase(), r.id]),
+      );
+      let count = rows.length;
       let created = 0;
       let updated = 0;
+      const over: Array<number> = [];
+      let overAddresses = 0;
       for (const [address, g] of byAddress) {
-        const chainIds = [...g.chainIds];
-        const [existing]: Array<Row> = await em.query(
-          `SELECT ${COLUMNS} FROM contacts WHERE org_id = $1 AND address = $2`,
-          [orgId, address],
-        );
-        if (existing) {
+        const chainIds = [...g.chainIds].slice(0, MAX_CHAINS);
+        const id = existing.get(address);
+        if (id) {
           await em.query(
-            `UPDATE contacts SET name = $3, chain_ids = ARRAY(SELECT x FROM unnest(chain_ids || $4::text[]) x GROUP BY x ORDER BY x::numeric),
-                    updated_at = now()
+            `UPDATE contacts SET name = $3,
+                    chain_ids = (ARRAY(SELECT x FROM unnest(chain_ids || $4::text[]) x GROUP BY x ORDER BY x::numeric))[1:${MAX_CHAINS}],
+                    version = version + 1, updated_at = now()
               WHERE org_id = $1 AND id = $2`,
-            [orgId, existing.id, g.name, chainIds],
+            [orgId, id, g.name, chainIds],
           );
           updated++;
         } else if (count >= MAX_CONTACTS) {
-          skipped.push({
-            line: 0,
-            reason: `Contact limit (${MAX_CONTACTS}) reached: ${getAddress(address)}`,
-          });
+          overAddresses++;
+          over.push(...g.lines);
         } else {
           await em.query(
             `INSERT INTO contacts (org_id, name, address, chain_ids) VALUES ($1, $2, $3, $4)`,
@@ -199,6 +213,14 @@ export class ContactsService {
           count++;
           created++;
         }
+      }
+      if (overAddresses > 0) {
+        over.sort((a, b) => a - b);
+        skipped.push({
+          line: over[0],
+          lines: over.slice(0, 100),
+          reason: `Contact limit (${MAX_CONTACTS}) reached: ${overAddresses} addresses not imported`,
+        });
       }
       await this.log.record(em, {
         orgId,
@@ -214,7 +236,11 @@ export class ContactsService {
 
   // ---- building blocks shared with ContactRequestsService (same transaction) ----
 
-  /** Serialises writers per org so the limit and uniqueness checks cannot race. */
+  /**
+   * First lock of every address-book write (org row before any other row, so
+   * there is one global order). Serialises writers per org, so the limit and
+   * uniqueness checks cannot race.
+   */
   async lockOrg(em: EntityManager, orgId: string): Promise<void> {
     await em.query(`SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE`, [
       orgId,
@@ -230,12 +256,12 @@ export class ContactsService {
     return toContact(row);
   }
 
+  /** Caller holds the org lock. */
   async insert(
     em: EntityManager,
     orgId: string,
     input: ContactInput,
   ): Promise<Contact> {
-    await this.lockOrg(em, orgId);
     if ((await this.count(em, orgId)) >= MAX_CONTACTS) {
       throw new ConflictException({
         statusCode: 409,
@@ -244,10 +270,12 @@ export class ContactsService {
       });
     }
     await this.assertAddressFree(em, orgId, input.address, null);
-    const [row]: Array<Row> = await em.query(
-      `INSERT INTO contacts (org_id, name, address, chain_ids, tags)
-       VALUES ($1, $2, $3, $4, $5) RETURNING ${COLUMNS}`,
-      [orgId, input.name, input.address, input.chainIds, input.tags],
+    const [row]: Array<Row> = await this.guardUnique(() =>
+      em.query(
+        `INSERT INTO contacts (org_id, name, address, chain_ids, tags)
+         VALUES ($1, $2, $3, $4, $5) RETURNING ${COLUMNS}`,
+        [orgId, input.name, input.address, input.chainIds, input.tags],
+      ),
     );
     return toContact(row);
   }
@@ -265,14 +293,19 @@ export class ContactsService {
       await this.assertAddressFree(em, orgId, next.address, id);
     }
     // TypeORM returns [rows, affected] for UPDATE ... RETURNING
-    const [[row]]: Array<[Row]> = await em.query(
-      `UPDATE contacts SET name = $3, address = $4, chain_ids = $5, tags = $6, updated_at = now()
-        WHERE org_id = $1 AND id = $2 RETURNING ${COLUMNS}`,
-      [orgId, id, next.name, next.address, next.chainIds, next.tags],
+    const [[row]]: Array<[Row | undefined]> = await this.guardUnique(() =>
+      em.query(
+        `UPDATE contacts SET name = $3, address = $4, chain_ids = $5, tags = $6,
+                version = version + 1, updated_at = now()
+          WHERE org_id = $1 AND id = $2 RETURNING ${COLUMNS}`,
+        [orgId, id, next.name, next.address, next.chainIds, next.tags],
+      ),
     );
+    if (!row) throw new NotFoundException('Contact not found');
     return toContact(row);
   }
 
+  /** Caller holds the org lock. */
   async applyDelete(
     em: EntityManager,
     orgId: string,
@@ -313,6 +346,24 @@ export class ContactsService {
     return n;
   }
 
+  private exists(): ConflictException {
+    return new ConflictException({
+      statusCode: 409,
+      message: 'A contact with this address already exists',
+      code: 'contact_exists',
+    });
+  }
+
+  // The unique index (org_id, address) is the backstop for the check below
+  private async guardUnique<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (e) {
+      if ((e as { code?: string }).code === '23505') throw this.exists();
+      throw e;
+    }
+  }
+
   private async assertAddressFree(
     em: EntityManager,
     orgId: string,
@@ -323,12 +374,6 @@ export class ContactsService {
       `SELECT 1 FROM contacts WHERE org_id = $1 AND address = $2 AND ($3::uuid IS NULL OR id <> $3::uuid)`,
       [orgId, address, exceptId],
     );
-    if (taken.length > 0) {
-      throw new ConflictException({
-        statusCode: 409,
-        message: 'A contact with this address already exists',
-        code: 'contact_exists',
-      });
-    }
+    if (taken.length > 0) throw this.exists();
   }
 }

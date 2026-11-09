@@ -1,6 +1,11 @@
 import { isAddress } from 'viem';
 
-export type SafeCsvRow = { address: string; name: string; chainId: string };
+export type SafeCsvRow = {
+  line: number;
+  address: string;
+  name: string;
+  chainId: string;
+};
 export type SafeCsvError = { line: number; reason: string };
 
 const HEADER = ['address', 'name', 'chainId'];
@@ -91,7 +96,7 @@ export function parseSafeAddressBookCsv(text: string): {
     } else if (!/^[1-9]\d{0,17}$/.test(chainId)) {
       errors.push({ line, reason: 'Invalid chainId' });
     } else {
-      rows.push({ address, name, chainId });
+      rows.push({ line, address, name, chainId });
     }
   }
   return { rows, errors };

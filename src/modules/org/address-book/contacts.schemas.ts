@@ -2,6 +2,9 @@ import { getAddress, isAddress } from 'viem';
 import { z } from 'zod';
 
 export const MAX_CONTACTS = 1000;
+export const MAX_CHAINS = 100;
+export const MAX_PENDING_PER_ORG = 100;
+export const MAX_PENDING_PER_REQUESTER = 20;
 
 const name = z.string().trim().min(1).max(64);
 const address = z
@@ -11,7 +14,7 @@ const address = z
 const chainIds = z
   .array(z.string().regex(/^[1-9]\d{0,17}$/))
   .min(1)
-  .max(100)
+  .max(MAX_CHAINS)
   .transform((v) => [...new Set(v)]);
 const tags = z
   .array(z.string().trim().min(1).max(32))
@@ -56,7 +59,9 @@ export const CreateRequestSchema = z.discriminatedUnion('action', [
 ]);
 
 export const RequestsQuerySchema = z.object({
-  status: z.enum(['pending', 'approved', 'rejected']).optional(),
+  status: z.enum(['pending', 'approved', 'rejected', 'all']).default('pending'),
+  cursor: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
 });
 
 export type Contact = {
@@ -65,6 +70,7 @@ export type Contact = {
   address: string;
   chainIds: Array<string>;
   tags: Array<string>;
+  version: number;
   createdAt: string;
   updatedAt: string;
 };
