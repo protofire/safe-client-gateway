@@ -26,6 +26,7 @@ import { OrgOidcModule } from '@/modules/org/auth/oidc/oidc.module';
 import { OrgTotpModule } from '@/modules/org/auth/totp/totp.module';
 import { SessionGuard } from '@/modules/org/auth/session.guard';
 import { OrgDatabaseModule } from '@/modules/org/db/org-database.module';
+import { OrgEventsModule } from '@/modules/org/events/org-events.module';
 import { OrgHealthController } from '@/modules/org/health/org-health.controller';
 import { OrgMemberGuard } from '@/modules/org/permissions/org-member.guard';
 import { PermissionsModule } from '@/modules/org/permissions/permissions.module';
@@ -86,6 +87,7 @@ export class OrgAppModule implements NestModule {
         ActivityModule,
         SafesModule,
         AddressBookModule,
+        OrgEventsModule,
       ],
       controllers: [OrgHealthController],
       providers: [
