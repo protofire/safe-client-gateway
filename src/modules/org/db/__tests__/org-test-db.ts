@@ -12,24 +12,31 @@ const ssl: PostgresConnectionOptions['ssl'] =
     : { rejectUnauthorized: false };
 const server = { host: 'localhost', port: 5433, ssl };
 const SUPERUSER = { username: 'postgres', password: 'postgres' };
-const APP_PASSWORD = 'test-password';
+const PASSWORD = 'test-password';
 
 export interface OrgTestDb {
   database: string;
   appUser: string;
-  /** Owner login with the org migrations loaded from TS; not initialized. */
+  /**
+   * Migrator: not a superuser, owns the database (and schema public unless
+   * `ownsPublicSchema: false`), as on managed Postgres. Migrations load from
+   * TS. Not initialized.
+   */
   owner(): DataSource;
   /** Non-superuser, non-owner app login; not initialized. */
   app(): DataSource;
   drop(): Promise<void>;
 }
 
-async function asSuperuser(sql: Array<string>): Promise<void> {
+async function asSuperuser(
+  database: string,
+  sql: Array<string>,
+): Promise<void> {
   const ds = new DataSource({
     type: 'postgres',
     ...server,
     ...SUPERUSER,
-    database: 'postgres',
+    database,
   });
   await ds.initialize();
   try {
@@ -39,31 +46,49 @@ async function asSuperuser(sql: Array<string>): Promise<void> {
   }
 }
 
-/** Fresh database and app login role per test file. */
-export async function createOrgTestDb(): Promise<OrgTestDb> {
+/** Fresh database, migrator role and app login role per call. */
+export async function createOrgTestDb(
+  options: { ownsPublicSchema?: boolean } = {},
+): Promise<OrgTestDb> {
   const suffix = randomBytes(6).toString('hex');
   const database = `org_test_${suffix}`;
+  const ownerUser = `org_owner_${suffix}`;
   const appUser = `org_app_${suffix}`;
-  await asSuperuser([
-    `CREATE DATABASE "${database}"`,
-    `CREATE ROLE "${appUser}" LOGIN PASSWORD '${APP_PASSWORD}' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE`,
+  const login = `LOGIN PASSWORD '${PASSWORD}' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE`;
+  await asSuperuser('postgres', [
+    `CREATE ROLE "${ownerUser}" ${login}`,
+    `CREATE ROLE "${appUser}" ${login}`,
+    `CREATE DATABASE "${database}" OWNER "${ownerUser}"`,
   ]);
+  // PG14 creates schema public owned by the bootstrap superuser
+  if (options.ownsPublicSchema ?? true) {
+    await asSuperuser(database, [
+      `ALTER SCHEMA public OWNER TO "${ownerUser}"`,
+    ]);
+  }
   return {
     database,
     appUser,
-    owner: () => orgMigratorDataSource({ ...server, ...SUPERUSER, database }),
+    owner: () =>
+      orgMigratorDataSource({
+        ...server,
+        database,
+        username: ownerUser,
+        password: PASSWORD,
+      }),
     app: () =>
       new DataSource({
         type: 'postgres',
         ...server,
         database,
         username: appUser,
-        password: APP_PASSWORD,
+        password: PASSWORD,
       }),
     drop: () =>
-      asSuperuser([
+      asSuperuser('postgres', [
         `DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`,
         `DROP ROLE IF EXISTS "${appUser}"`,
+        `DROP ROLE IF EXISTS "${ownerUser}"`,
       ]),
   };
 }

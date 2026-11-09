@@ -58,6 +58,14 @@ describe('OrgConfigurationSchema', () => {
       }),
     ],
     [
+      'key id with a colon',
+      JSON.stringify({ current: 'v:1', keys: { 'v:1': key(1) } }),
+    ],
+    [
+      'key id with a space',
+      JSON.stringify({ current: 'v 1', keys: { 'v 1': key(1) } }),
+    ],
+    [
       'key not base64',
       JSON.stringify({ current: 'v1', keys: { v1: 'not base64 !!' } }),
     ],

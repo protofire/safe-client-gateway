@@ -276,7 +276,7 @@ export class OrgCore1794182400000 implements MigrationInterface {
 
     // ---- last-admin invariant (amendment A4: lock the org row, then count) ----
     await sql(`CREATE FUNCTION org_keep_one_admin() RETURNS trigger
-      LANGUAGE plpgsql AS $$
+      LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
       DECLARE
         changed record;
         target_org uuid;
@@ -284,13 +284,21 @@ export class OrgCore1794182400000 implements MigrationInterface {
       BEGIN
         -- INSERT can create an org without an admin; UPDATE/DELETE can remove one
         IF TG_OP = 'INSERT' THEN changed := NEW; ELSE changed := OLD; END IF;
-        IF TG_TABLE_NAME = 'members' THEN
+        IF TG_TABLE_NAME = 'organizations' THEN
+          -- created active, or restored to active
+          target_org := NEW.id;
+        ELSIF TG_TABLE_NAME = 'members' THEN
           target_org := changed.org_id;
         ELSE
           SELECT org_id INTO target_org FROM members WHERE id = changed.member_id;
         END IF;
 
-        SELECT status INTO org_status FROM organizations WHERE id = target_org FOR UPDATE;
+        -- NO KEY UPDATE, not UPDATE: it must not conflict with the KEY SHARE
+        -- locks that concurrent member inserts take through their foreign key
+        -- (FOR UPDATE deadlocks two concurrent joins of the same org).
+        -- Relies on READ COMMITTED: the count below takes a fresh snapshot
+        -- after the lock, so it sees what the previous lock holder committed.
+        SELECT status INTO org_status FROM organizations WHERE id = target_org FOR NO KEY UPDATE;
         -- gone (purged with its members) or deleted: nothing to keep
         IF org_status IS DISTINCT FROM 'active' THEN
           RETURN NULL;
@@ -303,6 +311,7 @@ export class OrgCore1794182400000 implements MigrationInterface {
           JOIN roles r ON r.id = rb.role_id
           WHERE m.org_id = target_org
             AND m.status = 'active'
+            AND rb.scope = 'org'
             AND r.key = 'admin'
             AND r.org_id IS NULL
         ) THEN
@@ -318,6 +327,10 @@ export class OrgCore1794182400000 implements MigrationInterface {
         DEFERRABLE INITIALLY DEFERRED
         FOR EACH ROW EXECUTE FUNCTION org_keep_one_admin()`);
     }
+    await sql(`CREATE CONSTRAINT TRIGGER members_keep_one_admin
+      AFTER INSERT OR UPDATE OF status ON organizations
+      DEFERRABLE INITIALLY DEFERRED
+      FOR EACH ROW EXECUTE FUNCTION org_keep_one_admin()`);
 
     // ---- row-level security (amendment A3: address book only) ----
     for (const table of ['contacts', 'contact_requests']) {

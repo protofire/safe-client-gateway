@@ -7,8 +7,11 @@ import { CacheReadiness } from '@/domain/interfaces/cache-readiness.interface';
 import { LoggingService } from '@/logging/logging.interface';
 import { configureOrgApp } from '@/org-main';
 import { OrgHealthController } from '@/modules/org/health/org-health.controller';
+import { getDataSourceToken } from '@nestjs/typeorm';
+import { ORG_DATA_SOURCE } from '@/modules/org/db/org-data-source';
 
 const ping = jest.fn();
+const dbQuery = jest.fn();
 const PUBLIC_APP_URL = 'https://app.example.com';
 
 @Controller({ path: 'orgs', version: '1' })
@@ -98,11 +101,20 @@ async function createApp(
         useValue: { ping },
       },
       {
+        provide: getDataSourceToken(ORG_DATA_SOURCE),
+        useValue: { query: dbQuery },
+      },
+      {
         provide: LoggingService,
         useValue: { error: jest.fn(), warn: jest.fn(), info: jest.fn() },
       },
     ],
-    exports: [IConfigurationService, CacheReadiness, LoggingService],
+    exports: [
+      IConfigurationService,
+      CacheReadiness,
+      LoggingService,
+      getDataSourceToken(ORG_DATA_SOURCE),
+    ],
   })
   class TestProvidersModule {}
 
@@ -120,6 +132,7 @@ describe('configureOrgApp', () => {
 
   beforeAll(async () => {
     ping.mockResolvedValue('PONG');
+    dbQuery.mockResolvedValue([{ '?column?': 1 }]);
     app = await createApp(1);
   });
 
@@ -157,6 +170,28 @@ describe('configureOrgApp', () => {
 
     ping.mockResolvedValue('PONG');
     await request(app.getHttpServer()).get('/health/ready').expect(200);
+  });
+
+  it('answers /health/live without the database, /health/ready needs it', async () => {
+    dbQuery.mockClear();
+    dbQuery.mockRejectedValue(new Error('postgres down'));
+
+    await request(app.getHttpServer()).get('/health/live').expect(200);
+    expect(dbQuery).not.toHaveBeenCalled();
+    await request(app.getHttpServer()).get('/health/ready').expect(503);
+    expect(dbQuery).toHaveBeenCalledWith('SELECT 1');
+
+    dbQuery.mockResolvedValue([{ '?column?': 1 }]);
+    await request(app.getHttpServer()).get('/health/ready').expect(200);
+  });
+
+  it('answers /health/ready 503 when the database hangs past 2 s', async () => {
+    dbQuery.mockReturnValue(new Promise(() => {}));
+    try {
+      await request(app.getHttpServer()).get('/health/ready').expect(503);
+    } finally {
+      dbQuery.mockResolvedValue([{ '?column?': 1 }]);
+    }
   });
 
   it('does not treat /v1/orgsx, /v1/orgs-evil or any /v1/:x as org paths', async () => {

@@ -39,9 +39,32 @@ function quoteIdent(name: string): string {
 }
 
 /**
+ * Narrower app-login grants, applied after the default DML grant on every
+ * table. Later migrations append here; `privileges: null` means none.
+ */
+export const APP_GRANT_EXCEPTIONS: ReadonlyArray<{
+  table: string;
+  privileges: string | null;
+}> = [
+  { table: ORG_MIGRATIONS_TABLE, privileges: null },
+  // system roles are seeded by migrations; org roles are a later feature
+  { table: 'roles', privileges: 'SELECT' },
+  // append-only logs: only the personal-data columns may be cleared
+  {
+    table: 'activity_events',
+    privileges: 'SELECT, INSERT, DELETE, UPDATE (ip_encrypted, user_agent)',
+  },
+  {
+    table: 'user_security_events',
+    privileges: 'SELECT, INSERT, DELETE, UPDATE (ip_encrypted, user_agent)',
+  },
+  { table: 'processed_events', privileges: 'SELECT, INSERT, DELETE' },
+];
+
+/**
  * Runs pending org migrations under a session advisory lock (concurrent
- * runners wait, then find nothing pending), then grants the app login DML on
- * every table except the migrations table. Returns the names applied.
+ * runners wait, then find nothing pending), then grants the app login DML
+ * with {@link APP_GRANT_EXCEPTIONS}. Returns the names applied.
  */
 export async function runOrgMigrations(
   dataSource: DataSource,
@@ -52,6 +75,7 @@ export async function runOrgMigrations(
   try {
     await lock.query('SELECT pg_advisory_lock(hashtext($1))', [LOCK_KEY]);
     try {
+      await assertOwnsPublicSchema(dataSource);
       const applied = await dataSource.runMigrations();
       const app = quoteIdent(appUser);
       await dataSource.transaction(async (em) => {
@@ -64,9 +88,15 @@ export async function runOrgMigrations(
         await em.query(
           `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${app}`,
         );
-        await em.query(
-          `REVOKE ALL ON ${quoteIdent(ORG_MIGRATIONS_TABLE)} FROM ${app}`,
-        );
+        for (const { table, privileges } of APP_GRANT_EXCEPTIONS) {
+          // also drops column grants, so re-runs converge
+          await em.query(`REVOKE ALL ON ${quoteIdent(table)} FROM ${app}`);
+          if (privileges) {
+            await em.query(
+              `GRANT ${privileges} ON ${quoteIdent(table)} TO ${app}`,
+            );
+          }
+        }
       });
       return applied.map((m) => m.name);
     } finally {
@@ -74,6 +104,23 @@ export async function runOrgMigrations(
     }
   } finally {
     await lock.release();
+  }
+}
+
+/**
+ * The migration revokes CREATE on schema public from PUBLIC; for a non-owner
+ * that is a silent no-op and the app login could create objects. Fail first.
+ */
+async function assertOwnsPublicSchema(dataSource: DataSource): Promise<void> {
+  const [{ owns }]: Array<{ owns: boolean }> = await dataSource.query(
+    `SELECT pg_has_role(current_user, nspowner, 'USAGE') AS owns
+     FROM pg_namespace WHERE nspname = 'public'`,
+  );
+  if (!owns) {
+    throw new Error(
+      'org-migrate: the migrator login must own schema public ' +
+        '(once, as DB admin: ALTER SCHEMA public OWNER TO <migrator>)',
+    );
   }
 }
 

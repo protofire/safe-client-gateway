@@ -22,7 +22,11 @@ const encryptionKeys = z.string().superRefine((value, ctx) => {
     return;
   }
   const result = z
-    .object({ current: z.string(), keys: z.record(z.string(), keyBytes) })
+    // ids are written into the ciphertext blob, where ':' is the separator
+    .object({
+      current: z.string(),
+      keys: z.record(z.string().regex(/^[A-Za-z0-9_-]+$/), keyBytes),
+    })
     .safeParse(parsed);
   if (!result.success) {
     ctx.addIssue({

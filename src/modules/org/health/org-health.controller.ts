@@ -5,11 +5,14 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ApiExcludeController, ApiOkResponse } from '@nestjs/swagger';
+import { InjectDataSource } from '@nestjs/typeorm';
+import type { DataSource } from 'typeorm';
 import {
   CacheReadiness,
   ICacheReadiness,
 } from '@/domain/interfaces/cache-readiness.interface';
 import { ILoggingService, LoggingService } from '@/logging/logging.interface';
+import { ORG_DATA_SOURCE } from '@/modules/org/db/org-data-source';
 import {
   Health,
   HealthStatus,
@@ -17,8 +20,25 @@ import {
 
 const PING_TIMEOUT_MS = 2_000;
 
+async function withTimeout(check: () => Promise<unknown>): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      check(),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('timed out')),
+          PING_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
- * Redis-only health. Postgres/AMQP checks join when their modules land
+ * Readiness: Redis and the org Postgres. AMQP joins when its module lands
  * (HealthRepository cannot be reused: it requires the gateway's AMQP).
  */
 @Controller({ path: 'health' })
@@ -27,6 +47,7 @@ export class OrgHealthController {
   constructor(
     @Inject(CacheReadiness) private readonly cache: ICacheReadiness,
     @Inject(LoggingService) private readonly loggingService: ILoggingService,
+    @InjectDataSource(ORG_DATA_SOURCE) private readonly db: DataSource,
   ) {}
 
   @ApiOkResponse({ type: Health })
@@ -43,23 +64,15 @@ export class OrgHealthController {
   }
 
   private async check(): Promise<Health> {
-    let timer: NodeJS.Timeout | undefined;
-    try {
-      await Promise.race([
-        this.cache.ping(),
-        new Promise((_, reject) => {
-          timer = setTimeout(
-            () => reject(new Error('ping timed out')),
-            PING_TIMEOUT_MS,
-          );
-        }),
-      ]);
-      return new Health(HealthStatus.OK);
-    } catch {
-      this.loggingService.error('Cache service connection is not established');
-      throw new ServiceUnavailableException(new Health(HealthStatus.KO));
-    } finally {
-      clearTimeout(timer);
-    }
+    const results = await Promise.allSettled([
+      withTimeout(() => this.cache.ping()),
+      withTimeout(() => this.db.query('SELECT 1')),
+    ]);
+    const failed = ['cache', 'database'].filter(
+      (_, i) => results[i].status === 'rejected',
+    );
+    if (failed.length === 0) return new Health(HealthStatus.OK);
+    this.loggingService.error(`Org readiness failed: ${failed.join(', ')}`);
+    throw new ServiceUnavailableException(new Health(HealthStatus.KO));
   }
 }

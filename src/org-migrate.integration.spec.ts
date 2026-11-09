@@ -73,6 +73,58 @@ describe('org migrations entry (org-migrate)', () => {
     ).rejects.toThrow(/permission denied/);
   });
 
+  it('keeps roles read-only and activity payloads immutable for the app login', async () => {
+    const app = db.app();
+    open.push(app);
+    await app.initialize();
+    const [{ id: orgId }] = await app.query(
+      `INSERT INTO organizations (name, status) VALUES ('o', 'deleted') RETURNING id`,
+    );
+    await app.query(
+      `INSERT INTO activity_events (org_id, type, ip_encrypted) VALUES ($1, 't', 'x')`,
+      [orgId],
+    );
+
+    await expect(app.query(`UPDATE roles SET name = 'x'`)).rejects.toThrow(
+      /permission denied/,
+    );
+    await expect(app.query(`DELETE FROM roles`)).rejects.toThrow(
+      /permission denied/,
+    );
+    await expect(
+      app.query(`UPDATE activity_events SET payload = '{"forged":true}'`),
+    ).rejects.toThrow(/permission denied/);
+    await expect(
+      app.query(`UPDATE processed_events SET processed_at = now()`),
+    ).rejects.toThrow(/permission denied/);
+    // personal data may still be cleared
+    await expect(
+      app.query(
+        `UPDATE activity_events SET ip_encrypted = NULL, user_agent = NULL WHERE org_id = $1`,
+        [orgId],
+      ),
+    ).resolves.toBeDefined();
+  });
+
+  it('fails before migrating when the migrator does not own schema public', async () => {
+    const other = await createOrgTestDb({ ownsPublicSchema: false });
+    const ds = other.owner();
+    try {
+      await ds.initialize();
+
+      await expect(runOrgMigrations(ds, other.appUser)).rejects.toThrow(
+        /must own schema public/,
+      );
+      const [{ n }] = await ds.query(
+        `SELECT count(*)::int AS n FROM information_schema.tables WHERE table_schema = 'public'`,
+      );
+      expect(n).toBe(0);
+    } finally {
+      if (ds.isInitialized) await ds.destroy();
+      await other.drop();
+    }
+  });
+
   describe('runtime has no migrator credentials', () => {
     afterEach(() => {
       delete process.env.ORG_DB_MIGRATOR_USERNAME;

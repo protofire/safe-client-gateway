@@ -43,24 +43,12 @@ describe('org schema (through the app login)', () => {
     admins: number,
   ): Promise<{ orgId: string; memberIds: Array<string> }> {
     return app.transaction(async (em) => {
-      const [{ id: orgId }] = await em.query(
+      const [{ id: orgId }]: Array<{ id: string }> = await em.query(
         `INSERT INTO organizations (name) VALUES ('org') RETURNING id`,
       );
       const memberIds: Array<string> = [];
-      for (let i = 0; i < admins; i++) {
-        const [{ id: userId }] = await em.query(
-          `INSERT INTO users DEFAULT VALUES RETURNING id`,
-        );
-        const [{ id: memberId }]: Array<{ id: string }> = await em.query(
-          `INSERT INTO members (org_id, user_id, status) VALUES ($1, $2, 'active') RETURNING id`,
-          [orgId, userId],
-        );
-        await em.query(
-          `INSERT INTO role_bindings (member_id, role_id) VALUES ($1, $2)`,
-          [memberId, adminRoleId],
-        );
-        memberIds.push(memberId);
-      }
+      for (let i = 0; i < admins; i++)
+        memberIds.push(await addAdmin(em, orgId));
       return { orgId, memberIds };
     });
   }
@@ -75,16 +63,40 @@ describe('org schema (through the app login)', () => {
     return n;
   }
 
-  /** Resolves once backend `pid` waits on a lock; gives up after 2 s. */
+  /** Resolves once backend `pid` waits on a lock; throws after 2 s. */
   async function waitUntilLockWait(pid: number): Promise<void> {
     for (let i = 0; i < 40; i++) {
-      const [row] = await owner.query(
+      const [row] = await app.query(
         `SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1`,
         [pid],
       );
       if (row?.wait_event_type === 'Lock') return;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
+    throw new Error(`backend ${pid} never waited on a lock`);
+  }
+
+  async function addAdmin(
+    em: {
+      query: (
+        sql: string,
+        params?: Array<unknown>,
+      ) => Promise<Array<{ id: string }>>;
+    },
+    orgId: string,
+  ): Promise<string> {
+    const [{ id: userId }] = await em.query(
+      `INSERT INTO users DEFAULT VALUES RETURNING id`,
+    );
+    const [{ id: memberId }] = await em.query(
+      `INSERT INTO members (org_id, user_id, status) VALUES ($1, $2, 'active') RETURNING id`,
+      [orgId, userId],
+    );
+    await em.query(
+      `INSERT INTO role_bindings (member_id, role_id) VALUES ($1, $2)`,
+      [memberId, adminRoleId],
+    );
+    return memberId;
   }
 
   describe('members_keep_one_admin', () => {
@@ -133,6 +145,78 @@ describe('org schema (through the app login)', () => {
       await expect(
         app.query(`DELETE FROM members WHERE id = $1`, [memberIds[0]]),
       ).resolves.toBeDefined();
+    });
+
+    it('rejects creating an active org with no members', async () => {
+      await expect(
+        app.query(`INSERT INTO organizations (name) VALUES ('empty')`),
+      ).rejects.toThrow(LAST_ADMIN);
+    });
+
+    it('creates an org with its first admin in one transaction', async () => {
+      const orgId = await app.transaction(async (em) => {
+        const [{ id }]: Array<{ id: string }> = await em.query(
+          `INSERT INTO organizations (name) VALUES ('org') RETURNING id`,
+        );
+        await addAdmin(em, id);
+        return id;
+      });
+
+      expect(await adminCount(orgId)).toBe(1);
+    });
+
+    it('rejects restoring a deleted org that has no admin left', async () => {
+      const { orgId, memberIds } = await seedOrg(1);
+      await app.query(
+        `UPDATE organizations SET status = 'deleted' WHERE id = $1`,
+        [orgId],
+      );
+      await app.query(`DELETE FROM members WHERE id = $1`, [memberIds[0]]);
+
+      await expect(
+        app.query(`UPDATE organizations SET status = 'active' WHERE id = $1`, [
+          orgId,
+        ]),
+      ).rejects.toThrow(LAST_ADMIN);
+    });
+
+    it('counts only org-scoped admin bindings', async () => {
+      const { memberIds } = await seedOrg(1);
+
+      await expect(
+        app.query(
+          `UPDATE role_bindings SET scope = 'chain:1' WHERE member_id = $1`,
+          [memberIds[0]],
+        ),
+      ).rejects.toThrow(LAST_ADMIN);
+    });
+
+    it('commits two concurrent transactions that each add an admin to the same org', async () => {
+      const { orgId } = await seedOrg(1);
+      const [a, b] = [app.createQueryRunner(), app.createQueryRunner()];
+      try {
+        await a.startTransaction();
+        await b.startTransaction();
+        // both hold FK KEY SHARE locks on the org row before either check runs
+        await addAdmin(a, orgId);
+        await addAdmin(b, orgId);
+
+        const results = await Promise.allSettled([
+          a.commitTransaction(),
+          b.commitTransaction(),
+        ]);
+
+        expect(results).toEqual([
+          { status: 'fulfilled', value: undefined },
+          { status: 'fulfilled', value: undefined },
+        ]);
+        expect(await adminCount(orgId)).toBe(3);
+      } finally {
+        for (const qr of [a, b]) {
+          if (qr.isTransactionActive) await qr.rollbackTransaction();
+          await qr.release();
+        }
+      }
     });
 
     it('lets exactly one of two concurrent cross-demotions commit', async () => {
@@ -219,13 +303,21 @@ describe('org schema (through the app login)', () => {
       ).rejects.toThrow(/row-level security/);
     });
 
-    it('returns nothing without app.org_id, also on a connection that had one', async () => {
-      await expect(
-        tx.runInOrgTx((em) => em.query(`SELECT 1 FROM contacts`)),
-      ).resolves.toEqual([]);
-      await expect(
-        app.query(`SELECT 1 FROM contact_requests`),
-      ).resolves.toEqual([]);
+    it('returns nothing on a connection whose earlier transaction set app.org_id', async () => {
+      const qr = app.createQueryRunner();
+      try {
+        await qr.startTransaction();
+        await qr.query(`SELECT set_config('app.org_id', $1, true)`, [orgA]);
+        await qr.commitTransaction();
+
+        // the setting is now '' on this connection, not unset
+        await expect(qr.query(`SELECT 1 FROM contacts`)).resolves.toEqual([]);
+        await expect(
+          qr.query(`SELECT 1 FROM contact_requests`),
+        ).resolves.toEqual([]);
+      } finally {
+        await qr.release();
+      }
     });
   });
 
