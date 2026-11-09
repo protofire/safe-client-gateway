@@ -21,7 +21,7 @@ export class PermissionResolver {
 
   /**
    * Union of the permissions of the user's org-scoped roles, or null unless
-   * the user is an active member. Deleted orgs resolve too (see `orgStatus`).
+   * an active user is an active member. Deleted orgs resolve too (see `orgStatus`).
    */
   async effective(
     orgId: string,
@@ -35,6 +35,7 @@ export class PermissionResolver {
       `SELECT m.id AS member_id, o.status AS org_status, r.permissions
        FROM members m
        JOIN organizations o ON o.id = m.org_id
+       JOIN users u ON u.id = m.user_id AND u.status = 'active'
        LEFT JOIN role_bindings rb ON rb.member_id = m.id AND rb.scope = 'org'
        -- system roles, or custom roles of this org only
        LEFT JOIN roles r ON r.id = rb.role_id
