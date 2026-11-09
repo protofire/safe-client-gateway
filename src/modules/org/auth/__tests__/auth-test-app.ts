@@ -3,7 +3,7 @@ import { APP_FILTER } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import { getDataSourceToken, TypeOrmModule } from '@nestjs/typeorm';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { createClient } from 'redis';
 import request from 'supertest';
 import type { DataSource } from 'typeorm';
@@ -11,6 +11,7 @@ import type { PostgresConnectionOptions } from 'typeorm/driver/postgres/Postgres
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import { CacheModule } from '@/datasources/cache/cache.module';
 import { LoggingService } from '@/logging/logging.interface';
+import { OrgKeyPrefix } from '@/modules/org/auth/nonce.store';
 import { OrgAuthModule } from '@/modules/org/auth/org-auth.module';
 import { Clock } from '@/modules/org/common/clock';
 import { sha256Hex } from '@/modules/org/crypto/hashing';
@@ -33,6 +34,8 @@ export type AuthTestApp = {
   app: NestExpressApplication;
   sql: DataSource;
   redis: ReturnType<typeof createClient>;
+  /** Random per app; every org Redis key of this app starts with it. */
+  prefix: string;
   /** Shifts the injected Clock; reset in `reset()`. */
   setOffset(ms: number): void;
   http(): ReturnType<typeof request>;
@@ -108,9 +111,11 @@ export async function createAuthTestApp(args: {
   await runOrgMigrations(owner, db.appUser);
   await owner.destroy();
 
-  const redis = createClient({ url: `redis://127.0.0.1:6379/${args.redisDb}` });
+  const prefix = `org:test:${randomUUID()}:`;
+  const redis = createClient({
+    url: `redis://127.0.0.1:6379/${args.redisDb}`,
+  });
   await redis.connect();
-  await redis.flushDb();
 
   let offsetMs = 0;
   const clock = { now: (): Date => new Date(Date.now() + offsetMs) };
@@ -118,7 +123,7 @@ export async function createAuthTestApp(args: {
   const moduleRef = await Test.createTestingModule({
     imports: [
       TestProvidersModule,
-      CacheModule.register('org:'),
+      CacheModule.register(prefix),
       TypeOrmModule.forRoot({
         ...(db.app().options as PostgresConnectionOptions),
         name: ORG_DATA_SOURCE,
@@ -135,6 +140,8 @@ export async function createAuthTestApp(args: {
   })
     .overrideProvider(Clock)
     .useValue(clock)
+    .overrideProvider(OrgKeyPrefix)
+    .useValue(prefix)
     .compile();
   const app = moduleRef.createNestApplication<NestExpressApplication>();
   configureOrgApp(app);
@@ -148,6 +155,7 @@ export async function createAuthTestApp(args: {
     app,
     sql,
     redis,
+    prefix,
     setOffset: (ms): void => {
       offsetMs = ms;
     },
@@ -164,15 +172,28 @@ export async function createAuthTestApp(args: {
         .set('X-Forwarded-For', nextIp()),
     reset: async (): Promise<void> => {
       offsetMs = 0;
-      await redis.flushDb();
+      await clearPrefix(redis, prefix);
     },
     close: async (): Promise<void> => {
       await app.close();
-      await redis.flushDb();
+      await clearPrefix(redis, prefix);
       await redis.quit();
       await db.drop();
     },
   };
+}
+
+/** Deletes this test app's keys only (other lanes share the Redis server). */
+export async function clearPrefix(
+  redis: ReturnType<typeof createClient>,
+  prefix: string,
+): Promise<void> {
+  for await (const keys of redis.scanIterator({
+    MATCH: `${prefix}*`,
+    COUNT: 500,
+  })) {
+    if (keys.length > 0) await redis.del(keys);
+  }
 }
 
 /** `name=value` of a Set-Cookie header, for the Cookie request header. */

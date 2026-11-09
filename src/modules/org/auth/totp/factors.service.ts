@@ -87,12 +87,15 @@ export class FactorsService {
     return { secret, otpauthUri: totp.otpauthUri(secret, label) };
   }
 
-  /** Confirms the pending factor; the session becomes strong (A17). */
+  /**
+   * Confirms the pending factor; the session becomes strong (A17) under a new
+   * token, and the user's other sessions are revoked.
+   */
   async confirm(
     session: OrgSession,
     code: string,
     client: Client,
-  ): Promise<{ recoveryCodes: Array<string> }> {
+  ): Promise<{ recoveryCodes: Array<string>; token: string }> {
     const { userId } = session;
     const recoveryCodes = Array.from(
       { length: RECOVERY_CODES },
@@ -135,25 +138,32 @@ export class FactorsService {
            SELECT $1, unnest($2::text[])`,
           [userId, recoveryCodes.map(hashRecoveryCode)],
         );
+        // F3: a new factor ends every other session
+        await this.sessions.revokeOthers(userId, session.sessionId, now, em);
         return true;
       }),
     );
-    await this.sessions.markStrong(session.sessionId, 'totp', this.clock.now());
+    // F2: fresh possession of the new factor rotates the session token
+    const token = await this.sessions.elevate(
+      session.sessionId,
+      'totp',
+      this.clock.now(),
+    );
     await this.securityEvents.record(
       userId,
-      'totp_enrolled',
+      'security.totp_enrolled',
       {},
       client.ip,
       client.userAgent,
     );
-    return { recoveryCodes };
+    return { recoveryCodes, token };
   }
 
   async stepUp(
     session: OrgSession,
     proof: { code?: string; recoveryCode?: string },
     client: Client,
-  ): Promise<void> {
+  ): Promise<string> {
     const { userId } = session;
     const method = proof.code !== undefined ? 'totp' : 'recovery_code';
     await this.attempt(userId, () =>
@@ -161,27 +171,41 @@ export class FactorsService {
         ? this.useTotp(userId, proof.code)
         : this.useRecoveryCode(userId, proof.recoveryCode!),
     );
-    await this.sessions.markStrong(session.sessionId, method, this.clock.now());
+    const token = await this.sessions.elevate(
+      session.sessionId,
+      method,
+      this.clock.now(),
+    );
     await this.securityEvents.record(
       userId,
-      'step_up',
+      'security.step_up',
       { method },
       client.ip,
       client.userAgent,
     );
+    return token;
   }
 
-  /** Caller is behind `@RequireStrongAuth()`. Removes the factor and its recovery codes. */
+  /**
+   * Caller is behind `@RequireStrongAuth()`. Removes the factor and its
+   * recovery codes and revokes the user's other sessions.
+   */
   async remove(session: OrgSession, client: Client): Promise<void> {
     const { userId } = session;
     await this.db.transaction(async (em) => {
       await this.lockUser(em, userId);
       await em.query(`DELETE FROM factors WHERE user_id = $1`, [userId]);
       await em.query(`DELETE FROM recovery_codes WHERE user_id = $1`, [userId]);
+      await this.sessions.revokeOthers(
+        userId,
+        session.sessionId,
+        this.clock.now(),
+        em,
+      );
     });
     await this.securityEvents.record(
       userId,
-      'totp_removed',
+      'security.totp_removed',
       {},
       client.ip,
       client.userAgent,
@@ -252,11 +276,11 @@ export class FactorsService {
     try {
       ok = await verify();
     } catch (error) {
-      await this.rateLimiter.refund(key, FAILURE_WINDOW_SECONDS);
+      await this.rateLimiter.refund(key);
       throw error;
     }
     if (!ok) throw new UnauthorizedException('Invalid code');
-    await this.rateLimiter.refund(key, FAILURE_WINDOW_SECONDS);
+    await this.rateLimiter.refund(key);
   }
 
   /** Serialises enrol/confirm/remove per user (one confirmed TOTP at most). */

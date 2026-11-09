@@ -2,7 +2,9 @@ import { Global, Module } from '@nestjs/common';
 import { AuthService } from '@/modules/org/auth/auth.service';
 import {
   NonceStore,
+  ORG_KEY_PREFIX,
   ORG_REDIS,
+  OrgKeyPrefix,
   orgRedisProvider,
 } from '@/modules/org/auth/nonce.store';
 import { SecurityEvents } from '@/modules/org/auth/security-events';
@@ -28,6 +30,7 @@ import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.se
     AuthService,
     FieldEncryptionService,
     NonceStore,
+    { provide: OrgKeyPrefix, useValue: ORG_KEY_PREFIX },
     orgRedisProvider,
     RateLimiter,
     SecurityEvents,
@@ -39,6 +42,7 @@ import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.se
     Clock,
     FieldEncryptionService,
     ORG_REDIS,
+    OrgKeyPrefix,
     RateLimiter,
     SecurityEvents,
     SessionsRepository,

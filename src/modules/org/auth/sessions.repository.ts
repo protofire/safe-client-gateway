@@ -1,6 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
-import type { DataSource } from 'typeorm';
+import type { DataSource, EntityManager } from 'typeorm';
 import { ORG_DATA_SOURCE } from '@/modules/org/db/org-data-source';
 import { generateToken, sha256Hex } from '@/modules/org/crypto/hashing';
 
@@ -76,13 +76,38 @@ export class SessionsRepository {
     );
   }
 
-  async markStrong(id: string, method: string, now: Date): Promise<void> {
-    await this.db.query(
+  /**
+   * Marks the session strong and rotates its token in the same row, so a
+   * copy of the pre-step-up cookie stops working. Returns the new token; 401
+   * if the session was revoked meanwhile.
+   */
+  async elevate(id: string, method: string, now: Date): Promise<string> {
+    const token = generateToken();
+    const [, updated] = await this.db.query(
       `UPDATE sessions
-       SET last_strong_auth_at = $3, updated_at = $3,
+       SET last_strong_auth_at = $3, updated_at = $3, token_hash = $4,
          amr = CASE WHEN $2 = ANY(amr) THEN amr ELSE array_append(amr, $2) END
-       WHERE id = $1`,
-      [id, method, now],
+       WHERE id = $1 AND revoked_at IS NULL`,
+      [id, method, now, sha256Hex(token)],
+    );
+    if (updated !== 1) throw new UnauthorizedException();
+    return token;
+  }
+
+  /**
+   * After a factor change: every session of the user except `keepId`. Pass
+   * the factor change's transaction so both commit together.
+   */
+  async revokeOthers(
+    userId: string,
+    keepId: string,
+    now: Date,
+    em: Pick<EntityManager, 'query'> = this.db,
+  ): Promise<void> {
+    await em.query(
+      `UPDATE sessions SET revoked_at = $3, updated_at = $3
+       WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL`,
+      [userId, keepId, now],
     );
   }
 

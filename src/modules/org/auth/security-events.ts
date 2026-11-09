@@ -6,10 +6,10 @@ import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.se
 import { ORG_DATA_SOURCE } from '@/modules/org/db/org-data-source';
 
 export type SecurityEventType =
-  | 'signed_in'
-  | 'step_up'
-  | 'totp_enrolled'
-  | 'totp_removed';
+  | 'security.signed_in'
+  | 'security.step_up'
+  | 'security.totp_enrolled'
+  | 'security.totp_removed';
 
 /**
  * User-scoped security events (`user_security_events`, amendment A3); the IP

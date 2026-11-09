@@ -12,13 +12,27 @@ import {
   type ServerResponse,
 } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { exportJWK, generateKeyPair, SignJWT, type JWTPayload } from 'jose';
+import {
+  exportJWK,
+  generateKeyPair,
+  SignJWT,
+  UnsecuredJWT,
+  type JWTPayload,
+} from 'jose';
+
+/** How the next ID tokens are signed; anything but `jwks` must be rejected by the client. */
+export type MockSigning =
+  | 'jwks'
+  | 'foreign-key'
+  | 'none'
+  | 'HS256-client-secret';
 
 export type OidcMock = {
   /** With trailing slash, as Auth0 issues it. */
   issuer: string;
   /** Claims merged over the defaults of every ID token issued from now on. */
   setClaims(claims: JWTPayload): void;
+  setSigning(signing: MockSigning): void;
   close(): Promise<void>;
 };
 
@@ -40,6 +54,8 @@ export async function startOidcMock(opts: {
 }): Promise<OidcMock> {
   const host = opts.host ?? '127.0.0.1';
   const { privateKey, publicKey } = await generateKeyPair('ES256');
+  // same kid as the published key, never published itself
+  const foreign = await generateKeyPair('ES256');
   const jwk = {
     ...(await exportJWK(publicKey)),
     kid: KID,
@@ -48,7 +64,20 @@ export async function startOidcMock(opts: {
   };
   const grants = new Map<string, Grant>();
   let overrides: JWTPayload = {};
+  let signing: MockSigning = 'jwks';
   let issuer = '';
+
+  async function signIdToken(claims: JWTPayload): Promise<string> {
+    if (signing === 'none') return new UnsecuredJWT(claims).encode();
+    if (signing === 'HS256-client-secret') {
+      return new SignJWT(claims)
+        .setProtectedHeader({ alg: 'HS256', kid: KID, typ: 'JWT' })
+        .sign(new TextEncoder().encode(opts.clientSecret));
+    }
+    return new SignJWT(claims)
+      .setProtectedHeader({ alg: 'ES256', kid: KID, typ: 'JWT' })
+      .sign(signing === 'foreign-key' ? foreign.privateKey : privateKey);
+  }
 
   async function handle(
     req: IncomingMessage,
@@ -108,7 +137,7 @@ export async function startOidcMock(opts: {
         .update(grant.email)
         .digest('hex')
         .slice(0, 24);
-      const idToken = await new SignJWT({
+      const claims: JWTPayload = {
         iss: issuer,
         aud: opts.clientId,
         sub: `${grant.connection}|${subject}`,
@@ -118,9 +147,8 @@ export async function startOidcMock(opts: {
         exp: now + 600,
         ...(grant.nonce ? { nonce: grant.nonce } : {}),
         ...overrides,
-      })
-        .setProtectedHeader({ alg: 'ES256', kid: KID, typ: 'JWT' })
-        .sign(privateKey);
+      };
+      const idToken = await signIdToken(claims);
       return json(res, 200, {
         access_token: randomBytes(16).toString('base64url'),
         id_token: idToken,
@@ -144,6 +172,9 @@ export async function startOidcMock(opts: {
     issuer,
     setClaims: (claims): void => {
       overrides = claims;
+    },
+    setSigning: (value): void => {
+      signing = value;
     },
     close: () =>
       new Promise<void>((resolve, reject) => {

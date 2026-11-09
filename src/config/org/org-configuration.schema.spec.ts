@@ -78,6 +78,40 @@ describe('OrgConfigurationSchema', () => {
     expect(result.success).toBe(false);
   });
 
+  it.each(['ORG_OIDC_ISSUER', 'ORG_OIDC_REDIRECT_URI'])(
+    'rejects a plain-http %s for a non-local host (F1)',
+    (name) => {
+      for (const value of [
+        'http://idp.example.com/',
+        'http://10.0.0.5:4010/',
+        'ftp://idp.example.com/',
+      ]) {
+        const result = OrgConfigurationSchema.safeParse({
+          ...validEnv(),
+          [name]: value,
+        });
+        expect(result.success).toBe(false);
+      }
+    },
+  );
+
+  it.each(['ORG_OIDC_ISSUER', 'ORG_OIDC_REDIRECT_URI'])(
+    'accepts http %s on localhost, 127.0.0.1 and [::1] (dev mock)',
+    (name) => {
+      for (const value of [
+        'http://localhost:4010/',
+        'http://127.0.0.1:4010/',
+        'http://[::1]:4010/',
+      ]) {
+        const result = OrgConfigurationSchema.safeParse({
+          ...validEnv(),
+          [name]: value,
+        });
+        expect(result.success).toBe(true);
+      }
+    },
+  );
+
   it('rejects an email hash key that is not 32 bytes', () => {
     const result = OrgConfigurationSchema.safeParse({
       ...validEnv(),

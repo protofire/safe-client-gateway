@@ -4,7 +4,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import { getDataSourceToken, TypeOrmModule } from '@nestjs/typeorm';
 import { createClient } from 'redis';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import request from 'supertest';
 import type { DataSource } from 'typeorm';
 import type { PostgresConnectionOptions } from 'typeorm/driver/postgres/PostgresConnectionOptions';
@@ -15,7 +15,9 @@ import { IConfigurationService } from '@/config/configuration.service.interface'
 import { CacheModule } from '@/datasources/cache/cache.module';
 import { LoggingService } from '@/logging/logging.interface';
 import { RequireStrongAuth } from '@/modules/org/auth/decorators';
+import { OrgKeyPrefix } from '@/modules/org/auth/nonce.store';
 import { OrgAuthModule } from '@/modules/org/auth/org-auth.module';
+import { clearPrefix } from '@/modules/org/auth/__tests__/auth-test-app';
 import { Clock } from '@/modules/org/common/clock';
 import { sha256Hex } from '@/modules/org/crypto/hashing';
 import {
@@ -100,6 +102,8 @@ describe('SIWE auth (org)', () => {
   let redis: ReturnType<typeof createClient>;
   let offsetMs = 0;
   let ipSeq = 0;
+  // own key space: other suites and lanes share the Redis server
+  const prefix = `org:test:${randomUUID()}:`;
   const clock = { now: (): Date => new Date(Date.now() + offsetMs) };
 
   beforeAll(async () => {
@@ -115,7 +119,7 @@ describe('SIWE auth (org)', () => {
     const moduleRef = await Test.createTestingModule({
       imports: [
         TestProvidersModule,
-        CacheModule.register('org:'),
+        CacheModule.register(prefix),
         TypeOrmModule.forRoot({
           ...(db.app().options as PostgresConnectionOptions),
           name: ORG_DATA_SOURCE,
@@ -132,6 +136,8 @@ describe('SIWE auth (org)', () => {
     })
       .overrideProvider(Clock)
       .useValue(clock)
+      .overrideProvider(OrgKeyPrefix)
+      .useValue(prefix)
       .compile();
     app = moduleRef.createNestApplication<NestExpressApplication>();
     configureOrgApp(app);
@@ -143,14 +149,14 @@ describe('SIWE auth (org)', () => {
 
   afterAll(async () => {
     await app?.close();
-    await redis?.flushDb();
+    if (redis) await clearPrefix(redis, prefix);
     await redis?.quit();
     await db?.drop();
   });
 
   beforeEach(async () => {
     offsetMs = 0;
-    await redis.flushDb();
+    await clearPrefix(redis, prefix);
   });
 
   // A fresh client IP per request unless pinned, so the per-IP limit stays out of the way
@@ -336,11 +342,46 @@ describe('SIWE auth (org)', () => {
       methods: ['siwe'],
     });
 
-    await post('/v1/orgs/auth/step-up/siwe')
+    const stepUp = await post('/v1/orgs/auth/step-up/siwe')
       .set('Cookie', cookie)
       .send(await signed(pk))
       .expect(200);
-    await http().get('/v1/orgs/strong-test').set('Cookie', cookie).expect(200);
+    await http()
+      .get('/v1/orgs/strong-test')
+      .set('Cookie', sessionCookie(stepUp))
+      .expect(200);
+  });
+
+  it('rotates the session token on step-up: a copied pre-step-up cookie cannot pass a strong-auth route (F2)', async () => {
+    const pk = generatePrivateKey();
+    const original = await signIn(pk);
+    const copy = original;
+    offsetMs = 31 * MINUTE;
+
+    const res = await post('/v1/orgs/auth/step-up/siwe')
+      .set('Cookie', original)
+      .send(await signed(pk))
+      .expect(200);
+    const rotated = sessionCookie(res);
+    expect(rotated).not.toBe(original);
+
+    await http().get('/v1/orgs/strong-test').set('Cookie', rotated).expect(200);
+    const denied = await http().get('/v1/orgs/strong-test').set('Cookie', copy);
+    expect([401, 403]).toContain(denied.status);
+    await http().get('/v1/orgs/auth/me').set('Cookie', copy).expect(401);
+  });
+
+  it('records a security.signed_in event on SIWE sign-in (F5)', async () => {
+    const res = await post('/v1/orgs/auth/siwe')
+      .send(await signed(generatePrivateKey()))
+      .expect(200);
+    const events = await sql.query(
+      `SELECT type, payload FROM user_security_events WHERE user_id = $1`,
+      [res.body.user.id],
+    );
+    expect(events).toEqual([
+      { type: 'security.signed_in', payload: { method: 'siwe' } },
+    ]);
   });
 
   it('rejects step-up/siwe with a wallet that does not belong to the session user with 401', async () => {
@@ -478,7 +519,7 @@ describe('SIWE auth (org)', () => {
   it('stores the nonce as one expiring key and leaves nothing behind after use', async () => {
     const body = await signed(generatePrivateKey());
     const nonceValue = /Nonce: (\w+)/.exec(body.message)![1];
-    const key = `org:auth:nonce:${nonceValue}`;
+    const key = `${prefix}auth:nonce:${nonceValue}`;
     expect(await redis.type(key)).toBe('string');
     const ttl = await redis.ttl(key);
     expect(ttl).toBeGreaterThan(0);
@@ -486,8 +527,8 @@ describe('SIWE auth (org)', () => {
 
     await post('/v1/orgs/auth/siwe').send(body).expect(200);
     // no nonce key and no cache invalidation marker left behind
-    expect(await redis.keys('org:auth:nonce:*')).toEqual([]);
-    expect(await redis.keys('*invalidationTimeMs*')).toEqual([]);
+    expect(await redis.keys(`${prefix}auth:nonce:*`)).toEqual([]);
+    expect(await redis.keys(`${prefix}*invalidationTimeMs*`)).toEqual([]);
   });
 
   it('answers 503 on the nonce endpoint when the nonce cannot be stored', async () => {

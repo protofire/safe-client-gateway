@@ -43,6 +43,7 @@ describe('OIDC sign-in (org)', () => {
 
   beforeEach(async () => {
     mock.setClaims({});
+    mock.setSigning('jwks');
     await t.reset();
   });
 
@@ -164,7 +165,10 @@ describe('OIDC sign-in (org)', () => {
       `SELECT type, payload FROM user_security_events WHERE user_id = $1`,
       [me.body.user.id],
     );
-    expect(event).toEqual({ type: 'signed_in', payload: { method: 'oidc' } });
+    expect(event).toEqual({
+      type: 'security.signed_in',
+      payload: { method: 'oidc' },
+    });
   });
 
   it('signs the same identity into the same user and never links another identity by email', async () => {
@@ -226,6 +230,17 @@ describe('OIDC sign-in (org)', () => {
     mock.setClaims(claims);
     await callback(...withCookie(await start())).expect(401);
   });
+
+  it.each(['foreign-key', 'none', 'HS256-client-secret'] as const)(
+    'rejects an ID token signed with %s (F9)',
+    async (signing) => {
+      mock.setSigning(signing);
+      const res = await callback(...withCookie(await start())).expect(401);
+      expect([res.headers['set-cookie']].flat().join()).not.toMatch(
+        /org_session=[^;]/,
+      );
+    },
+  );
 
   it('rejects an ID token that expired by the injected clock', async () => {
     const s = await start();

@@ -7,7 +7,9 @@ import { ILoggingService, LoggingService } from '@/logging/logging.interface';
 export const ORG_REDIS = 'OrgRedisClient';
 export type OrgRedisClient = ReturnType<typeof createClient>;
 
-const KEY_PREFIX = 'org:auth:nonce:';
+/** Prefix of every org Redis key (also given to CacheModule.register); tests use a random one. */
+export const OrgKeyPrefix = Symbol('OrgKeyPrefix');
+export const ORG_KEY_PREFIX = 'org:';
 
 /**
  * Org-owned Redis connection (same redis.* config as CacheModule): the
@@ -56,15 +58,25 @@ export const orgRedisProvider = {
 /** Single-use SIWE nonces. Redis errors propagate to the caller. */
 @Injectable()
 export class NonceStore implements OnModuleDestroy {
-  constructor(@Inject(ORG_REDIS) private readonly redis: OrgRedisClient) {}
+  private readonly keyPrefix: string;
+
+  constructor(
+    @Inject(ORG_REDIS) private readonly redis: OrgRedisClient,
+    @Inject(OrgKeyPrefix) prefix: string,
+  ) {
+    this.keyPrefix = `${prefix}auth:nonce:`;
+  }
 
   async issue(nonce: string, ttlSeconds: number): Promise<void> {
-    await this.redis.set(KEY_PREFIX + nonce, '1', { EX: ttlSeconds, NX: true });
+    await this.redis.set(this.keyPrefix + nonce, '1', {
+      EX: ttlSeconds,
+      NX: true,
+    });
   }
 
   /** True for exactly one caller per issued nonce. */
   async consume(nonce: string): Promise<boolean> {
-    return (await this.redis.getDel(KEY_PREFIX + nonce)) !== null;
+    return (await this.redis.getDel(this.keyPrefix + nonce)) !== null;
   }
 
   async onModuleDestroy(): Promise<void> {

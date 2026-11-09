@@ -7,10 +7,7 @@ import {
   OIDC_TX_TTL_SECONDS,
   OidcService,
 } from '@/modules/org/auth/oidc/oidc.service';
-import {
-  SESSION_COOKIE,
-  SESSION_COOKIE_OPTIONS,
-} from '@/modules/org/auth/session.guard';
+import { setSessionCookie } from '@/modules/org/auth/session.guard';
 import { ValidationPipe } from '@/validation/pipes/validation.pipe';
 
 export const OIDC_TX_COOKIE = 'org_oidc_tx';
@@ -67,10 +64,7 @@ export class OidcController {
       ip: clientIp(req),
       userAgent: req.header('user-agent') ?? null,
     });
-    res.cookie(SESSION_COOKIE, token, {
-      ...SESSION_COOKIE_OPTIONS,
-      maxAge: this.oidc.sessionMaxAgeSeconds * 1000,
-    });
+    setSessionCookie(res, token, this.oidc.sessionMaxAgeSeconds);
     res.redirect(302, redirectUrl);
   }
 }

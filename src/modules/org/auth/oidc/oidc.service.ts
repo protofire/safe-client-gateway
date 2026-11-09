@@ -9,7 +9,11 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { DataSource } from 'typeorm';
 import { IConfigurationService } from '@/config/configuration.service.interface';
-import { ORG_REDIS, type OrgRedisClient } from '@/modules/org/auth/nonce.store';
+import {
+  ORG_REDIS,
+  OrgKeyPrefix,
+  type OrgRedisClient,
+} from '@/modules/org/auth/nonce.store';
 import {
   OidcClient,
   type OidcConnection,
@@ -17,7 +21,7 @@ import {
 import { SecurityEvents } from '@/modules/org/auth/security-events';
 import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
 import { Clock, type IClock } from '@/modules/org/common/clock';
-import { RateLimiter } from '@/modules/org/common/rate-limiter';
+import { ipBucket, RateLimiter } from '@/modules/org/common/rate-limiter';
 import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
 import {
   generateToken,
@@ -28,7 +32,6 @@ import { ORG_DATA_SOURCE } from '@/modules/org/db/org-data-source';
 
 export const OIDC_TX_TTL_SECONDS = 600;
 export const DEFAULT_RETURN_TO = '/organizations';
-const STATE_PREFIX = 'org:auth:oidc:state:';
 const AUTHORIZE_PER_IP = 30;
 const CALLBACK_PER_IP = 10;
 const WINDOW_SECONDS = 60;
@@ -61,10 +64,12 @@ export class OidcService {
   private readonly emailHashKey: Buffer;
   private readonly idleTtlSeconds: number;
   private readonly absoluteTtlSeconds: number;
+  private readonly statePrefix: string;
 
   constructor(
     @InjectDataSource(ORG_DATA_SOURCE) private readonly db: DataSource,
     @Inject(ORG_REDIS) private readonly redis: OrgRedisClient,
+    @Inject(OrgKeyPrefix) keyPrefix: string,
     @Inject(Clock) private readonly clock: IClock,
     @Inject(IConfigurationService) config: IConfigurationService,
     private readonly client: OidcClient,
@@ -73,6 +78,7 @@ export class OidcService {
     private readonly encryption: FieldEncryptionService,
     private readonly securityEvents: SecurityEvents,
   ) {
+    this.statePrefix = `${keyPrefix}auth:oidc:state:`;
     this.postLoginRedirect = config.getOrThrow<string>(
       'org.oidc.postLoginRedirect',
     );
@@ -98,7 +104,10 @@ export class OidcService {
     returnTo: unknown;
     ip: string;
   }): Promise<{ redirectUrl: string; tx: string }> {
-    await this.limit(`oidc:authorize:ip:${args.ip}`, AUTHORIZE_PER_IP);
+    await this.limit(
+      `oidc:authorize:ip:${ipBucket(args.ip)}`,
+      AUTHORIZE_PER_IP,
+    );
     const state = generateToken();
     const nonce = generateToken();
     const verifier = generateToken();
@@ -109,7 +118,7 @@ export class OidcService {
       txHash: sha256Hex(tx),
       returnTo: safeReturnTo(args.returnTo),
     };
-    await this.redis.set(STATE_PREFIX + state, JSON.stringify(record), {
+    await this.redis.set(this.statePrefix + state, JSON.stringify(record), {
       EX: OIDC_TX_TTL_SECONDS,
       NX: true,
     });
@@ -133,9 +142,9 @@ export class OidcService {
     ip: string;
     userAgent: string | null;
   }): Promise<{ token: string; redirectUrl: string }> {
-    await this.limit(`oidc:callback:ip:${args.ip}`, CALLBACK_PER_IP);
+    await this.limit(`oidc:callback:ip:${ipBucket(args.ip)}`, CALLBACK_PER_IP);
     if (typeof args.state !== 'string' || args.state === '') throw failed();
-    const raw = await this.redis.getDel(STATE_PREFIX + args.state);
+    const raw = await this.redis.getDel(this.statePrefix + args.state);
     if (raw === null) throw failed();
     const record = JSON.parse(raw) as OidcTx;
     if (
@@ -177,7 +186,7 @@ export class OidcService {
     });
     await this.securityEvents.record(
       userId,
-      'signed_in',
+      'security.signed_in',
       { method: 'oidc' },
       args.ip,
       args.userAgent,

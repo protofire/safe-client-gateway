@@ -18,6 +18,7 @@ import { CircuitBreakerModule } from '@/datasources/circuit-breaker/circuit-brea
 import { NetworkModule } from '@/datasources/network/network.module';
 import { RequestScopedLoggingModule } from '@/logging/logging.module';
 import { CsrfGuard } from '@/modules/org/auth/csrf.guard';
+import { ORG_KEY_PREFIX } from '@/modules/org/auth/nonce.store';
 import { OrgAuthModule } from '@/modules/org/auth/org-auth.module';
 import { OrgOidcModule } from '@/modules/org/auth/oidc/oidc.module';
 import { OrgTotpModule } from '@/modules/org/auth/totp/totp.module';
@@ -29,7 +30,7 @@ import { PermissionsModule } from '@/modules/org/permissions/permissions.module'
 import { GlobalErrorFilter } from '@/routes/common/filters/global-error.filter';
 import { ZodErrorFilter } from '@/routes/common/filters/zod-error.filter';
 
-export const ORG_CACHE_KEY_PREFIX = 'org:';
+export const ORG_CACHE_KEY_PREFIX = ORG_KEY_PREFIX;
 
 /**
  * The single source of global guard order: Nest runs APP_GUARDs in

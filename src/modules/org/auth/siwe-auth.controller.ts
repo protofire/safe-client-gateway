@@ -14,6 +14,7 @@ import { OrgSession, Public } from '@/modules/org/auth/decorators';
 import {
   SESSION_COOKIE,
   SESSION_COOKIE_OPTIONS,
+  setSessionCookie,
 } from '@/modules/org/auth/session.guard';
 import { ValidationPipe } from '@/validation/pipes/validation.pipe';
 
@@ -46,10 +47,7 @@ export class SiweAuthController {
       ip: clientIp(req),
       userAgent: req.header('user-agent') ?? null,
     });
-    res.cookie(SESSION_COOKIE, token, {
-      ...SESSION_COOKIE_OPTIONS,
-      maxAge: this.auth.sessionMaxAgeSeconds * 1000,
-    });
+    setSessionCookie(res, token, this.auth.sessionMaxAgeSeconds);
     return { user: { id: userId } };
   }
 
@@ -59,8 +57,13 @@ export class SiweAuthController {
     @OrgSession() session: OrgSession,
     @Body(new ValidationPipe(SiweBodySchema)) body: SiweBody,
     @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
   ): Promise<{ ok: true }> {
-    await this.auth.stepUpWithSiwe(session, { ...body, ip: clientIp(req) });
+    const token = await this.auth.stepUpWithSiwe(session, {
+      ...body,
+      ip: clientIp(req),
+    });
+    setSessionCookie(res, token, this.auth.sessionMaxAgeSeconds);
     return { ok: true };
   }
 

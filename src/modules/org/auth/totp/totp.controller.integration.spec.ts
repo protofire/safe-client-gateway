@@ -1,6 +1,9 @@
-import { createHmac } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
+import type request from 'supertest';
+import type { DataSource } from 'typeorm';
 import { OrgTotpModule } from '@/modules/org/auth/totp/totp.module';
 import {
+  cookieFrom,
   createAuthTestApp,
   MINUTE,
   seedUser,
@@ -23,6 +26,24 @@ function totpCode(secretBase32: string, at: Date): string {
     6,
     '0',
   );
+}
+
+type Enrolled = {
+  userId: string;
+  cookie: string;
+  secret: string;
+  recoveryCodes: Array<string>;
+};
+
+/** Another active session of the same user, as from a second device. */
+async function addSession(sql: DataSource, userId: string): Promise<string> {
+  const token = randomBytes(32).toString('base64url');
+  await sql.query(
+    `INSERT INTO sessions (user_id, token_hash, amr, expires_at, idle_expires_at)
+     VALUES ($1, $2, '{oidc}', now() + interval '1 day', now() + interval '1 day')`,
+    [userId, sha256Hex(token)],
+  );
+  return `org_session=${token}`;
 }
 
 describe('TOTP factors (org)', () => {
@@ -48,12 +69,7 @@ describe('TOTP factors (org)', () => {
   });
 
   /** Email-only user with confirmed TOTP; the session is strong right after confirm. */
-  async function enrolled(): Promise<{
-    userId: string;
-    cookie: string;
-    secret: string;
-    recoveryCodes: Array<string>;
-  }> {
+  async function enrolled(): Promise<Enrolled> {
     const user = await seedUser(t.sql);
     const { body } = await t
       .post('/v1/orgs/auth/totp/enroll')
@@ -64,8 +80,10 @@ describe('TOTP factors (org)', () => {
       .set('Cookie', user.cookie)
       .send({ code: totpCode(body.secret as string, at()) })
       .expect(200);
+    // confirm rotates the session token (F2)
     return {
       ...user,
+      cookie: cookieFrom(confirm, 'org_session'),
       secret: body.secret,
       recoveryCodes: confirm.body.recoveryCodes,
     };
@@ -92,12 +110,12 @@ describe('TOTP factors (org)', () => {
     expect(res.body.otpauthUri).toContain(`secret=${res.body.secret}`);
     expect((await me(user.cookie)).hasTotp).toBe(false);
 
-    await t
+    const confirm = await t
       .post('/v1/orgs/auth/totp/confirm')
       .set('Cookie', user.cookie)
       .send({ code: totpCode(res.body.secret as string, at()) })
       .expect(200);
-    const after = await me(user.cookie);
+    const after = await me(cookieFrom(confirm, 'org_session'));
     expect(after.hasTotp).toBe(true);
     expect(after.lastStrongAuthAt).not.toBeNull();
     const [session] = await t.sql.query(
@@ -173,23 +191,25 @@ describe('TOTP factors (org)', () => {
   it('accepts a recovery code once: two parallel uses give one 200 and one 401', async () => {
     const user = await enrolled();
     shift(31 * MINUTE);
-    const use = (): Promise<{ status: number }> =>
+    const use = (cookie = user.cookie): request.Test =>
       t
         .post('/v1/orgs/auth/step-up/totp')
-        .set('Cookie', user.cookie)
+        .set('Cookie', cookie)
         .send({ recoveryCode: user.recoveryCodes[3] });
-    const statuses = (await Promise.all([use(), use()]))
-      .map((r) => r.status)
-      .sort();
-    expect(statuses).toEqual([200, 401]);
-    await use().then((r) => expect(r.status).toBe(401));
+    const results = await Promise.all([use(), use()]);
+    expect(results.map((r) => r.status).sort()).toEqual([200, 401]);
+    const rotated = cookieFrom(
+      results.find((r) => r.status === 200)!,
+      'org_session',
+    );
+    await use(rotated).expect(401);
 
     const [row] = await t.sql.query(
       `SELECT used_at FROM recovery_codes WHERE user_id = $1 AND code_hash = $2`,
       [user.userId, sha256Hex(user.recoveryCodes[3].replace(/-/g, ''))],
     );
     expect(row.used_at).not.toBeNull();
-    expect((await me(user.cookie)).lastStrongAuthAt).not.toBeNull();
+    expect((await me(rotated)).lastStrongAuthAt).not.toBeNull();
   });
 
   it('accepts the same TOTP step once: two parallel step-ups give one 200 and one 401', async () => {
@@ -234,13 +254,15 @@ describe('TOTP factors (org)', () => {
 
   it('does not count successful verifications toward the lock', async () => {
     const user = await enrolled();
+    let cookie = user.cookie;
     for (let i = 1; i <= 6; i++) {
       shift(i * MINUTE);
-      await t
+      const res = await t
         .post('/v1/orgs/auth/step-up/totp')
-        .set('Cookie', user.cookie)
+        .set('Cookie', cookie)
         .send({ code: totpCode(user.secret, at()) })
         .expect(200);
+      cookie = cookieFrom(res, 'org_session');
     }
   });
 
@@ -270,14 +292,15 @@ describe('TOTP factors (org)', () => {
       methods: ['totp'],
     });
 
-    await t
+    const stepUp = await t
       .post('/v1/orgs/auth/step-up/totp')
       .set('Cookie', user.cookie)
       .send({ code: totpCode(user.secret, at()) })
       .expect(200);
-    await t.del('/v1/orgs/auth/totp').set('Cookie', user.cookie).expect(204);
+    const cookie = cookieFrom(stepUp, 'org_session');
+    await t.del('/v1/orgs/auth/totp').set('Cookie', cookie).expect(204);
 
-    expect((await me(user.cookie)).hasTotp).toBe(false);
+    expect((await me(cookie)).hasTotp).toBe(false);
     const [{ n }] = await t.sql.query(
       `SELECT count(*)::int AS n FROM recovery_codes WHERE user_id = $1`,
       [user.userId],
@@ -288,9 +311,73 @@ describe('TOTP factors (org)', () => {
       [user.userId],
     );
     expect(events).toEqual([
-      { type: 'totp_enrolled', payload: {} },
-      { type: 'step_up', payload: { method: 'totp' } },
-      { type: 'totp_removed', payload: {} },
+      { type: 'security.totp_enrolled', payload: {} },
+      { type: 'security.step_up', payload: { method: 'totp' } },
+      { type: 'security.totp_removed', payload: {} },
     ]);
+  });
+
+  it.each([
+    ['code', (u: Enrolled): object => ({ code: totpCode(u.secret, at()) })],
+    [
+      'recovery code',
+      (u: Enrolled): object => ({ recoveryCode: u.recoveryCodes[0] }),
+    ],
+  ])(
+    'rotates the session on step-up with a %s: a copied pre-step-up cookie cannot pass a strong-auth route (F2)',
+    async (_, proof) => {
+      const user = await enrolled();
+      const copy = user.cookie;
+      shift(31 * MINUTE);
+      const res = await t
+        .post('/v1/orgs/auth/step-up/totp')
+        .set('Cookie', user.cookie)
+        .send(proof(user))
+        .expect(200);
+      expect(cookieFrom(res, 'org_session')).not.toBe(copy);
+
+      const denied = await t.del('/v1/orgs/auth/totp').set('Cookie', copy);
+      expect([401, 403]).toContain(denied.status);
+      expect((await me(cookieFrom(res, 'org_session'))).hasTotp).toBe(true);
+    },
+  );
+
+  it('rotates the session on confirm: the pre-confirm cookie is dead (F2)', async () => {
+    const user = await seedUser(t.sql);
+    const { body } = await t
+      .post('/v1/orgs/auth/totp/enroll')
+      .set('Cookie', user.cookie)
+      .expect(200);
+    await t
+      .post('/v1/orgs/auth/totp/confirm')
+      .set('Cookie', user.cookie)
+      .send({ code: totpCode(body.secret as string, at()) })
+      .expect(200);
+    await t
+      .http()
+      .get('/v1/orgs/auth/me')
+      .set('Cookie', user.cookie)
+      .expect(401);
+  });
+
+  it('revokes the other sessions of the user on TOTP confirm and delete; the current one keeps working (F3)', async () => {
+    const user = await seedUser(t.sql);
+    const other = await addSession(t.sql, user.userId);
+    const { body } = await t
+      .post('/v1/orgs/auth/totp/enroll')
+      .set('Cookie', user.cookie)
+      .expect(200);
+    const confirm = await t
+      .post('/v1/orgs/auth/totp/confirm')
+      .set('Cookie', user.cookie)
+      .send({ code: totpCode(body.secret as string, at()) })
+      .expect(200);
+    const current = cookieFrom(confirm, 'org_session');
+    await t.http().get('/v1/orgs/auth/me').set('Cookie', other).expect(401);
+
+    const later = await addSession(t.sql, user.userId);
+    await t.del('/v1/orgs/auth/totp').set('Cookie', current).expect(204);
+    await t.http().get('/v1/orgs/auth/me').set('Cookie', later).expect(401);
+    await t.http().get('/v1/orgs/auth/me').set('Cookie', current).expect(200);
   });
 });

@@ -1,7 +1,17 @@
-import { Body, Controller, Delete, HttpCode, Post, Req } from '@nestjs/common';
-import type { Request } from 'express';
+import {
+  Body,
+  Controller,
+  Delete,
+  HttpCode,
+  Post,
+  Req,
+  Res,
+} from '@nestjs/common';
+import type { Request, Response } from 'express';
+import { AuthService } from '@/modules/org/auth/auth.service';
 import { z } from 'zod';
 import { OrgSession, RequireStrongAuth } from '@/modules/org/auth/decorators';
+import { setSessionCookie } from '@/modules/org/auth/session.guard';
 import { FactorsService } from '@/modules/org/auth/totp/factors.service';
 import { ValidationPipe } from '@/validation/pipes/validation.pipe';
 
@@ -17,7 +27,10 @@ const StepUpSchema = z
 
 @Controller({ path: 'orgs/auth', version: '1' })
 export class TotpController {
-  constructor(private readonly factors: FactorsService) {}
+  constructor(
+    private readonly factors: FactorsService,
+    private readonly auth: AuthService,
+  ) {}
 
   @Post('totp/enroll')
   @HttpCode(200)
@@ -29,12 +42,19 @@ export class TotpController {
 
   @Post('totp/confirm')
   @HttpCode(200)
-  confirm(
+  async confirm(
     @OrgSession() session: OrgSession,
     @Body(new ValidationPipe(CodeSchema)) body: { code: string },
     @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
   ): Promise<{ recoveryCodes: Array<string> }> {
-    return this.factors.confirm(session, body.code, client(req));
+    const { recoveryCodes, token } = await this.factors.confirm(
+      session,
+      body.code,
+      client(req),
+    );
+    setSessionCookie(res, token, this.auth.sessionMaxAgeSeconds);
+    return { recoveryCodes };
   }
 
   @Post('step-up/totp')
@@ -44,8 +64,10 @@ export class TotpController {
     @Body(new ValidationPipe(StepUpSchema))
     body: { code?: string; recoveryCode?: string },
     @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
   ): Promise<{ ok: true }> {
-    await this.factors.stepUp(session, body, client(req));
+    const token = await this.factors.stepUp(session, body, client(req));
+    setSessionCookie(res, token, this.auth.sessionMaxAgeSeconds);
     return { ok: true };
   }
 
