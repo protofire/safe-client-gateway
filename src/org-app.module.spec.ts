@@ -27,6 +27,10 @@ Object.assign(process.env, {
   ORG_DB_APP_USERNAME: 'org_app',
   ORG_DB_APP_PASSWORD: 'test-password',
   ORG_PUBLIC_APP_URL: 'https://app.example.com',
+  ORG_ENCRYPTION_KEYS: JSON.stringify({
+    current: 'v1',
+    keys: { v1: Buffer.alloc(32, 7).toString('base64') },
+  }),
 });
 
 const SENTINEL = 'gateway-secret-sentinel';
