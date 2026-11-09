@@ -28,6 +28,7 @@ import { OrgDatabaseModule } from '@/modules/org/db/org-database.module';
 import { OrgHealthController } from '@/modules/org/health/org-health.controller';
 import { OrgMemberGuard } from '@/modules/org/permissions/org-member.guard';
 import { PermissionsModule } from '@/modules/org/permissions/permissions.module';
+import { SafesModule } from '@/modules/org/safes/safes.module';
 import { GlobalErrorFilter } from '@/routes/common/filters/global-error.filter';
 import { ZodErrorFilter } from '@/routes/common/filters/zod-error.filter';
 
@@ -82,6 +83,7 @@ export class OrgAppModule implements NestModule {
         OrgOidcModule,
         OrgTotpModule,
         ActivityModule,
+        SafesModule,
       ],
       controllers: [OrgHealthController],
       providers: [
