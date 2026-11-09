@@ -44,6 +44,19 @@ describe('OrgConfigurationSchema', () => {
     expect(OrgConfigurationSchema.safeParse(env).success).toBe(true);
   });
 
+  it('rejects an ORG_AMQP_QUEUE equal to the gateway AMQP_QUEUE', () => {
+    const previous = process.env.AMQP_QUEUE;
+    process.env.AMQP_QUEUE = 'org';
+    try {
+      expect(OrgConfigurationSchema.safeParse(validEnv()).success).toBe(false);
+      process.env.AMQP_QUEUE = 'gateway';
+      expect(OrgConfigurationSchema.safeParse(validEnv()).success).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.AMQP_QUEUE;
+      else process.env.AMQP_QUEUE = previous;
+    }
+  });
+
   it.each([
     ['not JSON', 'nope'],
     [

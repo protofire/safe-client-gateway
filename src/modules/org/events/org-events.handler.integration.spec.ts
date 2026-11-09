@@ -10,6 +10,12 @@ import {
 } from '@/modules/org/db/__tests__/org-test-db';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import { OrgEventsHandler } from '@/modules/org/events/org-events.handler';
+import {
+  seedSnapshotIfAbsent,
+  toSnapshot,
+} from '@/modules/org/events/safe-snapshot';
+import { LinkedSafesService } from '@/modules/org/safes/linked-safes.service';
+import type { Safe } from '@/modules/safe/domain/entities/safe.entity';
 import { runOrgMigrations } from '@/org-migrate';
 
 const addr = (n: number): Address =>
@@ -70,6 +76,7 @@ describe('OrgEventsHandler', () => {
   let handler: OrgEventsHandler;
   let orgA: string;
   let orgB: string;
+  let userA: string;
 
   const events = async (
     org: string,
@@ -101,6 +108,7 @@ describe('OrgEventsHandler', () => {
       new ActivityLog({} as FieldEncryptionService),
       logger as never,
     );
+    const users: Array<string> = [];
     const createOrg = (name: string): Promise<string> =>
       sql.transaction(async (em) => {
         const [org] = await em.query(
@@ -119,10 +127,12 @@ describe('OrgEventsHandler', () => {
            SELECT $1, id FROM roles WHERE key = 'admin' AND org_id IS NULL`,
           [member.id],
         );
+        users.push(user.id as string);
         return org.id as string;
       });
     orgA = await createOrg('A');
     orgB = await createOrg('B');
+    userA = users[0];
   });
 
   afterAll(async () => {
@@ -281,5 +291,108 @@ describe('OrgEventsHandler', () => {
     } as Event);
     expect(safeRepo.clearIncomingTransfers).toHaveBeenCalledWith(args);
     expect(balancesRepo.clearBalances).toHaveBeenCalledWith(args);
+  });
+
+  describe('concurrency and seeding', () => {
+    jest.setTimeout(20_000);
+    const delayed = <T>(value: T, ms: number): Promise<T> =>
+      new Promise((resolve) => setTimeout(() => resolve(value), ms));
+
+    it('serialises two executed events of one Safe: no reversed diff (F1)', async () => {
+      await seed(); // S0: threshold 2
+      safeRepo.getSafe
+        .mockImplementationOnce(() => delayed(safeState({ threshold: 1 }), 300))
+        .mockImplementationOnce(() => delayed(safeState({ threshold: 3 }), 0));
+      await Promise.all([
+        handler.handle(executed()),
+        handler.handle(executed()),
+      ]);
+      const pairs = (await events(orgA)).map((e) => [
+        e.payload.from,
+        e.payload.to,
+      ]);
+      expect(pairs.sort()).toEqual([
+        [1, 3],
+        [2, 1],
+      ]);
+    });
+
+    it('a seed racing an execution neither errors nor overwrites (F2)', async () => {
+      safeRepo.getSafe.mockResolvedValue(safeState({ threshold: 5 }));
+      await Promise.all([
+        handler.handle({
+          ...executed(),
+          type: TransactionEventType.PENDING_MULTISIG_TRANSACTION,
+        } as Event),
+        handler.handle(executed()),
+      ]);
+      expect(await events(orgA)).toEqual([]);
+      const snap = await sql.query(
+        `SELECT threshold FROM linked_safe_snapshots`,
+      );
+      expect(snap).toEqual([{ threshold: 5 }]);
+    });
+
+    it('seedSnapshotIfAbsent never overwrites an existing row (F2)', async () => {
+      await seed();
+      await sql.transaction((em) =>
+        seedSnapshotIfAbsent(
+          em,
+          CHAIN,
+          SAFE,
+          toSnapshot(safeState({ threshold: 9 }) as Safe),
+        ),
+      );
+      const snap = await sql.query(
+        `SELECT threshold FROM linked_safe_snapshots`,
+      );
+      expect(snap).toEqual([{ threshold: 2 }]);
+    });
+
+    it('seeds at link time so the first change emits an event (F3)', async () => {
+      await sql.query(`DELETE FROM linked_safes`);
+      const service = new LinkedSafesService(
+        new OrgTransaction(sql),
+        new ActivityLog({} as FieldEncryptionService),
+        {
+          isSafe: jest.fn().mockResolvedValue(true),
+          getSafe: safeRepo.getSafe,
+        } as never,
+        logger as never,
+      );
+      safeRepo.getSafe.mockResolvedValueOnce(safeState());
+      await service.link(
+        orgA,
+        { chainId: CHAIN, address: SAFE },
+        { userId: userA },
+      );
+
+      safeRepo.getSafe.mockResolvedValueOnce(safeState({ owners: [O1, O3] }));
+      await handler.handle(executed());
+      expect((await events(orgA)).map((e) => e.type)).toContain(
+        'onchain.owners_changed',
+      );
+    });
+
+    it('does not fail the link when seeding fails (F3)', async () => {
+      await sql.query(`DELETE FROM linked_safes`);
+      const service = new LinkedSafesService(
+        new OrgTransaction(sql),
+        new ActivityLog({} as FieldEncryptionService),
+        {
+          isSafe: jest.fn().mockResolvedValue(true),
+          getSafe: jest.fn().mockRejectedValue(new Error('node down')),
+        } as never,
+        logger as never,
+      );
+      await expect(
+        service.link(
+          orgA,
+          { chainId: CHAIN, address: SAFE },
+          { userId: userA },
+        ),
+      ).resolves.toMatchObject({ address: SAFE });
+      expect(logger.warn).toHaveBeenCalled();
+    });
   });
 });

@@ -122,4 +122,13 @@ export const OrgConfigurationSchema = z
     BLOCKLIST_SECRET_KEY: z.string().min(1),
     BLOCKLIST_SECRET_SALT: z.string().min(1),
   })
-  .loose();
+  .loose()
+  .refine(
+    // Sharing the gateway's queue would split its events between two consumers
+    (env) =>
+      !process.env.AMQP_QUEUE || env.ORG_AMQP_QUEUE !== process.env.AMQP_QUEUE,
+    {
+      path: ['ORG_AMQP_QUEUE'],
+      error: 'Must differ from the gateway AMQP_QUEUE',
+    },
+  );

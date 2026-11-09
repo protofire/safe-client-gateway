@@ -8,17 +8,15 @@ import { ActivityLog } from '@/modules/org/activity/activity-log.service';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import { TransactionEventType } from '@/modules/hooks/routes/entities/event-type.entity';
 import type { Event } from '@/modules/hooks/routes/entities/event.entity';
+import {
+  overwriteSnapshot,
+  seedSnapshotIfAbsent,
+  toSnapshot,
+  type Snapshot,
+} from '@/modules/org/events/safe-snapshot';
 import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
 
 type TxEvent = Extract<Event, { address: string; chainId: string }>;
-
-type Snapshot = {
-  owners: Array<string>;
-  threshold: number;
-  modules: Array<string>;
-  guard: string | null;
-  version: string | null;
-};
 
 const ZERO = '0x0000000000000000000000000000000000000000';
 const lower = (a: string): string => a.toLowerCase();
@@ -42,7 +40,6 @@ export class OrgEventsHandler {
   async handle(event: Event): Promise<void> {
     if (!('address' in event) || !('chainId' in event)) return;
     const e = event as TxEvent;
-    await this.invalidate(e);
 
     const isConfigCandidate =
       (e.type === TransactionEventType.EXECUTED_MULTISIG_TRANSACTION &&
@@ -51,38 +48,74 @@ export class OrgEventsHandler {
     const isSeedOnly =
       e.type === TransactionEventType.PENDING_MULTISIG_TRANSACTION ||
       e.type === TransactionEventType.NEW_CONFIRMATION;
-    if (!isConfigCandidate && !isSeedOnly) return;
 
-    const orgIds = await this.linkingOrgs(e.chainId, e.address);
-    if (orgIds.length === 0) return;
-    const hasSnapshot = await this.snapshotExists(e.chainId, e.address);
-    if (isSeedOnly && hasSnapshot) return;
+    const orgIds =
+      isConfigCandidate || isSeedOnly
+        ? await this.linkingOrgs(e.chainId, e.address)
+        : [];
+    if (orgIds.length === 0) {
+      await this.invalidate(e);
+      return;
+    }
+    await this.tx.runInOrgTx((em) =>
+      this.process(em, e, orgIds, isConfigCandidate),
+    );
+  }
 
+  /**
+   * One Safe at a time: the lock is taken before the cache is cleared and
+   * `getSafe` is read, so reads and diffs happen in the same order for
+   * concurrent events and a diff can never be reversed. It holds one DB
+   * connection during the node read (bounded by lock_timeout and the HTTP
+   * timeouts); events of other Safes are not blocked.
+   */
+  private async process(
+    em: EntityManager,
+    e: TxEvent,
+    orgIds: Array<string>,
+    isConfigCandidate: boolean,
+  ): Promise<void> {
+    await em.query(`SET LOCAL lock_timeout = '10s'`);
+    await em.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
+      `${e.chainId}:${lower(e.address)}`,
+    ]);
+    await this.invalidate(e);
+
+    const rows: Array<Snapshot> = await em.query(
+      `SELECT owners, threshold, modules, guard, version
+         FROM linked_safe_snapshots WHERE chain_id = $1 AND address = $2`,
+      [e.chainId, e.address],
+    );
+    const previous = rows[0] ?? null;
+    if (!isConfigCandidate && previous !== null) return;
+
+    if (isConfigCandidate) {
+      const key = createHash('sha256')
+        .update(
+          `${e.chainId}|${lower(e.address)}|${lower(
+            (e as { txHash: string }).txHash,
+          )}|${e.type}`,
+        )
+        .digest('hex');
+      const inserted: Array<unknown> = await em.query(
+        `INSERT INTO processed_events (event_key) VALUES ($1)
+         ON CONFLICT (event_key) DO NOTHING RETURNING event_key`,
+        [key],
+      );
+      if (inserted.length === 0) return;
+    }
+
+    let current: Snapshot;
     try {
-      const safe = await this.safeRepository.getSafe({
-        chainId: e.chainId,
-        address: e.address,
-      });
-      const current: Snapshot = {
-        owners: safe.owners,
-        threshold: safe.threshold,
-        modules: safe.modules ?? [],
-        guard: safe.guard === ZERO ? null : safe.guard,
-        version: safe.version ?? null,
-      };
-      const eventKey = isConfigCandidate
-        ? createHash('sha256')
-            .update(
-              `${e.chainId}|${lower(e.address)}|${lower(
-                (e as { txHash: string }).txHash,
-              )}|${e.type}`,
-            )
-            .digest('hex')
-        : null;
-      await this.apply(e, orgIds, current, eventKey);
+      current = toSnapshot(
+        await this.safeRepository.getSafe({
+          chainId: e.chainId,
+          address: e.address,
+        }),
+      );
     } catch (error) {
       // a failed read for a seed-only event must not cost a retry
-      if (isSeedOnly) {
+      if (!isConfigCandidate) {
         this.logger.warn({
           type: 'org_events_seed_failed',
           chainId: e.chainId,
@@ -92,55 +125,16 @@ export class OrgEventsHandler {
       }
       throw error;
     }
-  }
 
-  private async apply(
-    e: TxEvent,
-    orgIds: Array<string>,
-    current: Snapshot,
-    eventKey: string | null,
-  ): Promise<void> {
-    await this.tx.runInOrgTx(async (em) => {
-      if (eventKey !== null) {
-        const inserted: Array<unknown> = await em.query(
-          `INSERT INTO processed_events (event_key) VALUES ($1)
-           ON CONFLICT (event_key) DO NOTHING RETURNING event_key`,
-          [eventKey],
-        );
-        if (inserted.length === 0) return;
-      }
-      const rows: Array<Snapshot> = await em.query(
-        `SELECT owners, threshold, modules, guard, version
-           FROM linked_safe_snapshots WHERE chain_id = $1 AND address = $2
-           FOR UPDATE`,
-        [e.chainId, e.address],
-      );
-      const previous = rows[0] ?? null;
+    if (previous === null) {
       // First sight: store, emit nothing (nothing to diff against)
-      if (previous !== null && eventKey !== null) {
-        for (const orgId of orgIds) {
-          await this.emitDiff(em, orgId, e, previous, current);
-        }
-      }
-      await em.query(
-        `INSERT INTO linked_safe_snapshots
-           (chain_id, address, owners, threshold, modules, guard, version, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, now())
-         ON CONFLICT (chain_id, address) DO UPDATE SET
-           owners = EXCLUDED.owners, threshold = EXCLUDED.threshold,
-           modules = EXCLUDED.modules, guard = EXCLUDED.guard,
-           version = EXCLUDED.version, updated_at = now()`,
-        [
-          e.chainId,
-          e.address,
-          current.owners,
-          current.threshold,
-          current.modules,
-          current.guard,
-          current.version,
-        ],
-      );
-    });
+      await seedSnapshotIfAbsent(em, e.chainId, e.address, current);
+      return;
+    }
+    for (const orgId of orgIds) {
+      await this.emitDiff(em, orgId, e, previous, current);
+    }
+    await overwriteSnapshot(em, e.chainId, e.address, current);
   }
 
   private async emitDiff(
@@ -205,20 +199,11 @@ export class OrgEventsHandler {
     return rows.map((r) => r.org_id);
   }
 
-  private async snapshotExists(
-    chainId: string,
-    address: string,
-  ): Promise<boolean> {
-    const rows: Array<unknown> = await this.tx.runInOrgTx((em) =>
-      em.query(
-        `SELECT 1 FROM linked_safe_snapshots WHERE chain_id = $1 AND address = $2`,
-        [chainId, address],
-      ),
-    );
-    return rows.length > 0;
-  }
-
-  /** Mirrors EventCacheHelper for the repositories the org layer reuses. */
+  /**
+   * Mirrors EventCacheHelper for the repositories the org layer reuses.
+   * Collectibles and stakes caches are not served by the org app, so they
+   * are deliberately not invalidated.
+   */
   private async invalidate(e: TxEvent): Promise<void> {
     const a = { chainId: e.chainId, safeAddress: e.address };
     const s = this.safeRepository;

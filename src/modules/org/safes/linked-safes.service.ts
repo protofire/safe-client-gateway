@@ -7,9 +7,14 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { getAddress, type Address } from 'viem';
+import { ILoggingService, LoggingService } from '@/logging/logging.interface';
 import { DataSourceError } from '@/domain/errors/data-source.error';
 import { ActivityLog } from '@/modules/org/activity/activity-log.service';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
+import {
+  seedSnapshotIfAbsent,
+  toSnapshot,
+} from '@/modules/org/events/safe-snapshot';
 import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
 import { mapLimit } from '@/modules/org/safes/map-limit';
 
@@ -39,6 +44,7 @@ export class LinkedSafesService {
     private readonly tx: OrgTransaction,
     private readonly activity: ActivityLog,
     @Inject(ISafeRepository) private readonly safes: ISafeRepository,
+    @Inject(LoggingService) private readonly logger: ILoggingService,
   ) {}
 
   async link(
@@ -67,7 +73,7 @@ export class LinkedSafesService {
       );
     }
 
-    return this.tx.runInOrgTx(async (em) => {
+    const row = await this.tx.runInOrgTx(async (em) => {
       await em.query(`SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE`, [
         orgId,
       ]);
@@ -118,6 +124,22 @@ export class LinkedSafesService {
         label: input.label ?? null,
       };
     }, orgId);
+    await this.seedSnapshot(input.chainId, address);
+    return row;
+  }
+
+  /** So the first on-chain change after linking has something to diff against. */
+  private async seedSnapshot(chainId: string, address: Address): Promise<void> {
+    try {
+      const snapshot = toSnapshot(
+        await this.safes.getSafe({ chainId, address }),
+      );
+      await this.tx.runInOrgTx((em) =>
+        seedSnapshotIfAbsent(em, chainId, address, snapshot),
+      );
+    } catch {
+      this.logger.warn({ type: 'org_snapshot_seed_failed', chainId, address });
+    }
   }
 
   async unlink(
