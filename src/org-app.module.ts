@@ -30,6 +30,7 @@ import { OrgDatabaseModule } from '@/modules/org/db/org-database.module';
 import { OrgJobsModule } from '@/modules/org/jobs/org-jobs.module';
 import { MembersModule } from '@/modules/org/members/members.module';
 import { OrgsModule } from '@/modules/org/orgs/orgs.module';
+import { OrgEventsModule } from '@/modules/org/events/org-events.module';
 import { OrgHealthController } from '@/modules/org/health/org-health.controller';
 import { OrgMemberGuard } from '@/modules/org/permissions/org-member.guard';
 import { PermissionsModule } from '@/modules/org/permissions/permissions.module';
@@ -95,6 +96,7 @@ export class OrgAppModule implements NestModule {
         SafesModule,
         AddressBookModule,
         OrgJobsModule,
+        OrgEventsModule,
       ],
       controllers: [OrgHealthController],
       providers: [
