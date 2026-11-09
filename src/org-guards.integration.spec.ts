@@ -76,6 +76,10 @@ class PublicPingController {
 
 const config: Record<string, unknown> = {
   'org.trustProxyHops': 1,
+  'org.encryption.keys': JSON.stringify({
+    current: 'v1',
+    keys: { v1: Buffer.alloc(32, 7).toString('base64') },
+  }),
   'org.publicAppUrl': APP_URL,
   'express.jsonLimit': '1mb',
   'org.session.idleTtlSeconds': 12 * 3600,

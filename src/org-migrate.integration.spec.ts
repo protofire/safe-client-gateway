@@ -41,9 +41,11 @@ describe('org migrations entry (org-migrate)', () => {
       runOrgMigrations(b, db.appUser),
     ]);
 
-    expect([...appliedA, ...appliedB]).toHaveLength(1);
+    // one instance applies every migration, the other none
+    expect([appliedA, appliedB].filter((x) => x.length > 0)).toHaveLength(1);
+    const applied = [...appliedA, ...appliedB];
     const rows = await a.query(`SELECT name FROM "${ORG_MIGRATIONS_TABLE}"`);
-    expect(rows).toHaveLength(1);
+    expect(rows).toHaveLength(applied.length);
     expect(await runOrgMigrations(a, db.appUser)).toEqual([]);
   });
 
