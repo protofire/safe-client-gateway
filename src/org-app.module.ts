@@ -5,7 +5,7 @@ import {
   NestModule,
   RequestMethod,
 } from '@nestjs/common';
-import { APP_FILTER } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { CacheModule as InMemoryCacheModule } from '@nestjs/cache-manager';
 import { ClsMiddleware, ClsModule } from 'nestjs-cls';
 import { ConfigurationModule } from '@/config/configuration.module';
@@ -19,6 +19,8 @@ import { RequestScopedLoggingModule } from '@/logging/logging.module';
 import { OrgAuthModule } from '@/modules/org/auth/org-auth.module';
 import { OrgDatabaseModule } from '@/modules/org/db/org-database.module';
 import { OrgHealthController } from '@/modules/org/health/org-health.controller';
+import { OrgMemberGuard } from '@/modules/org/permissions/org-member.guard';
+import { PermissionsModule } from '@/modules/org/permissions/permissions.module';
 import { GlobalErrorFilter } from '@/routes/common/filters/global-error.filter';
 import { ZodErrorFilter } from '@/routes/common/filters/zod-error.filter';
 
@@ -51,6 +53,7 @@ export class OrgAppModule implements NestModule {
         InMemoryCacheModule.register({ isGlobal: true }),
         NetworkModule,
         OrgDatabaseModule,
+        PermissionsModule,
         RequestScopedLoggingModule,
         // Route modules. Express matches in registration order: modules with
         // static paths (auth, account, invitations) come before any module
@@ -61,6 +64,9 @@ export class OrgAppModule implements NestModule {
       providers: [
         { provide: APP_FILTER, useClass: GlobalErrorFilter },
         { provide: APP_FILTER, useClass: ZodErrorFilter },
+        // APP_GUARDs run in this order; it is the single source of guard order.
+        // SessionGuard (Task 4) and CsrfGuard go BEFORE this line
+        { provide: APP_GUARD, useClass: OrgMemberGuard },
       ],
     };
   }
