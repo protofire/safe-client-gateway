@@ -49,10 +49,7 @@ export async function recheckPermission(
   opts: { allowDeleted?: boolean; deferForbidden?: boolean } = {},
 ): Promise<EffectivePermissions> {
   const effective = await resolver.effective(orgId, userId, em);
-  if (
-    !effective ||
-    (effective.orgStatus !== 'active' && !opts.allowDeleted)
-  ) {
+  if (!effective || (effective.orgStatus !== 'active' && !opts.allowDeleted)) {
     throw new NotFoundException();
   }
   if (!opts.deferForbidden && !effective.permissions.includes(permission)) {

@@ -16,7 +16,13 @@ import { OverviewService } from '@/modules/org/safes/overview.service';
  * them unreachable.
  */
 @Module({
-  imports: [ActivityModule, PermissionsModule, BalancesModule, ChainsModule, SafeRepositoryModule],
+  imports: [
+    ActivityModule,
+    PermissionsModule,
+    BalancesModule,
+    ChainsModule,
+    SafeRepositoryModule,
+  ],
   controllers: [LinkedSafesController],
   providers: [OrgTransaction, LinkedSafesService, OverviewService],
 })

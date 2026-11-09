@@ -62,7 +62,8 @@ export async function memberRows(
     [orgId, memberId],
   );
   return rows.map((r) => {
-    const fromInvite = r.status === 'invited' || (!r.wallet && !r.emailEncrypted);
+    const fromInvite =
+      r.status === 'invited' || (!r.wallet && !r.emailEncrypted);
     const wallet = fromInvite ? r.targetWallet : r.wallet;
     const email = fromInvite ? r.targetEmailEncrypted : r.emailEncrypted;
     const identity: MemberIdentity = wallet

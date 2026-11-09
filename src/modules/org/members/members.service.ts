@@ -115,34 +115,39 @@ export class MembersService {
     roleKey: SystemRoleKey,
     by: Actor,
   ): Promise<void> {
-    await this.underOrgLock(orgId, by.userId, 'roles.assign', async (em, caller) => {
-      const role = await systemRole(em, roleKey);
-      assertCanGrant(role, caller.permissions);
-      const member = await this.member(em, orgId, memberId);
-      if (member.role === role.key) return;
-      await em.query(
-        `DELETE FROM role_bindings WHERE member_id = $1 AND scope = 'org'`,
-        [memberId],
-      );
-      await em.query(
-        `INSERT INTO role_bindings (member_id, role_id) VALUES ($1, $2)`,
-        [memberId, role.id],
-      );
-      await this.activity.record(em, {
-        orgId,
-        actorUserId: by.userId,
-        type: 'member.role_changed',
-        targetType: 'membership',
-        targetId: memberId,
-        payload: {
-          target: maskIdentity(member.identity),
-          from: member.role,
-          to: role.key,
-        },
-        ip: by.ip,
-        userAgent: by.userAgent,
-      });
-    });
+    await this.underOrgLock(
+      orgId,
+      by.userId,
+      'roles.assign',
+      async (em, caller) => {
+        const role = await systemRole(em, roleKey);
+        assertCanGrant(role, caller.permissions);
+        const member = await this.member(em, orgId, memberId);
+        if (member.role === role.key) return;
+        await em.query(
+          `DELETE FROM role_bindings WHERE member_id = $1 AND scope = 'org'`,
+          [memberId],
+        );
+        await em.query(
+          `INSERT INTO role_bindings (member_id, role_id) VALUES ($1, $2)`,
+          [memberId, role.id],
+        );
+        await this.activity.record(em, {
+          orgId,
+          actorUserId: by.userId,
+          type: 'member.role_changed',
+          targetType: 'membership',
+          targetId: memberId,
+          payload: {
+            target: maskIdentity(member.identity),
+            from: member.role,
+            to: role.key,
+          },
+          ip: by.ip,
+          userAgent: by.userAgent,
+        });
+      },
+    );
   }
 
   async remove(orgId: string, memberId: string, by: Actor): Promise<void> {
@@ -166,20 +171,25 @@ export class MembersService {
   }
 
   async leave(orgId: string, by: Actor): Promise<void> {
-    await this.underOrgLock(orgId, by.userId, 'org.view', async (em, caller) => {
-      const member = await this.member(em, orgId, caller.memberId);
-      await em.query(`DELETE FROM members WHERE id = $1`, [member.id]);
-      await this.activity.record(em, {
-        orgId,
-        actorUserId: by.userId,
-        type: 'member.left',
-        targetType: 'membership',
-        targetId: member.id,
-        payload: { target: maskIdentity(member.identity) },
-        ip: by.ip,
-        userAgent: by.userAgent,
-      });
-    });
+    await this.underOrgLock(
+      orgId,
+      by.userId,
+      'org.view',
+      async (em, caller) => {
+        const member = await this.member(em, orgId, caller.memberId);
+        await em.query(`DELETE FROM members WHERE id = $1`, [member.id]);
+        await this.activity.record(em, {
+          orgId,
+          actorUserId: by.userId,
+          type: 'member.left',
+          targetType: 'membership',
+          targetId: member.id,
+          payload: { target: maskIdentity(member.identity) },
+          ip: by.ip,
+          userAgent: by.userAgent,
+        });
+      },
+    );
   }
 
   /**

@@ -96,7 +96,10 @@ describe('organizations (org)', () => {
     const statuses = (
       await Promise.all(
         [1, 2, 3].map((i) =>
-          t.post('/v1/orgs').set('Cookie', owner.cookie).send({ name: `p${i}` }),
+          t
+            .post('/v1/orgs')
+            .set('Cookie', owner.cookie)
+            .send({ name: `p${i}` }),
         ),
       )
     ).map((r) => r.status);
@@ -183,10 +186,15 @@ describe('organizations (org)', () => {
     it('hides a deleted org from members and lists it for admins with includeDeleted', async () => {
       const { orgId, admin, member } = await deletedOrg();
 
-      const list = (cookie: string, q = ''): Promise<{ body: Array<{ id: string }> }> =>
+      const list = (
+        cookie: string,
+        q = '',
+      ): Promise<{ body: Array<{ id: string }> }> =>
         t.http().get(`/v1/orgs${q}`).set('Cookie', cookie).expect(200);
       expect((await list(member.cookie)).body).toEqual([]);
-      expect((await list(member.cookie, '?includeDeleted=true')).body).toEqual([]);
+      expect((await list(member.cookie, '?includeDeleted=true')).body).toEqual(
+        [],
+      );
       expect((await list(admin.cookie)).body).toEqual([]);
       expect((await list(admin.cookie, '?includeDeleted=true')).body).toEqual([
         {
@@ -197,7 +205,11 @@ describe('organizations (org)', () => {
           purgeAfter: expect.any(String),
         },
       ]);
-      await t.http().get(`/v1/orgs/${orgId}`).set('Cookie', member.cookie).expect(404);
+      await t
+        .http()
+        .get(`/v1/orgs/${orgId}`)
+        .set('Cookie', member.cookie)
+        .expect(404);
       await t
         .http()
         .get(`/v1/orgs/${orgId}/members`)
@@ -209,20 +221,29 @@ describe('organizations (org)', () => {
         .set('Cookie', admin.cookie)
         .expect(200);
       const purgeAfter = new Date(String(view.body.purgeAfter)).getTime();
-      expect(Math.abs(purgeAfter - (Date.now() + 30 * DAY_MS))).toBeLessThan(60_000);
+      expect(Math.abs(purgeAfter - (Date.now() + 30 * DAY_MS))).toBeLessThan(
+        60_000,
+      );
     });
 
     it('restores before purge; a member cannot restore', async () => {
       const { orgId, admin, member } = await deletedOrg();
 
-      await t.post(`/v1/orgs/${orgId}/restore`).set('Cookie', member.cookie).expect(404);
+      await t
+        .post(`/v1/orgs/${orgId}/restore`)
+        .set('Cookie', member.cookie)
+        .expect(404);
       const res = await t
         .post(`/v1/orgs/${orgId}/restore`)
         .set('Cookie', admin.cookie)
         .expect(200);
 
       expect(res.body).toMatchObject({ status: 'active', purgeAfter: null });
-      await t.http().get(`/v1/orgs/${orgId}/members`).set('Cookie', member.cookie).expect(200);
+      await t
+        .http()
+        .get(`/v1/orgs/${orgId}/members`)
+        .set('Cookie', member.cookie)
+        .expect(200);
     });
 
     it('purges after 30 days with everything scoped to the org, and no longer restores', async () => {
@@ -245,7 +266,10 @@ describe('organizations (org)', () => {
 
       for (const table of ['organizations', 'members', 'activity_events']) {
         const column = table === 'organizations' ? 'id' : 'org_id';
-        const rows = await t.sql.query(`SELECT 1 FROM ${table} WHERE ${column} = $1`, [orgId]);
+        const rows = await t.sql.query(
+          `SELECT 1 FROM ${table} WHERE ${column} = $1`,
+          [orgId],
+        );
         expect(rows).toEqual([]);
       }
       const [{ count }] = await t.sql.transaction(async (em) => {
@@ -268,7 +292,10 @@ describe('organizations (org)', () => {
         await runner.startTransaction();
         await runner.query(`SET LOCAL lock_timeout = '5s'`);
         // what restore holds while it checks purge_after
-        await runner.query(`SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE`, [orgId]);
+        await runner.query(
+          `SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE`,
+          [orgId],
+        );
 
         expect(await purge.purgeDue()).not.toContain(orgId);
 
@@ -287,7 +314,10 @@ describe('organizations (org)', () => {
         `UPDATE organizations SET purge_after = now() - interval '1 second' WHERE id = $1`,
         [orgId],
       );
-      await t.post(`/v1/orgs/${orgId}/restore`).set('Cookie', admin.cookie).expect(404);
+      await t
+        .post(`/v1/orgs/${orgId}/restore`)
+        .set('Cookie', admin.cookie)
+        .expect(404);
 
       const [restore, purged] = await Promise.all([
         t.post(`/v1/orgs/${orgId}/restore`).set('Cookie', admin.cookie),
@@ -364,7 +394,10 @@ describe('organizations (org)', () => {
     const lock = await t.holdOrgLock(orgId);
     let pending: Promise<{ status: number }> | undefined;
     try {
-      pending = t.del(`/v1/orgs/${orgId}`).set('Cookie', b.cookie).then((r) => r);
+      pending = t
+        .del(`/v1/orgs/${orgId}`)
+        .set('Cookie', b.cookie)
+        .then((r) => r);
       await lock.blocked();
     } finally {
       await lock.release(async (q) => {
@@ -377,7 +410,10 @@ describe('organizations (org)', () => {
     }
 
     expect((await pending).status).toBe(403);
-    const [org] = await t.sql.query(`SELECT status FROM organizations WHERE id = $1`, [orgId]);
+    const [org] = await t.sql.query(
+      `SELECT status FROM organizations WHERE id = $1`,
+      [orgId],
+    );
     expect(org.status).toBe('active');
   });
 

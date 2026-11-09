@@ -7,7 +7,6 @@ import {
 
 jest.setTimeout(60_000);
 
-
 describe('members and invitations (org)', () => {
   let t: OrgTestApp;
 
@@ -41,8 +40,14 @@ describe('members and invitations (org)', () => {
     return { memberId: res.body.id, token: t.lastInviteToken(to) };
   }
 
-  const accept = (user: TestUser, token: string): ReturnType<OrgTestApp['post']> =>
-    t.post('/v1/orgs/invitations/accept').set('Cookie', user.cookie).send({ token });
+  const accept = (
+    user: TestUser,
+    token: string,
+  ): ReturnType<OrgTestApp['post']> =>
+    t
+      .post('/v1/orgs/invitations/accept')
+      .set('Cookie', user.cookie)
+      .send({ token });
 
   describe('email invitations', () => {
     it('mails the accept URL with the token in the fragment through Resend', async () => {
@@ -66,7 +71,9 @@ describe('members and invitations (org)', () => {
         [orgId],
       );
       const week = Date.now() + 7 * 24 * 3600 * 1000;
-      expect(Math.abs(new Date(String(stored.expires_at)).getTime() - week)).toBeLessThan(60_000);
+      expect(
+        Math.abs(new Date(String(stored.expires_at)).getTime() - week),
+      ).toBeLessThan(60_000);
       expect(stored.token_hash).not.toContain(t.lastInviteToken(to));
       expect(stored.target_email_hash).not.toContain(to);
     });
@@ -87,7 +94,11 @@ describe('members and invitations (org)', () => {
         target: 'a***@example.com',
       });
       // invited, not active: every org resource is 404 (Review Focus 2)
-      await t.http().get(`/v1/orgs/${orgId}`).set('Cookie', invitee.cookie).expect(404);
+      await t
+        .http()
+        .get(`/v1/orgs/${orgId}`)
+        .set('Cookie', invitee.cookie)
+        .expect(404);
 
       const res = await accept(invitee, token).expect(200);
       expect(res.body).toEqual({ orgId });
@@ -96,7 +107,11 @@ describe('members and invitations (org)', () => {
         [memberId],
       );
       expect(member).toEqual({ userId: invitee.userId, status: 'active' });
-      await t.http().get(`/v1/orgs/${orgId}`).set('Cookie', invitee.cookie).expect(200);
+      await t
+        .http()
+        .get(`/v1/orgs/${orgId}`)
+        .set('Cookie', invitee.cookie)
+        .expect(200);
       const [joined] = await t.sql.query(
         `SELECT payload FROM activity_events WHERE org_id = $1 AND type = 'member.joined'`,
         [orgId],
@@ -137,9 +152,9 @@ describe('members and invitations (org)', () => {
       const a = await t.user({ email: to });
       const b = await t.user({ email: to });
 
-      const statuses = (await Promise.all([accept(a, token), accept(b, token)])).map(
-        (r) => r.status,
-      );
+      const statuses = (
+        await Promise.all([accept(a, token), accept(b, token)])
+      ).map((r) => r.status);
 
       expect(statuses.toSorted()).toEqual([200, 404]);
       const [{ count }] = await t.sql.query(
@@ -159,7 +174,10 @@ describe('members and invitations (org)', () => {
         .post(`/v1/orgs/${orgId}/members/${memberId}/invite/renew`)
         .set('Cookie', admin.cookie)
         .expect(200);
-      expect(res.body).toEqual({ expiresAt: expect.any(String), emailSent: true });
+      expect(res.body).toEqual({
+        expiresAt: expect.any(String),
+        emailSent: true,
+      });
       const second = t.lastInviteToken(to);
       expect(second).not.toBe(first);
 
@@ -204,15 +222,28 @@ describe('members and invitations (org)', () => {
       }
       expect(t.mailPost).not.toHaveBeenCalled();
 
-      const listed = await t.http().get('/v1/orgs').set('Cookie', joiner.cookie).expect(200);
+      const listed = await t
+        .http()
+        .get('/v1/orgs')
+        .set('Cookie', joiner.cookie)
+        .expect(200);
       expect(listed.body).toEqual([
         { id: orgId, name: 'Wallets', status: 'active', myStatus: 'invited' },
       ]);
       const outsider = await t.user({ wallet: true });
-      await t.post(`/v1/orgs/${orgId}/members/accept`).set('Cookie', outsider.cookie).expect(404);
+      await t
+        .post(`/v1/orgs/${orgId}/members/accept`)
+        .set('Cookie', outsider.cookie)
+        .expect(404);
 
-      await t.post(`/v1/orgs/${orgId}/members/accept`).set('Cookie', joiner.cookie).expect(200);
-      await t.post(`/v1/orgs/${orgId}/members/decline`).set('Cookie', decliner.cookie).expect(200);
+      await t
+        .post(`/v1/orgs/${orgId}/members/accept`)
+        .set('Cookie', joiner.cookie)
+        .expect(200);
+      await t
+        .post(`/v1/orgs/${orgId}/members/decline`)
+        .set('Cookie', decliner.cookie)
+        .expect(200);
 
       const members = await t
         .http()
@@ -231,11 +262,24 @@ describe('members and invitations (org)', () => {
         [decliner.userId]: 'declined',
       });
       // declined: nothing of the org (Review Focus 2), and no longer listed
-      await t.http().get(`/v1/orgs/${orgId}`).set('Cookie', decliner.cookie).expect(404);
+      await t
+        .http()
+        .get(`/v1/orgs/${orgId}`)
+        .set('Cookie', decliner.cookie)
+        .expect(404);
       expect(
-        (await t.http().get('/v1/orgs').set('Cookie', decliner.cookie).expect(200)).body,
+        (
+          await t
+            .http()
+            .get('/v1/orgs')
+            .set('Cookie', decliner.cookie)
+            .expect(200)
+        ).body,
       ).toEqual([]);
-      await t.post(`/v1/orgs/${orgId}/members/accept`).set('Cookie', decliner.cookie).expect(404);
+      await t
+        .post(`/v1/orgs/${orgId}/members/accept`)
+        .set('Cookie', decliner.cookie)
+        .expect(404);
 
       // re-invite after decline reuses the member row
       await t
@@ -243,7 +287,10 @@ describe('members and invitations (org)', () => {
         .set('Cookie', admin.cookie)
         .send({ wallet: decliner.wallet, role: 'member' })
         .expect(201);
-      await t.post(`/v1/orgs/${orgId}/members/accept`).set('Cookie', decliner.cookie).expect(200);
+      await t
+        .post(`/v1/orgs/${orgId}/members/accept`)
+        .set('Cookie', decliner.cookie)
+        .expect(200);
       const [{ count }] = await t.sql.query(
         `SELECT count(*)::int AS count FROM members WHERE org_id = $1 AND user_id = $2`,
         [orgId, decliner.userId],
@@ -343,10 +390,22 @@ describe('members and invitations (org)', () => {
       const invitee = await t.user({ email: to });
 
       expect(
-        (await t.http().get('/v1/orgs').set('Cookie', invitee.cookie).expect(200)).body,
+        (
+          await t
+            .http()
+            .get('/v1/orgs')
+            .set('Cookie', invitee.cookie)
+            .expect(200)
+        ).body,
       ).toEqual([]);
-      await t.post(`/v1/orgs/${orgId}/members/accept`).set('Cookie', invitee.cookie).expect(404);
-      await t.post(`/v1/orgs/${orgId}/members/decline`).set('Cookie', invitee.cookie).expect(404);
+      await t
+        .post(`/v1/orgs/${orgId}/members/accept`)
+        .set('Cookie', invitee.cookie)
+        .expect(404);
+      await t
+        .post(`/v1/orgs/${orgId}/members/decline`)
+        .set('Cookie', invitee.cookie)
+        .expect(404);
       await accept(invitee, token).expect(200);
     });
   });
@@ -362,10 +421,18 @@ describe('members and invitations (org)', () => {
       await inviteEmail(orgId, admin, invitedEmail);
 
       const asAdmin = (
-        await t.http().get(`/v1/orgs/${orgId}/members`).set('Cookie', admin.cookie).expect(200)
+        await t
+          .http()
+          .get(`/v1/orgs/${orgId}/members`)
+          .set('Cookie', admin.cookie)
+          .expect(200)
       ).body;
       const asMember = (
-        await t.http().get(`/v1/orgs/${orgId}/members`).set('Cookie', member.cookie).expect(200)
+        await t
+          .http()
+          .get(`/v1/orgs/${orgId}/members`)
+          .set('Cookie', member.cookie)
+          .expect(200)
       ).body;
 
       expect(asAdmin).toEqual([
@@ -393,7 +460,9 @@ describe('members and invitations (org)', () => {
           expiresAt: expect.any(String),
         },
       ]);
-      expect((asMember as Array<{ identity: object }>).map((m) => m.identity)).toEqual([
+      expect(
+        (asMember as Array<{ identity: object }>).map((m) => m.identity),
+      ).toEqual([
         { kind: 'email', value: 'b***@example.com' },
         { kind: 'wallet', value: member.wallet },
         { kind: 'email', value: 'c***@example.com' },
@@ -452,19 +521,30 @@ describe('members and invitations (org)', () => {
       const { orgId, a, b, aId, bId } = await twoAdmins();
 
       const results = await Promise.all([
-        t.patch(`/v1/orgs/${orgId}/members/${bId}/role`).set('Cookie', a.cookie).send({ role: 'member' }),
-        t.patch(`/v1/orgs/${orgId}/members/${aId}/role`).set('Cookie', b.cookie).send({ role: 'member' }),
+        t
+          .patch(`/v1/orgs/${orgId}/members/${bId}/role`)
+          .set('Cookie', a.cookie)
+          .send({ role: 'member' }),
+        t
+          .patch(`/v1/orgs/${orgId}/members/${aId}/role`)
+          .set('Cookie', b.cookie)
+          .send({ role: 'member' }),
       ]);
 
       expect(results.map((r) => r.status).toSorted()).toEqual([204, 409]);
-      expect(results.find((r) => r.status === 409)!.body.code).toBe('last_admin');
+      expect(results.find((r) => r.status === 409)!.body.code).toBe(
+        'last_admin',
+      );
       expect(await t.adminCount(orgId)).toBe(1);
     });
 
     it('answers 409 last_admin when the last admin demotes themself', async () => {
       const a = await t.user({ wallet: true });
       const orgId = await t.createOrg(a);
-      const [{ id }] = await t.sql.query(`SELECT id FROM members WHERE org_id = $1`, [orgId]);
+      const [{ id }] = await t.sql.query(
+        `SELECT id FROM members WHERE org_id = $1`,
+        [orgId],
+      );
 
       const res = await t
         .patch(`/v1/orgs/${orgId}/members/${id}/role`)
@@ -485,10 +565,20 @@ describe('members and invitations (org)', () => {
       const orgId = await t.createOrg(admin);
       await t.addMember(orgId, member, 'member');
 
-      const res = await t.post(`/v1/orgs/${orgId}/members/leave`).set('Cookie', admin.cookie).expect(409);
+      const res = await t
+        .post(`/v1/orgs/${orgId}/members/leave`)
+        .set('Cookie', admin.cookie)
+        .expect(409);
       expect(res.body.code).toBe('last_admin');
-      await t.post(`/v1/orgs/${orgId}/members/leave`).set('Cookie', member.cookie).expect(204);
-      await t.http().get(`/v1/orgs/${orgId}`).set('Cookie', member.cookie).expect(404);
+      await t
+        .post(`/v1/orgs/${orgId}/members/leave`)
+        .set('Cookie', member.cookie)
+        .expect(204);
+      await t
+        .http()
+        .get(`/v1/orgs/${orgId}`)
+        .set('Cookie', member.cookie)
+        .expect(404);
     });
 
     it('removes a member with members.remove; a member cannot remove', async () => {
@@ -496,11 +586,24 @@ describe('members and invitations (org)', () => {
       const member = await t.user({ wallet: true });
       const memberId = await t.addMember(orgId, member, 'member');
 
-      await t.del(`/v1/orgs/${orgId}/members/${bId}`).set('Cookie', member.cookie).expect(403);
-      await t.del(`/v1/orgs/${orgId}/members/${memberId}`).set('Cookie', b.cookie).expect(204);
-      await t.del(`/v1/orgs/${orgId}/members/${bId}`).set('Cookie', a.cookie).expect(204);
+      await t
+        .del(`/v1/orgs/${orgId}/members/${bId}`)
+        .set('Cookie', member.cookie)
+        .expect(403);
+      await t
+        .del(`/v1/orgs/${orgId}/members/${memberId}`)
+        .set('Cookie', b.cookie)
+        .expect(204);
+      await t
+        .del(`/v1/orgs/${orgId}/members/${bId}`)
+        .set('Cookie', a.cookie)
+        .expect(204);
       expect(await t.adminCount(orgId)).toBe(1);
-      await t.http().get(`/v1/orgs/${orgId}`).set('Cookie', member.cookie).expect(404);
+      await t
+        .http()
+        .get(`/v1/orgs/${orgId}`)
+        .set('Cookie', member.cookie)
+        .expect(404);
     });
   });
 
@@ -516,7 +619,11 @@ describe('members and invitations (org)', () => {
         `INSERT INTO recovery_codes (user_id, code_hash) VALUES ($1, 'h')`,
         [target.userId],
       );
-      await t.http().get('/v1/orgs/auth/me').set('Cookie', target.cookie).expect(200);
+      await t
+        .http()
+        .get('/v1/orgs/auth/me')
+        .set('Cookie', target.cookie)
+        .expect(200);
 
       await t
         .post(`/v1/orgs/${orgA}/members/${memberId}/factors/reset`)
@@ -525,18 +632,31 @@ describe('members and invitations (org)', () => {
 
       for (const table of ['factors', 'recovery_codes']) {
         expect(
-          await t.sql.query(`SELECT 1 FROM ${table} WHERE user_id = $1`, [target.userId]),
+          await t.sql.query(`SELECT 1 FROM ${table} WHERE user_id = $1`, [
+            target.userId,
+          ]),
         ).toEqual([]);
       }
-      await t.http().get('/v1/orgs/auth/me').set('Cookie', target.cookie).expect(401);
-      await t.http().get('/v1/orgs/auth/me').set('Cookie', admin.cookie).expect(200);
+      await t
+        .http()
+        .get('/v1/orgs/auth/me')
+        .set('Cookie', target.cookie)
+        .expect(401);
+      await t
+        .http()
+        .get('/v1/orgs/auth/me')
+        .set('Cookie', admin.cookie)
+        .expect(200);
       const rows: Array<{ type: string }> = await t.sql.query(
         `SELECT type FROM activity_events WHERE org_id = $1`,
         [orgA],
       );
       const types = rows.map((r) => r.type);
       expect(types).toEqual(
-        expect.arrayContaining(['member.factors_reset', 'security.totp_removed']),
+        expect.arrayContaining([
+          'member.factors_reset',
+          'security.totp_removed',
+        ]),
       );
     });
 
@@ -556,9 +676,15 @@ describe('members and invitations (org)', () => {
 
       expect(res.body.code).toBe('support_required');
       expect(
-        await t.sql.query(`SELECT 1 FROM factors WHERE user_id = $1`, [target.userId]),
+        await t.sql.query(`SELECT 1 FROM factors WHERE user_id = $1`, [
+          target.userId,
+        ]),
       ).toHaveLength(1);
-      await t.http().get('/v1/orgs/auth/me').set('Cookie', target.cookie).expect(200);
+      await t
+        .http()
+        .get('/v1/orgs/auth/me')
+        .set('Cookie', target.cookie)
+        .expect(200);
     });
   });
 });

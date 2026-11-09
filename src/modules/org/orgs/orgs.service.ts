@@ -107,7 +107,10 @@ export class OrgsService {
    * of their wallets. With
    * `includeDeleted`, also deleted orgs where they hold `org.delete`.
    */
-  async list(userId: string, includeDeleted: boolean): Promise<Array<OrgListItem>> {
+  async list(
+    userId: string,
+    includeDeleted: boolean,
+  ): Promise<Array<OrgListItem>> {
     const rows: Array<{
       id: string;
       name: string;
@@ -164,7 +167,13 @@ export class OrgsService {
   async rename(orgId: string, name: string, by: Actor): Promise<OrgView> {
     return this.tx.runInOrgTx(async (em) => {
       await lockOrgs(em, [orgId]);
-      await recheckPermission(this.resolver, em, orgId, by.userId, 'org.update');
+      await recheckPermission(
+        this.resolver,
+        em,
+        orgId,
+        by.userId,
+        'org.update',
+      );
       const [before]: Array<{ name: string }> = await em.query(
         `SELECT name FROM organizations WHERE id = $1 AND status = 'active'`,
         [orgId],
@@ -195,7 +204,13 @@ export class OrgsService {
     const now = this.clock.now();
     return this.tx.runInOrgTx(async (em) => {
       await lockOrgs(em, [orgId]);
-      await recheckPermission(this.resolver, em, orgId, by.userId, 'org.delete');
+      await recheckPermission(
+        this.resolver,
+        em,
+        orgId,
+        by.userId,
+        'org.delete',
+      );
       const [[org]]: [Array<OrgView>, number] = await em.query(
         `UPDATE organizations
          SET status = 'deleted', deleted_at = $2, purge_after = $3, updated_at = $2
@@ -237,9 +252,16 @@ export class OrgsService {
         ) {
           throw new NotFoundException();
         }
-        await recheckPermission(this.resolver, em, orgId, by.userId, 'org.delete', {
-          allowDeleted: true,
-        });
+        await recheckPermission(
+          this.resolver,
+          em,
+          orgId,
+          by.userId,
+          'org.delete',
+          {
+            allowDeleted: true,
+          },
+        );
         // the restored org counts again towards the admin's org limit
         await assertOrgLimit(em, by.userId);
         const [[org]]: [Array<OrgView>, number] = await em.query(

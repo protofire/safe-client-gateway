@@ -24,7 +24,11 @@ describe('account deletion (org)', () => {
   const deleteAccount = (user: TestUser): ReturnType<OrgTestApp['del']> =>
     t.del('/v1/orgs/account').set('Cookie', user.cookie);
 
-  async function twoAdmins(): Promise<{ orgId: string; a: TestUser; b: TestUser }> {
+  async function twoAdmins(): Promise<{
+    orgId: string;
+    a: TestUser;
+    b: TestUser;
+  }> {
     const a = await t.user({ wallet: true });
     const b = await t.user({ wallet: true });
     const orgId = await t.createOrg(a);
@@ -43,10 +47,14 @@ describe('account deletion (org)', () => {
 
     for (const table of ['identities', 'factors', 'sessions', 'members']) {
       expect(
-        await t.sql.query(`SELECT 1 FROM ${table} WHERE user_id = $1`, [b.userId]),
+        await t.sql.query(`SELECT 1 FROM ${table} WHERE user_id = $1`, [
+          b.userId,
+        ]),
       ).toEqual([]);
     }
-    const [user] = await t.sql.query(`SELECT status FROM users WHERE id = $1`, [b.userId]);
+    const [user] = await t.sql.query(`SELECT status FROM users WHERE id = $1`, [
+      b.userId,
+    ]);
     expect(user.status).toBe('deleted');
     await t.http().get('/v1/orgs/auth/me').set('Cookie', b.cookie).expect(401);
     expect(await t.adminCount(orgId)).toBe(1);
@@ -73,15 +81,19 @@ describe('account deletion (org)', () => {
       message: expect.any(String),
       code: 'last_admin',
     });
-    await t.http().get('/v1/orgs/auth/me').set('Cookie', admin.cookie).expect(200);
+    await t
+      .http()
+      .get('/v1/orgs/auth/me')
+      .set('Cookie', admin.cookie)
+      .expect(200);
   });
 
   it('answers one 409 when two admins delete their accounts concurrently', async () => {
     const { orgId, a, b } = await twoAdmins();
 
-    const statuses = (await Promise.all([deleteAccount(a), deleteAccount(b)])).map(
-      (r) => r.status,
-    );
+    const statuses = (
+      await Promise.all([deleteAccount(a), deleteAccount(b)])
+    ).map((r) => r.status);
 
     expect(statuses.toSorted()).toEqual([204, 409]);
     expect(await t.adminCount(orgId)).toBe(1);

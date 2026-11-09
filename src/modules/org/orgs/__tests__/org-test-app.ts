@@ -93,16 +93,21 @@ export async function createOrgTestApp(redisDb: number): Promise<OrgTestApp> {
 
   const roleId = async (key: string): Promise<string> =>
     (
-      await t.sql.query(`SELECT id FROM roles WHERE org_id IS NULL AND key = $1`, [
-        key,
-      ])
+      await t.sql.query(
+        `SELECT id FROM roles WHERE org_id IS NULL AND key = $1`,
+        [key],
+      )
     )[0].id;
 
   const app: OrgTestApp = {
     ...t,
     mailPost,
     patch: (path) =>
-      t.http().patch(path).set('X-Org-Request', '1').set('X-Forwarded-For', '10.9.0.1'),
+      t
+        .http()
+        .patch(path)
+        .set('X-Org-Request', '1')
+        .set('X-Forwarded-For', '10.9.0.1'),
     lastInviteToken: (to) => {
       const call = [...mailPost.mock.calls]
         .reverse()
@@ -173,7 +178,10 @@ export async function createOrgTestApp(redisDb: number): Promise<OrgTestApp> {
       await runner.connect();
       await runner.startTransaction();
       await runner.query(`SET LOCAL lock_timeout = '5s'`);
-      await runner.query(`SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE`, [orgId]);
+      await runner.query(
+        `SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE`,
+        [orgId],
+      );
       return {
         blocked: async (): Promise<void> => {
           for (let i = 0; i < 100; i++) {

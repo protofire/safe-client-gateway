@@ -144,7 +144,10 @@ export class InvitationsService {
         [orgId, wallet, emailHash],
       );
       if (pending) {
-        throw conflict('already_invited', 'Already invited; renew the invitation');
+        throw conflict(
+          'already_invited',
+          'Already invited; renew the invitation',
+        );
       }
       // an existing user with this identity: active → refuse, declined → re-invite the same row
       const [existing]: Array<{ id: string; status: string }> = await em.query(
@@ -212,10 +215,14 @@ export class InvitationsService {
 
     const view = toMemberView(member, {
       userId: by.userId,
-      permissions: (await this.resolver.effective(orgId, by.userId))?.permissions ?? [],
+      permissions:
+        (await this.resolver.effective(orgId, by.userId))?.permissions ?? [],
     });
     if (!email) return view;
-    return { ...view, emailSent: await this.sendInvite(email, token, orgName, by.userId) };
+    return {
+      ...view,
+      emailSent: await this.sendInvite(email, token, orgName, by.userId),
+    };
   }
 
   /** New token and expiry; the old token stops working (A9). */
@@ -230,16 +237,24 @@ export class InvitationsService {
     const result = await this.tx.runInOrgTx(async (em) => {
       await this.lockAndCheck(em, orgId, by.userId);
       // UPDATE … RETURNING resolves to [rows, affected] in TypeORM's postgres driver
-      const [[renewed]]: [Array<{ expiresAt: Date; targetEmailEncrypted: string | null }>, number] =
-        await em.query(
-          `UPDATE invitations i SET token_hash = $3, expires_at = $4, updated_at = $5
+      const [[renewed]]: [
+        Array<{ expiresAt: Date; targetEmailEncrypted: string | null }>,
+        number,
+      ] = await em.query(
+        `UPDATE invitations i SET token_hash = $3, expires_at = $4, updated_at = $5
            FROM members m
            WHERE m.id = i.member_id AND m.status = 'invited'
              AND i.member_id = $1 AND i.org_id = $2
              AND i.accepted_at IS NULL AND i.declined_at IS NULL
            RETURNING i.expires_at AS "expiresAt", i.target_email_encrypted AS "targetEmailEncrypted"`,
-          [memberId, orgId, sha256Hex(token), new Date(now.getTime() + INVITE_TTL_MS), now],
-        );
+        [
+          memberId,
+          orgId,
+          sha256Hex(token),
+          new Date(now.getTime() + INVITE_TTL_MS),
+          now,
+        ],
+      );
       if (!renewed) throw new NotFoundException();
       const [row] = await memberRows(em, this.encryption, orgId, memberId);
       await this.activity.record(em, {
@@ -296,7 +311,9 @@ export class InvitationsService {
     return this.tx.runInOrgTx(async (em) => {
       const [org] = await lockOrgs(em, [invitation.orgId]);
       const [{ status }]: Array<{ status: string }> = org
-        ? await em.query(`SELECT status FROM organizations WHERE id = $1`, [org])
+        ? await em.query(`SELECT status FROM organizations WHERE id = $1`, [
+            org,
+          ])
         : [{ status: 'gone' }];
       if (status !== 'active') throw invalidInvitation();
       // The caller's account may have been deleted while we waited; the row
@@ -319,7 +336,12 @@ export class InvitationsService {
         throw invitation.expiresAt <= now ? expired() : invalidInvitation();
       }
 
-      const [target] = await memberRows(em, this.encryption, invitation.orgId, invitation.memberId);
+      const [target] = await memberRows(
+        em,
+        this.encryption,
+        invitation.orgId,
+        invitation.memberId,
+      );
       if (!target || target.status !== 'invited') throw invalidInvitation();
       const [other]: Array<{ id: string; status: string }> = await em.query(
         `SELECT id, status FROM members WHERE org_id = $1 AND user_id = $2 AND id <> $3`,
@@ -327,15 +349,23 @@ export class InvitationsService {
       );
       if (other?.status === 'active') {
         // e.g. invited by wallet and by email: one membership is enough
-        await em.query(`DELETE FROM members WHERE id = $1`, [invitation.memberId]);
+        await em.query(`DELETE FROM members WHERE id = $1`, [
+          invitation.memberId,
+        ]);
         return { orgId: invitation.orgId };
       }
       if (action === 'accept') await assertOrgLimit(em, by.userId);
       // upsert: the invited row becomes the caller's only row in this org
-      if (other) await em.query(`DELETE FROM members WHERE id = $1`, [other.id]);
+      if (other)
+        await em.query(`DELETE FROM members WHERE id = $1`, [other.id]);
       await em.query(
         `UPDATE members SET user_id = $2, status = $3, updated_at = $4 WHERE id = $1`,
-        [invitation.memberId, by.userId, action === 'accept' ? 'active' : 'declined', now],
+        [
+          invitation.memberId,
+          by.userId,
+          action === 'accept' ? 'active' : 'declined',
+          now,
+        ],
       );
       await this.activity.record(em, {
         orgId: invitation.orgId,
@@ -414,7 +444,13 @@ export class InvitationsService {
     userId: string,
   ): Promise<{ permissions: Array<Permission> }> {
     await lockOrgs(em, [orgId]);
-    return recheckPermission(this.resolver, em, orgId, userId, 'members.invite');
+    return recheckPermission(
+      this.resolver,
+      em,
+      orgId,
+      userId,
+      'members.invite',
+    );
   }
 
   private async orgName(em: EntityManager, orgId: string): Promise<string> {
@@ -426,7 +462,13 @@ export class InvitationsService {
   }
 
   private async limitInvites(orgId: string): Promise<void> {
-    if (!(await this.rateLimiter.hit(`invitations:org:${orgId}`, INVITES_PER_HOUR, 3600))) {
+    if (
+      !(await this.rateLimiter.hit(
+        `invitations:org:${orgId}`,
+        INVITES_PER_HOUR,
+        3600,
+      ))
+    ) {
       throw new HttpException(
         { statusCode: 429, message: 'Too many invitations' },
         HttpStatus.TOO_MANY_REQUESTS,
@@ -467,7 +509,10 @@ export class InvitationsService {
       );
     if (row?.wallet) return maskIdentity({ kind: 'wallet', value: row.wallet });
     if (row?.email) {
-      return maskIdentity({ kind: 'email', value: this.encryption.decrypt(row.email) });
+      return maskIdentity({
+        kind: 'email',
+        value: this.encryption.decrypt(row.email),
+      });
     }
     return 'An organization admin';
   }

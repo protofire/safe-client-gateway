@@ -369,16 +369,24 @@ describe('route order of static org routes', () => {
     >;
     const at = (m: Type): number => imports.indexOf(m);
 
-    for (const staticModule of [OrgAuthModule, OrgAccountModule, MembersModule]) {
-      for (const orgIdModule of [OrgsModule, ActivityModule, SafesModule, AddressBookModule]) {
+    for (const staticModule of [
+      OrgAuthModule,
+      OrgAccountModule,
+      MembersModule,
+    ]) {
+      for (const orgIdModule of [
+        OrgsModule,
+        ActivityModule,
+        SafesModule,
+        AddressBookModule,
+      ]) {
         expect(at(staticModule)).toBeGreaterThanOrEqual(0);
         expect(at(staticModule)).toBeLessThan(at(orgIdModule));
       }
     }
-    expect(Reflect.getMetadata(MODULE_METADATA.CONTROLLERS, MembersModule)).toEqual([
-      InvitationsController,
-      MembersController,
-    ]);
+    expect(
+      Reflect.getMetadata(MODULE_METADATA.CONTROLLERS, MembersModule),
+    ).toEqual([InvitationsController, MembersController]);
   });
 
   it('DELETE /v1/orgs/account and POST /v1/orgs/invitations/accept reach their own handlers', async () => {
@@ -411,7 +419,9 @@ describe('route order of static org routes', () => {
     class ConfigStubModule {}
     @Module({
       controllers: [AccountController],
-      providers: [{ provide: AccountService, useValue: { delete: deleteAccount } }],
+      providers: [
+        { provide: AccountService, useValue: { delete: deleteAccount } },
+      ],
     })
     class AccountStubModule {}
     @Module({

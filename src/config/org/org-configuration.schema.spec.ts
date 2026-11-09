@@ -40,10 +40,13 @@ describe('OrgConfigurationSchema', () => {
     delete env.ORG_MAIL_API_KEY;
 
     expect(OrgConfigurationSchema.safeParse(env).success).toBe(true);
-    for (const flag of [{ NODE_ENV: 'production' }, { CGW_ENV: 'production' }]) {
-      expect(OrgConfigurationSchema.safeParse({ ...env, ...flag }).success).toBe(
-        false,
-      );
+    for (const flag of [
+      { NODE_ENV: 'production' },
+      { CGW_ENV: 'production' },
+    ]) {
+      expect(
+        OrgConfigurationSchema.safeParse({ ...env, ...flag }).success,
+      ).toBe(false);
     }
   });
 

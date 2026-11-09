@@ -35,7 +35,9 @@ export class MailService {
     if (!this.apiKey) {
       // the URL carries the invitation token: never logged in production
       if (this.isProduction) throw new Error('ORG_MAIL_API_KEY is not set');
-      this.logger.info(`[org mail] no ORG_MAIL_API_KEY, invite link: ${mail.acceptUrl}`);
+      this.logger.info(
+        `[org mail] no ORG_MAIL_API_KEY, invite link: ${mail.acceptUrl}`,
+      );
       return;
     }
     await this.network.post({

@@ -79,11 +79,7 @@ export class OrgsController {
     @Body() body: unknown,
   ): Promise<OrgView> {
     const { name } = parse(NameSchema, body);
-    return this.orgs.rename(
-      req.params.orgId,
-      name,
-      actor(req, session.userId),
-    );
+    return this.orgs.rename(req.params.orgId, name, actor(req, session.userId));
   }
 
   @Delete(':orgId')
