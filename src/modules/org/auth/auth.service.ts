@@ -3,6 +3,7 @@ import {
   HttpStatus,
   Inject,
   Injectable,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
@@ -14,23 +15,19 @@ import {
   validateSiweMessage,
 } from 'viem/siwe';
 import { IConfigurationService } from '@/config/configuration.service.interface';
-import {
-  CacheService,
-  ICacheService,
-} from '@/datasources/cache/cache.service.interface';
-import { CacheDir } from '@/datasources/cache/entities/cache-dir.entity';
 import type { OrgSession } from '@/modules/org/auth/decorators';
+import { NonceStore } from '@/modules/org/auth/nonce.store';
 import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
 import { Clock, type IClock } from '@/modules/org/common/clock';
 import { RateLimiter } from '@/modules/org/common/rate-limiter';
 import { ORG_DATA_SOURCE } from '@/modules/org/db/org-data-source';
 
-// spec §8: SIWE verify 10/min per IP, 5/min per account
+// spec §8: SIWE verify 10/min per IP. No per-account limit: the account is
+// an unauthenticated claim in the message, so it would let anyone lock a
+// wallet out, and a signature cannot be brute-forced.
 const VERIFY_PER_IP = 10;
-const VERIFY_PER_ACCOUNT = 5;
-const VERIFY_WINDOW_SECONDS = 60;
-// EIP-4361: at least 8 alphanumeric characters
-const NONCE = /^[A-Za-z0-9]{8,}$/;
+const NONCE_PER_IP = 30;
+const WINDOW_SECONDS = 60;
 const UNIQUE_VIOLATION = '23505';
 
 export type MeDto = {
@@ -55,11 +52,11 @@ export class AuthService {
 
   constructor(
     @InjectDataSource(ORG_DATA_SOURCE) private readonly db: DataSource,
-    @Inject(CacheService) private readonly cache: ICacheService,
     @Inject(Clock) private readonly clock: IClock,
     @Inject(IConfigurationService) config: IConfigurationService,
     private readonly sessions: SessionsRepository,
     private readonly rateLimiter: RateLimiter,
+    private readonly nonces: NonceStore,
   ) {
     const appUrl = new URL(config.getOrThrow<string>('org.publicAppUrl'));
     this.appOrigin = appUrl.origin;
@@ -77,9 +74,14 @@ export class AuthService {
     return this.absoluteTtlSeconds;
   }
 
-  async createNonce(): Promise<{ nonce: string }> {
+  async createNonce(ip: string): Promise<{ nonce: string }> {
+    await this.limit(`nonce:ip:${ip}`, NONCE_PER_IP);
     const nonce = generateSiweNonce();
-    await this.cache.hSet(nonceKey(nonce), '1', this.nonceTtlSeconds, 0);
+    try {
+      await this.nonces.issue(nonce, this.nonceTtlSeconds);
+    } catch {
+      throw new ServiceUnavailableException('Nonce storage unavailable');
+    }
     return { nonce };
   }
 
@@ -89,6 +91,12 @@ export class AuthService {
   ): Promise<{ userId: string; token: string }> {
     const address = await this.verifySiwe(attempt);
     const userId = await this.findOrCreateWalletUser(address);
+    const [user] = await this.db.query(
+      `SELECT status FROM users WHERE id = $1`,
+      [userId],
+    );
+    if (user?.status !== 'active') throw invalidSiwe();
+    // other sessions of the user stay valid: several devices are allowed
     // a wallet signature is the strong factor (spec §5)
     const { token } = await this.sessions.create({
       userId,
@@ -115,8 +123,9 @@ export class AuthService {
     await this.sessions.markStrong(session.sessionId, 'siwe', this.clock.now());
   }
 
-  async logout(session: OrgSession): Promise<void> {
-    await this.sessions.revoke(session.sessionId, this.clock.now());
+  /** Revokes the session the token names, if any. */
+  async logout(token: string | undefined): Promise<void> {
+    if (token) await this.sessions.revokeByToken(token, this.clock.now());
   }
 
   async me(session: OrgSession): Promise<MeDto> {
@@ -164,9 +173,8 @@ export class AuthService {
   }
 
   /**
-   * EOA signatures only (phase 1). The nonce is consumed last, after every
-   * other check, so a rejected request cannot burn someone else's nonce;
-   * UNLINK returning 1 makes exactly one concurrent caller the consumer.
+   * EOA signatures only (phase 1). The nonce is consumed with GETDEL, so
+   * exactly one concurrent caller wins it.
    */
   private async verifySiwe(attempt: Attempt): Promise<Address> {
     await this.limit(`siwe:ip:${attempt.ip}`, VERIFY_PER_IP);
@@ -177,20 +185,21 @@ export class AuthService {
     } catch {
       throw invalidSiwe();
     }
-    if (!message.address) throw invalidSiwe();
-    const address = getAddress(message.address);
-    await this.limit(
-      `siwe:account:${address.toLowerCase()}`,
-      VERIFY_PER_ACCOUNT,
-    );
-
+    const { address, uri, nonce, issuedAt, expirationTime, notBefore } =
+      message;
+    // strict EIP-4361: version 1, checksummed address, parseable dates
     const valid =
-      typeof message.chainId === 'number' &&
-      typeof message.nonce === 'string' &&
-      NONCE.test(message.nonce) &&
-      typeof message.uri === 'string' &&
-      URL.canParse(message.uri) &&
-      new URL(message.uri).origin === this.appOrigin &&
+      message.version === '1' &&
+      address !== undefined &&
+      isChecksummed(address) &&
+      message.chainId !== undefined &&
+      nonce !== undefined &&
+      issuedAt !== undefined &&
+      [issuedAt, expirationTime, notBefore].every(
+        (d) => d === undefined || !Number.isNaN(d.getTime()),
+      ) &&
+      URL.canParse(uri ?? '') &&
+      new URL(uri!).origin === this.appOrigin &&
       validateSiweMessage({
         message,
         domain: this.appHost,
@@ -210,13 +219,13 @@ export class AuthService {
     }
     if (!signed) throw invalidSiwe();
 
-    const consumed = await this.cache.deleteByKey(nonceKey(message.nonce!).key);
-    if (consumed !== 1) throw invalidSiwe();
+    // last, so a rejected request cannot burn someone else's nonce
+    if (!(await this.nonces.consume(nonce))) throw invalidSiwe();
     return address;
   }
 
   private async limit(key: string, limit: number): Promise<void> {
-    if (!(await this.rateLimiter.hit(key, limit, VERIFY_WINDOW_SECONDS))) {
+    if (!(await this.rateLimiter.hit(key, limit, WINDOW_SECONDS))) {
       throw new HttpException(
         { statusCode: 429, message: 'Too many attempts' },
         HttpStatus.TOO_MANY_REQUESTS,
@@ -258,8 +267,12 @@ export class AuthService {
   }
 }
 
-function nonceKey(nonce: string): CacheDir {
-  return new CacheDir(`auth:nonce:${nonce}`, '');
+function isChecksummed(address: string): boolean {
+  try {
+    return getAddress(address) === address;
+  } catch {
+    return false;
+  }
 }
 
 function invalidSiwe(): UnauthorizedException {

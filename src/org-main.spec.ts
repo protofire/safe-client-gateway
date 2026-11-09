@@ -13,6 +13,7 @@ import { AuthService } from '@/modules/org/auth/auth.service';
 import { OrgAuthModule } from '@/modules/org/auth/org-auth.module';
 import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
 import { RateLimiter } from '@/modules/org/common/rate-limiter';
+import { ORG_REDIS } from '@/modules/org/auth/nonce.store';
 
 const ping = jest.fn();
 const dbQuery = jest.fn();
@@ -284,6 +285,8 @@ describe('route order', () => {
       .useValue({ me })
       .overrideProvider(RateLimiter)
       .useValue({})
+      .overrideProvider(ORG_REDIS)
+      .useValue({ quit: jest.fn() })
       .compile();
     const app = moduleRef.createNestApplication<NestExpressApplication>();
     configureOrgApp(app);

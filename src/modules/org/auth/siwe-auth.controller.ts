@@ -28,8 +28,8 @@ export class SiweAuthController {
 
   @Public()
   @Get('nonce')
-  nonce(): Promise<{ nonce: string }> {
-    return this.auth.createNonce();
+  nonce(@Req() req: Request): Promise<{ nonce: string }> {
+    return this.auth.createNonce(clientIp(req));
   }
 
   @Public()
@@ -66,13 +66,16 @@ export class SiweAuthController {
     return { ok: true };
   }
 
+  // Public: always clears the cookie, even when the session is already gone
+  @Public()
   @Post('logout')
   @HttpCode(204)
   async logout(
-    @OrgSession() session: OrgSession,
+    @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ): Promise<void> {
-    await this.auth.logout(session);
+    const token: unknown = req.cookies?.[SESSION_COOKIE];
+    await this.auth.logout(typeof token === 'string' ? token : undefined);
     res.clearCookie(SESSION_COOKIE, {
       httpOnly: true,
       secure: true,

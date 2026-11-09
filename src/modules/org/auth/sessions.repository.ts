@@ -83,11 +83,11 @@ export class SessionsRepository {
     );
   }
 
-  async revoke(id: string, now: Date): Promise<void> {
+  async revokeByToken(token: string, now: Date): Promise<void> {
     await this.db.query(
       `UPDATE sessions SET revoked_at = $2, updated_at = $2
-       WHERE id = $1 AND revoked_at IS NULL`,
-      [id, now],
+       WHERE token_hash = $1 AND revoked_at IS NULL`,
+      [sha256Hex(token), now],
     );
   }
 }

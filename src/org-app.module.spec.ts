@@ -12,6 +12,7 @@ import { Module } from '@nestjs/common';
 import { getDataSourceToken } from '@nestjs/typeorm';
 import { ORG_DATA_SOURCE } from '@/modules/org/db/org-database.module';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
+import { ORG_REDIS } from '@/modules/org/auth/nonce.store';
 
 // No database in unit tests: the 'org' DataSource is replaced, never connected.
 // The connection options factory still runs, so its keys must be present.
@@ -37,6 +38,8 @@ describe('OrgAppModule', () => {
     })
       .overrideProvider('RedisClient')
       .useValue({ ping: jest.fn(), isReady: true, quit: jest.fn() })
+      .overrideProvider(ORG_REDIS)
+      .useValue({ quit: jest.fn() })
       .overrideProvider(getDataSourceToken(ORG_DATA_SOURCE))
       .useValue(fakeOrgDataSource)
       .compile();
@@ -51,6 +54,8 @@ describe('OrgAppModule', () => {
     })
       .overrideProvider('RedisClient')
       .useValue({ ping: jest.fn(), isReady: true, quit: jest.fn() })
+      .overrideProvider(ORG_REDIS)
+      .useValue({ quit: jest.fn() })
       .overrideProvider(getDataSourceToken(ORG_DATA_SOURCE))
       .useValue(fakeOrgDataSource)
       .compile();
@@ -118,6 +123,8 @@ describe('env file isolation', () => {
     })
       .overrideProvider('RedisClient')
       .useValue({ ping: jest.fn(), isReady: true, quit: jest.fn() })
+      .overrideProvider(ORG_REDIS)
+      .useValue({ quit: jest.fn() })
       .overrideProvider(getDataSourceToken(ORG_DATA_SOURCE))
       .useValue(fakeOrgDataSource)
       .compile();

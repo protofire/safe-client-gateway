@@ -150,7 +150,10 @@ describe('SIWE auth (org)', () => {
   const http = (): ReturnType<typeof request> => request(app.getHttpServer());
 
   async function nonce(): Promise<string> {
-    const res = await http().get('/v1/orgs/auth/nonce').expect(200);
+    const res = await http()
+      .get('/v1/orgs/auth/nonce')
+      .set('X-Forwarded-For', nextIp())
+      .expect(200);
     return res.body.nonce;
   }
 
@@ -430,20 +433,110 @@ describe('SIWE auth (org)', () => {
       .expect(200);
   });
 
-  it('returns 429 after 5 verify attempts per minute for one account', async () => {
-    const pk = generatePrivateKey();
-    // a fresh IP per attempt, so only the per-account limit can trigger
-    for (let i = 0; i < 5; i++) {
+  it('has no per-account limit: junk attempts naming a victim do not lock the victim out', async () => {
+    const victim = generatePrivateKey();
+    const junk = await signed(victim);
+    // a valid signature of some other message: wrong for this one
+    const { signature } = await signed(generatePrivateKey());
+    for (let i = 0; i < 20; i++) {
       await post('/v1/orgs/auth/siwe')
-        .send(await signed(pk))
-        .expect(200);
+        .send({ message: junk.message, signature })
+        .expect(401);
     }
     await post('/v1/orgs/auth/siwe')
-      .send(await signed(pk))
-      .expect(429);
-    // another account from a fresh IP is unaffected
-    await post('/v1/orgs/auth/siwe')
-      .send(await signed(generatePrivateKey()))
+      .send(await signed(victim))
       .expect(200);
+  });
+
+  it('returns 429 after 30 nonce requests per minute from one IP', async () => {
+    const ip = '10.8.8.8';
+    for (let i = 0; i < 30; i++) {
+      await http()
+        .get('/v1/orgs/auth/nonce')
+        .set('X-Forwarded-For', ip)
+        .expect(200);
+    }
+    await http()
+      .get('/v1/orgs/auth/nonce')
+      .set('X-Forwarded-For', ip)
+      .expect(429);
+    await http()
+      .get('/v1/orgs/auth/nonce')
+      .set('X-Forwarded-For', nextIp())
+      .expect(200);
+  });
+
+  it('stores the nonce as one expiring key and leaves nothing behind after use', async () => {
+    const body = await signed(generatePrivateKey());
+    const nonceValue = /Nonce: (\w+)/.exec(body.message)![1];
+    const key = `org:auth:nonce:${nonceValue}`;
+    expect(await redis.type(key)).toBe('string');
+    const ttl = await redis.ttl(key);
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual(300);
+
+    await post('/v1/orgs/auth/siwe').send(body).expect(200);
+    // no nonce key and no cache invalidation marker left behind
+    expect(await redis.keys('org:auth:nonce:*')).toEqual([]);
+    expect(await redis.keys('*invalidationTimeMs*')).toEqual([]);
+  });
+
+  it('answers 503 on the nonce endpoint when the nonce cannot be stored', async () => {
+    const client = app.get<{ set: () => Promise<unknown> }>('OrgRedisClient', {
+      strict: false,
+    });
+    const spy = jest
+      .spyOn(client, 'set')
+      .mockRejectedValueOnce(new Error('redis down'));
+    try {
+      await http()
+        .get('/v1/orgs/auth/nonce')
+        .set('X-Forwarded-For', nextIp())
+        .expect(503);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it.each([
+    ['version 2', (m: string): string => m.replace('Version: 1', 'Version: 2')],
+    [
+      'an invalid Issued At',
+      (m: string): string => m.replace(/Issued At: .*/, 'Issued At: garbage'),
+    ],
+    [
+      'an invalid Expiration Time',
+      (m: string): string => `${m}\nExpiration Time: garbage`,
+    ],
+    [
+      'a non-checksummed address',
+      (m: string): string =>
+        m.replace(/0x[0-9a-fA-F]{40}/, (a) => a.toLowerCase()),
+    ],
+  ])('rejects a SIWE message with %s', async (_, mutate) => {
+    const pk = generatePrivateKey();
+    const message = mutate((await signed(pk)).message);
+    const signature = await privateKeyToAccount(pk).signMessage({ message });
+    await post('/v1/orgs/auth/siwe').send({ message, signature }).expect(401);
+  });
+
+  it('rejects sign-in of a user whose status is not active', async () => {
+    const pk = generatePrivateKey();
+    const res = await post('/v1/orgs/auth/siwe').send(await signed(pk));
+    await sql.query(`UPDATE users SET status = 'deleted' WHERE id = $1`, [
+      res.body.user.id,
+    ]);
+    await post('/v1/orgs/auth/siwe')
+      .send(await signed(pk))
+      .expect(401);
+  });
+
+  it('logout without a valid session still answers 204 and clears the cookie', async () => {
+    for (const cookie of [undefined, 'org_session=unknown']) {
+      const req = post('/v1/orgs/auth/logout');
+      if (cookie) req.set('Cookie', cookie);
+      const res = await req.expect(204);
+      expect([res.headers['set-cookie']].flat()[0]).toMatch(/^org_session=;/);
+    }
   });
 });

@@ -2,6 +2,7 @@ import { Global, Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { AuthService } from '@/modules/org/auth/auth.service';
 import { CsrfGuard } from '@/modules/org/auth/csrf.guard';
+import { NonceStore, orgRedisProvider } from '@/modules/org/auth/nonce.store';
 import { SessionGuard } from '@/modules/org/auth/session.guard';
 import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
 import { SiweAuthController } from '@/modules/org/auth/siwe-auth.controller';
@@ -12,7 +13,8 @@ import { RateLimiter } from '@/modules/org/common/rate-limiter';
 /**
  * Global so `@RequireStrongAuth()` (StrongAuthGuard and its deps), Clock and
  * RateLimiter resolve in every org feature module. Needs the global
- * CacheService (CacheModule) and the 'org' DataSource.
+ * CacheService (CacheModule) and the 'org' DataSource; opens its own Redis
+ * connection for nonces (NonceStore).
  */
 @Global()
 @Module({
@@ -23,6 +25,8 @@ import { RateLimiter } from '@/modules/org/common/rate-limiter';
     { provide: APP_GUARD, useClass: SessionGuard },
     { provide: Clock, useValue: systemClock },
     AuthService,
+    NonceStore,
+    orgRedisProvider,
     RateLimiter,
     SessionsRepository,
     StrongAuthGuard,
