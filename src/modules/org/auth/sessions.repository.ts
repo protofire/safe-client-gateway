@@ -22,6 +22,8 @@ export class SessionsRepository {
   async create(args: {
     userId: string;
     amr: Array<string>;
+    /** Whether sign-in itself was a strong factor (SIWE yes, OIDC no). */
+    strong: boolean;
     now: Date;
     idleTtlSeconds: number;
     absoluteTtlSeconds: number;
@@ -36,7 +38,7 @@ export class SessionsRepository {
     const [{ id }] = await this.db.query(
       `INSERT INTO sessions (user_id, token_hash, amr, last_strong_auth_at,
          expires_at, idle_expires_at, user_agent, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $4, $4) RETURNING id`,
+       VALUES ($1, $2, $3, $8, $5, $6, $7, $4, $4) RETURNING id`,
       [
         args.userId,
         sha256Hex(token),
@@ -45,6 +47,7 @@ export class SessionsRepository {
         expiresAt,
         idleExpiresAt,
         args.userAgent,
+        args.strong ? args.now : null,
       ],
     );
     return { id, token };

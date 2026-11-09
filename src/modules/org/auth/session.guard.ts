@@ -12,6 +12,12 @@ import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
 import { Clock, type IClock } from '@/modules/org/common/clock';
 
 export const SESSION_COOKIE = 'org_session';
+export const SESSION_COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: true,
+  sameSite: 'lax',
+  path: '/v1/orgs',
+} as const;
 const TOUCH_INTERVAL_MS = 60_000;
 
 /** Global for /v1/orgs/**; `@Public()` opts a route out. */

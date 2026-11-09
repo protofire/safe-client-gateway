@@ -4,6 +4,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import { getDataSourceToken, TypeOrmModule } from '@nestjs/typeorm';
 import { createClient } from 'redis';
+import { randomBytes } from 'node:crypto';
 import request from 'supertest';
 import type { DataSource } from 'typeorm';
 import type { PostgresConnectionOptions } from 'typeorm/driver/postgres/PostgresConnectionOptions';
@@ -51,6 +52,10 @@ const config: Record<string, unknown> = {
   'org.session.idleTtlSeconds': 12 * 3600,
   'org.session.absoluteTtlSeconds': 7 * 24 * 3600,
   'org.session.strongAuthWindowSeconds': 30 * 60,
+  'org.encryption.keys': JSON.stringify({
+    current: 'v1',
+    keys: { v1: randomBytes(32).toString('base64') },
+  }),
   'auth.nonceTtlSeconds': 300,
   'redis.host': '127.0.0.1',
   'redis.port': '6379/2',

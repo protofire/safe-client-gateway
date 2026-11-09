@@ -19,6 +19,8 @@ import { NetworkModule } from '@/datasources/network/network.module';
 import { RequestScopedLoggingModule } from '@/logging/logging.module';
 import { CsrfGuard } from '@/modules/org/auth/csrf.guard';
 import { OrgAuthModule } from '@/modules/org/auth/org-auth.module';
+import { OrgOidcModule } from '@/modules/org/auth/oidc/oidc.module';
+import { OrgTotpModule } from '@/modules/org/auth/totp/totp.module';
 import { SessionGuard } from '@/modules/org/auth/session.guard';
 import { OrgDatabaseModule } from '@/modules/org/db/org-database.module';
 import { OrgHealthController } from '@/modules/org/health/org-health.controller';
@@ -75,6 +77,8 @@ export class OrgAppModule implements NestModule {
         // static paths (auth, account, invitations) come before any module
         // with /v1/orgs/:orgId routes, or `auth` would be taken for an orgId.
         OrgAuthModule,
+        OrgOidcModule,
+        OrgTotpModule,
       ],
       controllers: [OrgHealthController],
       providers: [

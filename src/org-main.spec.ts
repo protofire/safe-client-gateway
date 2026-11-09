@@ -15,6 +15,8 @@ import { OrgAuthModule } from '@/modules/org/auth/org-auth.module';
 import { SessionGuard } from '@/modules/org/auth/session.guard';
 import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
 import { RateLimiter } from '@/modules/org/common/rate-limiter';
+import { SecurityEvents } from '@/modules/org/auth/security-events';
+import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
 import { ORG_REDIS } from '@/modules/org/auth/nonce.store';
 
 const ping = jest.fn();
@@ -288,6 +290,10 @@ describe('route order', () => {
       .overrideProvider(AuthService)
       .useValue({ me })
       .overrideProvider(RateLimiter)
+      .useValue({})
+      .overrideProvider(SecurityEvents)
+      .useValue({})
+      .overrideProvider(FieldEncryptionService)
       .useValue({})
       .overrideProvider(ORG_REDIS)
       .useValue({ quit: jest.fn() })

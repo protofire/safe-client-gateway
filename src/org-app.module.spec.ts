@@ -27,6 +27,16 @@ Object.assign(process.env, {
   ORG_DB_APP_USERNAME: 'org_app',
   ORG_DB_APP_PASSWORD: 'test-password',
   ORG_PUBLIC_APP_URL: 'https://app.example.com',
+  ORG_ENCRYPTION_KEYS: JSON.stringify({
+    current: 'v1',
+    keys: { v1: Buffer.alloc(32).toString('base64') },
+  }),
+  ORG_EMAIL_HASH_KEY: Buffer.alloc(32).toString('base64'),
+  ORG_OIDC_ISSUER: 'https://idp.example.com/',
+  ORG_OIDC_CLIENT_ID: 'client',
+  ORG_OIDC_CLIENT_SECRET: 'secret',
+  ORG_OIDC_REDIRECT_URI: 'https://api.example.com/v1/orgs/auth/oidc/callback',
+  ORG_OIDC_POST_LOGIN_REDIRECT: 'https://app.example.com/',
 });
 
 const SENTINEL = 'gateway-secret-sentinel';

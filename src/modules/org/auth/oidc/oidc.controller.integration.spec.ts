@@ -1,0 +1,254 @@
+import type request from 'supertest';
+import { OrgOidcModule } from '@/modules/org/auth/oidc/oidc.module';
+import {
+  APP_URL,
+  cookieFrom,
+  createAuthTestApp,
+  type AuthTestApp,
+} from '@/modules/org/auth/__tests__/auth-test-app';
+import {
+  startOidcMock,
+  type OidcMock,
+} from '../../../../../test/org/oidc-mock.server';
+
+const CLIENT_ID = 'test-client';
+const REDIRECT_URI = 'https://api.example.com/v1/orgs/auth/oidc/callback';
+
+describe('OIDC sign-in (org)', () => {
+  let mock: OidcMock;
+  let t: AuthTestApp;
+
+  beforeAll(async () => {
+    mock = await startOidcMock({
+      clientId: CLIENT_ID,
+      clientSecret: 'test-secret',
+    });
+    t = await createAuthTestApp({
+      redisDb: 3,
+      imports: [OrgOidcModule],
+      config: {
+        'org.oidc.issuer': mock.issuer,
+        'org.oidc.clientId': CLIENT_ID,
+        'org.oidc.clientSecret': 'test-secret',
+        'org.oidc.redirectUri': REDIRECT_URI,
+        'org.oidc.postLoginRedirect': `${APP_URL}/`,
+      },
+    });
+  });
+
+  afterAll(async () => {
+    await t?.close();
+    await mock?.close();
+  });
+
+  beforeEach(async () => {
+    mock.setClaims({});
+    await t.reset();
+  });
+
+  type Started = {
+    txCookie: string;
+    code: string;
+    state: string;
+    authorizeUrl: URL;
+  };
+
+  /** Our authorize → the IdP's authorize; returns what the browser holds at the callback. */
+  async function start(
+    query = 'connection=email',
+    email = 'alice@example.com',
+  ): Promise<Started> {
+    const res = await t
+      .http()
+      .get(`/v1/orgs/auth/oidc/authorize?${query}`)
+      .expect(302);
+    const authorizeUrl = new URL(res.headers.location);
+    authorizeUrl.searchParams.set('login_hint', email);
+    const idp = await fetch(authorizeUrl, { redirect: 'manual' });
+    const back = new URL(idp.headers.get('location')!);
+    return {
+      txCookie: cookieFrom(res, 'org_oidc_tx'),
+      code: back.searchParams.get('code')!,
+      state: back.searchParams.get('state')!,
+      authorizeUrl,
+    };
+  }
+
+  function callback(
+    s: Pick<Started, 'code' | 'state'>,
+    cookie?: string,
+  ): request.Test {
+    const req = t
+      .http()
+      .get(
+        `/v1/orgs/auth/oidc/callback?code=${encodeURIComponent(s.code)}&state=${encodeURIComponent(s.state)}`,
+      );
+    return cookie ? req.set('Cookie', cookie) : req;
+  }
+
+  it('redirects to the issuer with PKCE S256, state, nonce, scope and connection, and sets org_oidc_tx', async () => {
+    const res = await t
+      .http()
+      .get('/v1/orgs/auth/oidc/authorize?connection=google-oauth2&returnTo=/x')
+      .expect(302);
+    const url = new URL(res.headers.location);
+    expect(`${url.origin}/`).toBe(mock.issuer);
+    expect(url.pathname).toBe('/authorize');
+    const q = Object.fromEntries(url.searchParams);
+    expect(q).toEqual({
+      response_type: 'code',
+      client_id: CLIENT_ID,
+      redirect_uri: REDIRECT_URI,
+      scope: 'openid email profile',
+      state: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+      nonce: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+      code_challenge: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+      code_challenge_method: 'S256',
+      connection: 'google-oauth2',
+    });
+    const cookie = [res.headers['set-cookie']]
+      .flat()
+      .find((c) => c.startsWith('org_oidc_tx='))!;
+    expect(cookie).toMatch(/; HttpOnly/);
+    expect(cookie).toMatch(/; Secure/);
+    expect(cookie).toMatch(/; SameSite=Lax/);
+    expect(cookie).toMatch(/; Path=\/v1\/orgs\/auth\/oidc;/);
+    expect(cookie).toMatch(/; Max-Age=600;/);
+  });
+
+  it('answers 422 for an unknown connection', async () => {
+    await t
+      .http()
+      .get('/v1/orgs/auth/oidc/authorize?connection=github')
+      .expect(422);
+  });
+
+  it('completes the code flow with the mock issuer and sets a session (amr oidc, not strong)', async () => {
+    const s = await start('connection=email&returnTo=%2Forgs%2Fabc%3Ftab%3D1');
+    const res = await callback(s, s.txCookie).expect(302);
+    expect(res.headers.location).toBe(`${APP_URL}/orgs/abc?tab=1`);
+    const setCookies = [res.headers['set-cookie']].flat();
+    expect(setCookies.find((c) => c.startsWith('org_oidc_tx='))).toMatch(
+      /^org_oidc_tx=;/,
+    );
+    const session = cookieFrom(res, 'org_session');
+
+    const me = await t
+      .http()
+      .get('/v1/orgs/auth/me')
+      .set('Cookie', session)
+      .expect(200);
+    expect(me.body).toEqual({
+      user: { id: expect.any(String) },
+      identities: [
+        {
+          id: expect.any(String),
+          kind: 'oidc',
+          issuer: mock.issuer,
+          email: 'alice@example.com',
+        },
+      ],
+      hasTotp: false,
+      lastStrongAuthAt: null,
+    });
+    const [row] = await t.sql.query(
+      `SELECT s.amr, s.last_strong_auth_at, i.email_encrypted, i.email_hash
+       FROM sessions s JOIN identities i ON i.user_id = s.user_id WHERE s.user_id = $1`,
+      [me.body.user.id],
+    );
+    expect(row.amr).toEqual(['oidc']);
+    expect(row.last_strong_auth_at).toBeNull();
+    expect(row.email_encrypted).not.toContain('alice');
+    expect(row.email_hash).toMatch(/^[0-9a-f]{64}$/);
+    const [event] = await t.sql.query(
+      `SELECT type, payload FROM user_security_events WHERE user_id = $1`,
+      [me.body.user.id],
+    );
+    expect(event).toEqual({ type: 'signed_in', payload: { method: 'oidc' } });
+  });
+
+  it('signs the same identity into the same user and never links another identity by email', async () => {
+    const a = await callback(...withCookie(await start())).expect(302);
+    const b = await callback(...withCookie(await start())).expect(302);
+    const idOf = async (res: request.Response): Promise<string> =>
+      (
+        await t
+          .http()
+          .get('/v1/orgs/auth/me')
+          .set('Cookie', cookieFrom(res, 'org_session'))
+      ).body.user.id;
+    expect(await idOf(b)).toBe(await idOf(a));
+
+    // same verified email, other subject (e.g. Google instead of passwordless)
+    mock.setClaims({ sub: 'google-oauth2|other' });
+    const c = await callback(...withCookie(await start())).expect(302);
+    expect(await idOf(c)).not.toBe(await idOf(a));
+  });
+
+  it('rejects a callback without the org_oidc_tx cookie with 401', async () => {
+    const s = await start();
+    const res = await callback(s).expect(401);
+    expect([res.headers['set-cookie']].flat().join()).not.toMatch(
+      /org_session=[^;]/,
+    );
+  });
+
+  it("rejects a callback replayed in another browser (another browser's cookie) with 401", async () => {
+    const victim = await start();
+    const attacker = await start();
+    await callback(victim, attacker.txCookie).expect(401);
+  });
+
+  it('rejects an unknown state with 401', async () => {
+    const s = await start();
+    await callback({ code: s.code, state: 'not-a-state' }, s.txCookie).expect(
+      401,
+    );
+  });
+
+  it('rejects a reused state with 401', async () => {
+    const s = await start();
+    await callback(s, s.txCookie).expect(302);
+    await callback(s, s.txCookie).expect(401);
+  });
+
+  it('rejects an ID token with email_verified=false', async () => {
+    mock.setClaims({ email_verified: false });
+    await callback(...withCookie(await start())).expect(401);
+  });
+
+  it.each([
+    ['wrong audience', { aud: 'another-client' }],
+    ['wrong issuer', { iss: 'https://evil.example.com/' }],
+    ['wrong nonce', { nonce: 'another-nonce' }],
+    ['expired', { exp: Math.floor(Date.now() / 1000) - 60 }],
+  ])('rejects an ID token with %s', async (_, claims) => {
+    mock.setClaims(claims);
+    await callback(...withCookie(await start())).expect(401);
+  });
+
+  it('rejects an ID token that expired by the injected clock', async () => {
+    const s = await start();
+    t.setOffset(11 * 60_000);
+    // the mock's ID token lives 10 minutes; expiry is judged by the injected clock
+    await callback(s, s.txCookie).expect(401);
+  });
+
+  it.each([
+    '//evil.example.com/x',
+    '/\\evil.example.com',
+    'https://evil.example.com/',
+    'orgs',
+    '/a\r\nSet-Cookie:x=1',
+  ])('falls back to /organizations for returnTo %s', async (returnTo) => {
+    const s = await start(
+      `connection=email&returnTo=${encodeURIComponent(returnTo)}`,
+    );
+    const res = await callback(s, s.txCookie).expect(302);
+    expect(res.headers.location).toBe(`${APP_URL}/organizations`);
+  });
+
+  function withCookie(s: Started): [Started, string] {
+    return [s, s.txCookie];
+  }
+});

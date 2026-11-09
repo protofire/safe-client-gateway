@@ -27,4 +27,9 @@ export class RateLimiter {
     );
     return count <= limit;
   }
+
+  /** Takes back one attempt of `hit`, e.g. a success that should not count. */
+  async refund(key: string, windowSeconds: number): Promise<void> {
+    await this.cache.increment(`ratelimit:${key}`, windowSeconds, 0, -1);
+  }
 }
