@@ -18,6 +18,7 @@ import { CircuitBreakerModule } from '@/datasources/circuit-breaker/circuit-brea
 import { NetworkModule } from '@/datasources/network/network.module';
 import { RequestScopedLoggingModule } from '@/logging/logging.module';
 import { ActivityModule } from '@/modules/org/activity/activity.module';
+import { AddressBookModule } from '@/modules/org/address-book/address-book.module';
 import { CsrfGuard } from '@/modules/org/auth/csrf.guard';
 import { OrgAuthModule } from '@/modules/org/auth/org-auth.module';
 import { SessionGuard } from '@/modules/org/auth/session.guard';
@@ -77,6 +78,7 @@ export class OrgAppModule implements NestModule {
         // with /v1/orgs/:orgId routes, or `auth` would be taken for an orgId.
         OrgAuthModule,
         ActivityModule,
+        AddressBookModule,
       ],
       controllers: [OrgHealthController],
       providers: [
