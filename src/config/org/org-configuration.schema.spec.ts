@@ -50,6 +50,23 @@ describe('OrgConfigurationSchema', () => {
     }
   });
 
+  it('refuses ORG_MAIL_LOG_LINKS=true in production only', () => {
+    const env: Record<string, string> = {
+      ...validEnv(),
+      ORG_MAIL_LOG_LINKS: 'true',
+    };
+
+    expect(OrgConfigurationSchema.safeParse(env).success).toBe(true);
+    for (const flag of [
+      { NODE_ENV: 'production' },
+      { CGW_ENV: 'production' },
+    ]) {
+      expect(
+        OrgConfigurationSchema.safeParse({ ...env, ...flag }).success,
+      ).toBe(false);
+    }
+  });
+
   it('accepts a config without JWT_SECRET, AUTH_TOKEN, RELAY_* and POSTGRES_*', () => {
     const env = validEnv();
     for (const name of Object.keys(env)) {

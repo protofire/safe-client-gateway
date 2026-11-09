@@ -16,7 +16,7 @@ export class MailService {
   private readonly apiKey: string | undefined;
   private readonly from: string | undefined;
   private readonly baseUrl: string | undefined;
-  private readonly isDevelopment: boolean;
+  private readonly logLinks: boolean;
 
   constructor(
     @Inject(NetworkService) private readonly network: INetworkService,
@@ -26,14 +26,13 @@ export class MailService {
     this.apiKey = config.get<string>('org.mail.apiKey') || undefined;
     this.from = config.get<string>('org.mail.from');
     this.baseUrl = config.get<string>('org.mail.baseUrl');
-    this.isDevelopment =
-      config.get<boolean>('application.isDevelopment') === true;
+    this.logLinks = config.get<boolean>('org.mail.logLinks') === true;
   }
 
   async sendInvite(to: string, mail: InviteMail): Promise<void> {
     if (!this.apiKey) {
-      // the URL carries the invitation token: logged in development only
-      if (!this.isDevelopment) {
+      // the URL carries the invitation token: logged only on explicit opt-in (ORG_MAIL_LOG_LINKS, never in production)
+      if (!this.logLinks) {
         throw new Error('org mail is not configured (ORG_MAIL_API_KEY)');
       }
       this.logger.info(

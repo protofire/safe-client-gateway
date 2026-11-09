@@ -9,13 +9,13 @@ const mail = {
   acceptUrl: 'https://app.example.com/organizations/invite#token=secret-token',
 };
 
-function service(isDevelopment: unknown): {
+function service(logLinks: unknown): {
   mail: MailService;
   logger: jest.Mocked<ILoggingService>;
 } {
   const config = {
     get: (k: string): unknown =>
-      k === 'application.isDevelopment' ? isDevelopment : undefined,
+      k === 'org.mail.logLinks' ? logLinks : undefined,
   } as unknown as IConfigurationService;
   const logger = {
     info: jest.fn(),
@@ -28,7 +28,7 @@ function service(isDevelopment: unknown): {
 }
 
 describe('MailService without an API key', () => {
-  it('logs the accept URL only when application.isDevelopment is true', async () => {
+  it('logs the accept URL only when org.mail.logLinks is true', async () => {
     const { mail: m, logger } = service(true);
     await m.sendInvite('a@example.com', mail);
     expect(logger.info).toHaveBeenCalledWith(
@@ -37,7 +37,7 @@ describe('MailService without an API key', () => {
   });
 
   it.each([false, undefined, 'true'])(
-    'never logs the token and reports mail as not configured (isDevelopment %p)',
+    'never logs the token and reports mail as not configured (logLinks %p)',
     async (flag) => {
       const { mail: m, logger } = service(flag);
       await expect(m.sendInvite('a@example.com', mail)).rejects.toThrow(

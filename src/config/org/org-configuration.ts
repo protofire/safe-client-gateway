@@ -65,6 +65,11 @@ export default () => ({
       apiKey: process.env.ORG_MAIL_API_KEY,
       from: process.env.ORG_MAIL_FROM,
       baseUrl: process.env.ORG_MAIL_BASE_URL,
+      // opt-in; the schema refuses it in production, the guard here is defence in depth
+      logLinks:
+        flag('ORG_MAIL_LOG_LINKS') &&
+        process.env.NODE_ENV !== 'production' &&
+        process.env.CGW_ENV !== 'production',
     },
   },
   // ---- keys read by reused gateway modules ----

@@ -113,6 +113,8 @@ export const OrgConfigurationSchema = z
 
     // Optional outside production: without it the invite link is logged instead of mailed
     ORG_MAIL_API_KEY: z.string().min(1).optional(),
+    // Opt-in: log the invite link (carries the token) when no API key is set; refused in production
+    ORG_MAIL_LOG_LINKS: z.enum(['true', 'false']).optional(),
     ORG_MAIL_FROM: z.string().min(1),
     ORG_MAIL_BASE_URL: url,
 
@@ -132,6 +134,13 @@ export const OrgConfigurationSchema = z
         code: 'custom',
         path: ['ORG_MAIL_API_KEY'],
         message: 'Required in production',
+      });
+    }
+    if (production && env.ORG_MAIL_LOG_LINKS === 'true') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['ORG_MAIL_LOG_LINKS'],
+        message: 'Must not be true in production (logs invitation tokens)',
       });
     }
   })
