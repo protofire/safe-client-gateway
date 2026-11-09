@@ -18,6 +18,7 @@ import { CircuitBreakerModule } from '@/datasources/circuit-breaker/circuit-brea
 import { NetworkModule } from '@/datasources/network/network.module';
 import { RequestScopedLoggingModule } from '@/logging/logging.module';
 import { ActivityModule } from '@/modules/org/activity/activity.module';
+import { AddressBookModule } from '@/modules/org/address-book/address-book.module';
 import { CsrfGuard } from '@/modules/org/auth/csrf.guard';
 import { ORG_KEY_PREFIX } from '@/modules/org/auth/nonce.store';
 import { OrgAuthModule } from '@/modules/org/auth/org-auth.module';
@@ -84,6 +85,7 @@ export class OrgAppModule implements NestModule {
         OrgTotpModule,
         ActivityModule,
         SafesModule,
+        AddressBookModule,
       ],
       controllers: [OrgHealthController],
       providers: [
