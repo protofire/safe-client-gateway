@@ -9,6 +9,11 @@ import { configureOrgApp } from '@/org-main';
 import { OrgHealthController } from '@/modules/org/health/org-health.controller';
 import { getDataSourceToken } from '@nestjs/typeorm';
 import { ORG_DATA_SOURCE } from '@/modules/org/db/org-data-source';
+import { AuthService } from '@/modules/org/auth/auth.service';
+import { OrgAuthModule } from '@/modules/org/auth/org-auth.module';
+import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
+import { RateLimiter } from '@/modules/org/common/rate-limiter';
+import { ORG_REDIS } from '@/modules/org/auth/nonce.store';
 
 const ping = jest.fn();
 const dbQuery = jest.fn();
@@ -226,10 +231,85 @@ describe('configureOrgApp', () => {
 
     expect(res.headers['access-control-allow-origin']).toBe(PUBLIC_APP_URL);
   });
+});
 
-  // Placeholder: no auth/account controllers exist yet (Task 4+). Replace with
-  // GET /v1/orgs/auth/me and DELETE /v1/orgs/account reaching their own handlers.
-  it.todo('registers static controllers before :orgId routes');
+// An /v1/orgs/:orgId/... route that would swallow /v1/orgs/auth/me if it were
+// registered first
+@Controller({ path: 'orgs', version: '1' })
+class OrgIdStubController {
+  @Get(':orgId/:resource')
+  get(): { leaked: boolean } {
+    return { leaked: true };
+  }
+}
+
+@Module({ controllers: [OrgIdStubController] })
+class OrgIdStubModule {}
+
+describe('route order', () => {
+  // Same order as OrgAppModule: OrgAuthModule before any :orgId module
+  it('GET /v1/orgs/auth/me reaches its own handler, not /v1/orgs/:orgId/:resource', async () => {
+    const session = {
+      id: 'session-1',
+      userId: 'user-1',
+      amr: ['siwe'],
+      lastStrongAuthAt: null,
+      updatedAt: new Date(),
+    };
+    const me = jest.fn().mockResolvedValue({ user: { id: 'user-1' } });
+    const config: Record<string, unknown> = {
+      'org.trustProxyHops': 1,
+      'org.publicAppUrl': PUBLIC_APP_URL,
+      'express.jsonLimit': '1mb',
+      'org.session.idleTtlSeconds': 3600,
+      'org.session.strongAuthWindowSeconds': 1800,
+    };
+    @Global()
+    @Module({
+      providers: [
+        {
+          provide: IConfigurationService,
+          useValue: { getOrThrow: (k: string): unknown => config[k] },
+        },
+      ],
+      exports: [IConfigurationService],
+    })
+    class ConfigStubModule {}
+
+    const moduleRef = await Test.createTestingModule({
+      imports: [ConfigStubModule, OrgAuthModule, OrgIdStubModule],
+    })
+      .overrideProvider(SessionsRepository)
+      .useValue({ findActive: jest.fn().mockResolvedValue(session) })
+      .overrideProvider(AuthService)
+      .useValue({ me })
+      .overrideProvider(RateLimiter)
+      .useValue({})
+      .overrideProvider(ORG_REDIS)
+      .useValue({ quit: jest.fn() })
+      .compile();
+    const app = moduleRef.createNestApplication<NestExpressApplication>();
+    configureOrgApp(app);
+    await app.init();
+    try {
+      await request(app.getHttpServer())
+        .get('/v1/orgs/auth/me')
+        .set('Cookie', 'org_session=token')
+        .expect(200)
+        .expect({ user: { id: 'user-1' } });
+      expect(me).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user-1', sessionId: 'session-1' }),
+      );
+      // the stub is mounted and reachable for real org ids
+      await request(app.getHttpServer())
+        .get('/v1/orgs/7d3e/members')
+        .set('Cookie', 'org_session=token')
+        .expect(200)
+        .expect({ leaked: true });
+    } finally {
+      await app.close();
+    }
+  });
 });
 
 describe('configureOrgApp trust proxy', () => {
