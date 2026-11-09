@@ -16,9 +16,11 @@ import { CacheModule } from '@/datasources/cache/cache.module';
 import { CircuitBreakerModule } from '@/datasources/circuit-breaker/circuit-breaker.module';
 import { NetworkModule } from '@/datasources/network/network.module';
 import { RequestScopedLoggingModule } from '@/logging/logging.module';
+import { OrgAuthModule } from '@/modules/org/auth/org-auth.module';
 import { OrgDatabaseModule } from '@/modules/org/db/org-database.module';
 import { OrgHealthController } from '@/modules/org/health/org-health.controller';
 import { GlobalErrorFilter } from '@/routes/common/filters/global-error.filter';
+import { ZodErrorFilter } from '@/routes/common/filters/zod-error.filter';
 
 export const ORG_CACHE_KEY_PREFIX = 'org:';
 
@@ -50,9 +52,16 @@ export class OrgAppModule implements NestModule {
         NetworkModule,
         OrgDatabaseModule,
         RequestScopedLoggingModule,
+        // Route modules. Express matches in registration order: modules with
+        // static paths (auth, account, invitations) come before any module
+        // with /v1/orgs/:orgId routes, or `auth` would be taken for an orgId.
+        OrgAuthModule,
       ],
       controllers: [OrgHealthController],
-      providers: [{ provide: APP_FILTER, useClass: GlobalErrorFilter }],
+      providers: [
+        { provide: APP_FILTER, useClass: GlobalErrorFilter },
+        { provide: APP_FILTER, useClass: ZodErrorFilter },
+      ],
     };
   }
 

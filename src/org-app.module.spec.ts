@@ -25,6 +25,7 @@ Object.assign(process.env, {
   ORG_DB_NAME: 'org',
   ORG_DB_APP_USERNAME: 'org_app',
   ORG_DB_APP_PASSWORD: 'test-password',
+  ORG_PUBLIC_APP_URL: 'https://app.example.com',
 });
 
 const SENTINEL = 'gateway-secret-sentinel';
