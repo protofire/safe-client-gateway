@@ -5,6 +5,10 @@ const flag = (name: string): boolean =>
   process.env[name]?.toLowerCase() === 'true';
 
 /**
+ * Secrets read by reused gateway code, besides the ORG_* ones (allowlist):
+ * TX_SERVICE_API_KEY, ETHERSCAN_API_KEY, ORG_PRICES_PROVIDER_API_KEY and the
+ * BLOCKLIST_* values. Nothing else, in particular not ZERION_API_KEY.
+ *
  * Configuration of cgw-org. Every key is read from an ORG_* variable (or a
  * shared compliance variable), never from the gateway's secrets. The `redis`,
  * `circuitBreaker`, `httpClient`, `log` ... keys below exist because reused
@@ -139,7 +143,7 @@ export default () => ({
       },
       // Zerion stays off (features.zerionBalancesEnabled); the keys exist because the reused module reads them
       zerion: {
-        apiKey: process.env.ZERION_API_KEY,
+        apiKey: undefined, // Zerion is disabled: its key is never read
         baseUri: process.env.ZERION_BASE_URI || 'https://api.zerion.io',
         currencies: [
           'USD',

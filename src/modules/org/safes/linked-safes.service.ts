@@ -7,6 +7,7 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { getAddress, type Address } from 'viem';
+import { DataSourceError } from '@/domain/errors/data-source.error';
 import { ActivityLog } from '@/modules/org/activity/activity-log.service';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
@@ -50,7 +51,14 @@ export class LinkedSafesService {
     let isSafe: boolean;
     try {
       isSafe = await this.safes.isSafe({ chainId: input.chainId, address });
-    } catch {
+    } catch (error) {
+      if (error instanceof DataSourceError && error.code === 404) {
+        throw new UnprocessableEntityException({
+          statusCode: 422,
+          message: 'This chain is not supported',
+          code: 'unknown_chain',
+        });
+      }
       throw new BadGatewayException('Could not verify the Safe on this chain');
     }
     if (!isSafe) {

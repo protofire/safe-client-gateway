@@ -27,7 +27,7 @@ import {
 } from '@/modules/org/safes/overview.service';
 
 const LinkSchema = z.object({
-  chainId: z.string().regex(/^\d{1,20}$/),
+  chainId: z.string().regex(/^[1-9]\d{0,19}$/),
   address: z.string().refine((v) => isAddress(v, { strict: false })),
   label: z.string().trim().min(1).max(64).optional(),
 });

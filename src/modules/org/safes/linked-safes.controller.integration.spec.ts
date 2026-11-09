@@ -16,6 +16,7 @@ import {
   type RedisClientType,
 } from '@/datasources/cache/cache.module';
 import { LoggingService } from '@/logging/logging.interface';
+import { DataSourceError } from '@/domain/errors/data-source.error';
 import { IBalancesRepository } from '@/modules/balances/domain/balances.repository.interface';
 import { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
 import { ActivityLog } from '@/modules/org/activity/activity-log.service';
@@ -30,7 +31,10 @@ import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import { PermissionsModule } from '@/modules/org/permissions/permissions.module';
 import { LinkedSafesController } from '@/modules/org/safes/linked-safes.controller';
 import { LinkedSafesService } from '@/modules/org/safes/linked-safes.service';
-import { OverviewService } from '@/modules/org/safes/overview.service';
+import {
+  OVERVIEW_SAFE_TIMEOUT_MS,
+  OverviewService,
+} from '@/modules/org/safes/overview.service';
 import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
 import { ORG_APP_GUARDS } from '@/org-app.module';
 import { configureOrgApp } from '@/org-main';
@@ -248,6 +252,7 @@ describe('linked Safes and overview', () => {
         FieldEncryptionService,
         LinkedSafesService,
         OverviewService,
+        { provide: OVERVIEW_SAFE_TIMEOUT_MS, useValue: 300 },
         { provide: ISafeRepository, useValue: safeRepo },
         { provide: IBalancesRepository, useValue: balancesRepo },
         { provide: IChainsRepository, useValue: chainsRepo },
@@ -386,6 +391,17 @@ describe('linked Safes and overview', () => {
     await post(`/v1/orgs/${orgA}/safes`, member)
       .send({ chainId: '1', address: SAFE_A })
       .expect(403);
+  });
+
+  it('answers 422 unknown_chain when the chain is not in the config service, and rejects leading zeros', async () => {
+    safeRepo.isSafe.mockRejectedValue(new DataSourceError('Not found', 404));
+    const res = await post(`/v1/orgs/${orgA}/safes`, admin)
+      .send({ chainId: '999999', address: SAFE_A })
+      .expect(422);
+    expect(res.body.code).toBe('unknown_chain');
+    await post(`/v1/orgs/${orgA}/safes`, admin)
+      .send({ chainId: '01', address: SAFE_A })
+      .expect(400);
   });
 
   it('unlink requires strong auth', async () => {
@@ -601,6 +617,59 @@ describe('linked Safes and overview', () => {
         expect.objectContaining({ fiatCode: 'USD' }),
       );
       await overview('xyz').expect(400);
+    });
+
+    it('does not 400 when the fiat code list is empty or unavailable', async () => {
+      await link(orgA, admin, SAFE_A);
+      balancesRepo.getFiatCodes.mockResolvedValue([]);
+      await overview('usd').expect(200);
+      expect(balancesRepo.getBalances).toHaveBeenCalledWith(
+        expect.objectContaining({ fiatCode: 'USD' }),
+      );
+      balancesRepo.getFiatCodes.mockRejectedValue(new Error('provider down'));
+      await overview('usd').expect(200);
+    });
+
+    it('excludes transactions that already have enough confirmations (2-of-3)', async () => {
+      await link(orgA, admin, SAFE_A);
+      safeRepo.getSafe.mockResolvedValue({
+        owners: [admin.wallet, addr(8), addr(9)],
+        threshold: 2,
+      });
+      safeRepo.getTransactionQueue.mockImplementation(
+        queueOf(2, (n) =>
+          n === 0 ? tx(n, [addr(8), addr(9)]) : tx(n, [addr(8)]),
+        ),
+      );
+      const res = await overview().expect(200);
+      expect(
+        (res.body.awaitingMySignature as Array<{ nonce: number }>).map(
+          (a) => a.nonce,
+        ),
+      ).toEqual([1]);
+      expect(res.body.safes[0]).toMatchObject({
+        queuedCount: 2,
+        awaitingMySignature: 1,
+      });
+    });
+
+    it('marks a Safe unavailable after the per-Safe deadline and returns the others', async () => {
+      const okId = await link(orgA, admin, SAFE_A);
+      const slowId = await link(orgA, admin, SAFE_B);
+      balancesRepo.getBalances.mockImplementation(({ safeAddress }) =>
+        safeAddress === SAFE_B
+          ? new Promise(() => undefined)
+          : Promise.resolve([{ fiatBalance: '1' }]),
+      );
+      const started = Date.now();
+      const res = await overview().expect(200);
+      expect(Date.now() - started).toBeLessThan(3000);
+      expect(res.body.unavailableSafeIds).toEqual([slowId]);
+      expect(res.body.complete).toBe(false);
+      expect(res.body.totals).toEqual({ fiatTotal: '1', partial: true });
+      expect(
+        (res.body.safes as Array<{ id: string }>).find((s) => s.id === okId),
+      ).toMatchObject({ fiatTotal: '1' });
     });
 
     it('a member of another org gets 404', async () => {
