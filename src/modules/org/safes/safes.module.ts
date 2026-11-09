@@ -4,6 +4,7 @@ import { ChainsModule } from '@/modules/chains/chains.module';
 import { SafeRepositoryModule } from '@/modules/safe/domain/safe.repository.interface';
 import { ActivityModule } from '@/modules/org/activity/activity.module';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
+import { PermissionsModule } from '@/modules/org/permissions/permissions.module';
 import { LinkedSafesController } from '@/modules/org/safes/linked-safes.controller';
 import { LinkedSafesService } from '@/modules/org/safes/linked-safes.service';
 import { OverviewService } from '@/modules/org/safes/overview.service';
@@ -15,7 +16,7 @@ import { OverviewService } from '@/modules/org/safes/overview.service';
  * them unreachable.
  */
 @Module({
-  imports: [ActivityModule, BalancesModule, ChainsModule, SafeRepositoryModule],
+  imports: [ActivityModule, PermissionsModule, BalancesModule, ChainsModule, SafeRepositoryModule],
   controllers: [LinkedSafesController],
   providers: [OrgTransaction, LinkedSafesService, OverviewService],
 })

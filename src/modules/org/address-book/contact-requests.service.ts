@@ -121,7 +121,7 @@ export class ContactRequestsService {
     actor: Actor,
   ): Promise<ContactRequest> {
     return this.tx.runInOrgTx(async (em) => {
-      await this.contacts.lockOrg(em, orgId);
+      await this.contacts.lockOrg(em, orgId, actor.userId, 'addressbook.request');
       // The FK cannot enforce the org (FKs bypass RLS): look the contact up
       // through the org-scoped query, which answers 404 for another org's id.
       const contactId = input.action === 'create' ? null : input.contactId;
@@ -185,7 +185,7 @@ export class ContactRequestsService {
 
   approve(orgId: string, id: string, actor: Actor): Promise<ContactRequest> {
     return this.tx.runInOrgTx(async (em) => {
-      await this.contacts.lockOrg(em, orgId);
+      await this.contacts.lockOrg(em, orgId, actor.userId, 'addressbook.review');
       const req = await this.lockPending(em, orgId, id);
       let result: Pick<Contact, 'name' | 'address'>;
       if (req.action === 'create') {
@@ -230,7 +230,7 @@ export class ContactRequestsService {
 
   reject(orgId: string, id: string, actor: Actor): Promise<ContactRequest> {
     return this.tx.runInOrgTx(async (em) => {
-      await this.contacts.lockOrg(em, orgId);
+      await this.contacts.lockOrg(em, orgId, actor.userId, 'addressbook.review');
       const req = await this.lockPending(em, orgId, id);
       let subject: { name?: string; address?: string } = req.payload;
       if (req.action !== 'create') {

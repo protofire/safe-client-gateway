@@ -54,6 +54,8 @@ export async function createAuthTestApp(args: {
   redisDb: number;
   config?: Record<string, unknown>;
   imports?: Array<Type | DynamicModule>;
+  /** Extra options for the app DataSource (e.g. a small pg pool). */
+  dataSource?: Partial<PostgresConnectionOptions>;
 }): Promise<AuthTestApp> {
   const config: Record<string, unknown> = {
     'org.trustProxyHops': 1,
@@ -126,6 +128,7 @@ export async function createAuthTestApp(args: {
       CacheModule.register(prefix),
       TypeOrmModule.forRoot({
         ...(db.app().options as PostgresConnectionOptions),
+        ...args.dataSource,
         name: ORG_DATA_SOURCE,
       }),
       OrgAuthModule,

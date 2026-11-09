@@ -7,8 +7,10 @@ import {
   conflict,
   lockOrgs,
   mapLastAdmin,
+  recheckPermission,
 } from '@/modules/org/orgs/org-lock';
 import type { Actor } from '@/modules/org/orgs/parse';
+import { PermissionResolver } from '@/modules/org/permissions/permission.resolver';
 import { PERMISSIONS } from '@/modules/org/permissions/permissions';
 
 export const MAX_ORGS_PER_USER = 10;
@@ -61,6 +63,7 @@ export class OrgsService {
   constructor(
     private readonly tx: OrgTransaction,
     private readonly activity: ActivityLog,
+    private readonly resolver: PermissionResolver,
     @Inject(Clock) private readonly clock: IClock,
   ) {}
 
@@ -100,8 +103,8 @@ export class OrgsService {
   }
 
   /**
-   * Orgs where the caller is active, plus pending invitations matching one
-   * of their identities (wallet address or verified OIDC email). With
+   * Orgs where the caller is active, plus pending wallet invitations to one
+   * of their wallets. With
    * `includeDeleted`, also deleted orgs where they hold `org.delete`.
    */
   async list(userId: string, includeDeleted: boolean): Promise<Array<OrgListItem>> {
@@ -127,8 +130,9 @@ export class OrgsService {
          JOIN members m ON m.id = i.member_id AND m.status = 'invited'
          JOIN organizations o ON o.id = i.org_id AND o.status = 'active'
          WHERE i.accepted_at IS NULL AND i.declined_at IS NULL AND i.expires_at > $3
-           AND (i.target_wallet IN (SELECT wallet_address FROM identities WHERE user_id = $1 AND kind = 'wallet')
-             OR i.target_email_hash IN (SELECT email_hash FROM identities WHERE user_id = $1 AND kind = 'oidc'))
+           -- only wallet invitations, the ones answerable by org id (A9);
+           -- email invitations are answered with the mailed token
+           AND i.target_wallet IN (SELECT wallet_address FROM identities WHERE user_id = $1 AND kind = 'wallet')
            AND NOT EXISTS (SELECT 1 FROM members x WHERE x.org_id = o.id AND x.user_id = $1 AND x.status = 'active')
          ORDER BY name, id`,
         [userId, includeDeleted, this.clock.now()],
@@ -160,6 +164,7 @@ export class OrgsService {
   async rename(orgId: string, name: string, by: Actor): Promise<OrgView> {
     return this.tx.runInOrgTx(async (em) => {
       await lockOrgs(em, [orgId]);
+      await recheckPermission(this.resolver, em, orgId, by.userId, 'org.update');
       const [before]: Array<{ name: string }> = await em.query(
         `SELECT name FROM organizations WHERE id = $1 AND status = 'active'`,
         [orgId],
@@ -190,6 +195,7 @@ export class OrgsService {
     const now = this.clock.now();
     return this.tx.runInOrgTx(async (em) => {
       await lockOrgs(em, [orgId]);
+      await recheckPermission(this.resolver, em, orgId, by.userId, 'org.delete');
       const [[org]]: [Array<OrgView>, number] = await em.query(
         `UPDATE organizations
          SET status = 'deleted', deleted_at = $2, purge_after = $3, updated_at = $2
@@ -231,6 +237,11 @@ export class OrgsService {
         ) {
           throw new NotFoundException();
         }
+        await recheckPermission(this.resolver, em, orgId, by.userId, 'org.delete', {
+          allowDeleted: true,
+        });
+        // the restored org counts again towards the admin's org limit
+        await assertOrgLimit(em, by.userId);
         const [[org]]: [Array<OrgView>, number] = await em.query(
           `UPDATE organizations
            SET status = 'active', deleted_at = NULL, purge_after = NULL, updated_at = $2

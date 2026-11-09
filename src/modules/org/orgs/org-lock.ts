@@ -1,5 +1,14 @@
-import { ConflictException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import type { EntityManager } from 'typeorm';
+import type {
+  EffectivePermissions,
+  PermissionResolver,
+} from '@/modules/org/permissions/permission.resolver';
+import type { Permission } from '@/modules/org/permissions/permissions';
 
 const DEADLOCK = '40P01';
 const CHECK_VIOLATION = '23514';
@@ -22,6 +31,34 @@ export async function lockOrgs(
     [orgIds],
   );
   return rows.map((r) => r.id);
+}
+
+/**
+ * After taking the org lock: the guard checked the permission before the
+ * wait, a concurrent change may have revoked it since. Runs on the
+ * transaction's `em` (no second pool connection while the lock is held).
+ * 404 if the caller is no longer an active member of a live org (deleted
+ * orgs only with `allowDeleted`), 403 if the permission is gone.
+ */
+export async function recheckPermission(
+  resolver: PermissionResolver,
+  em: Pick<EntityManager, 'query'>,
+  orgId: string,
+  userId: string,
+  permission: Permission,
+  opts: { allowDeleted?: boolean; deferForbidden?: boolean } = {},
+): Promise<EffectivePermissions> {
+  const effective = await resolver.effective(orgId, userId, em);
+  if (
+    !effective ||
+    (effective.orgStatus !== 'active' && !opts.allowDeleted)
+  ) {
+    throw new NotFoundException();
+  }
+  if (!opts.deferForbidden && !effective.permissions.includes(permission)) {
+    throw new ForbiddenException();
+  }
+  return effective;
 }
 
 export function lastAdminConflict(): ConflictException {

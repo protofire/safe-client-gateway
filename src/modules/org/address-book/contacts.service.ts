@@ -16,6 +16,9 @@ import {
 } from '@/modules/org/address-book/contacts.schemas';
 import { parseSafeAddressBookCsv } from '@/modules/org/address-book/safe-csv.parser';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
+import { recheckPermission } from '@/modules/org/orgs/org-lock';
+import { PermissionResolver } from '@/modules/org/permissions/permission.resolver';
+import type { Permission } from '@/modules/org/permissions/permissions';
 
 type Row = {
   id: string;
@@ -50,6 +53,7 @@ export class ContactsService {
   constructor(
     private readonly tx: OrgTransaction,
     private readonly log: ActivityLog,
+    private readonly resolver: PermissionResolver,
   ) {}
 
   list(
@@ -115,7 +119,7 @@ export class ContactsService {
 
   create(orgId: string, input: ContactInput, actor: Actor): Promise<Contact> {
     return this.tx.runInOrgTx(async (em) => {
-      await this.lockOrg(em, orgId);
+      await this.lockOrg(em, orgId, actor.userId, 'addressbook.write');
       const c = await this.insert(em, orgId, input);
       await this.event(em, orgId, 'contact.created', c, actor);
       return c;
@@ -129,7 +133,7 @@ export class ContactsService {
     actor: Actor,
   ): Promise<Contact> {
     return this.tx.runInOrgTx(async (em) => {
-      await this.lockOrg(em, orgId);
+      await this.lockOrg(em, orgId, actor.userId, 'addressbook.write');
       const c = await this.applyUpdate(em, orgId, id, patch);
       await this.event(em, orgId, 'contact.updated', c, actor);
       return c;
@@ -138,7 +142,7 @@ export class ContactsService {
 
   remove(orgId: string, id: string, actor: Actor): Promise<void> {
     return this.tx.runInOrgTx(async (em) => {
-      await this.lockOrg(em, orgId);
+      await this.lockOrg(em, orgId, actor.userId, 'addressbook.write');
       const c = await this.applyDelete(em, orgId, id);
       await this.event(em, orgId, 'contact.deleted', c, actor);
     }, orgId);
@@ -177,7 +181,7 @@ export class ContactsService {
       byAddress.set(key, g);
     }
     return this.tx.runInOrgTx(async (em) => {
-      await this.lockOrg(em, orgId);
+      await this.lockOrg(em, orgId, actor.userId, 'addressbook.write');
       const rows: Array<{ id: string; address: string }> = await em.query(
         `SELECT id, address::text AS address FROM contacts WHERE org_id = $1`,
         [orgId],
@@ -241,10 +245,17 @@ export class ContactsService {
    * there is one global order). Serialises writers per org, so the limit and
    * uniqueness checks cannot race.
    */
-  async lockOrg(em: EntityManager, orgId: string): Promise<void> {
+  async lockOrg(
+    em: EntityManager,
+    orgId: string,
+    userId: string,
+    permission: Permission,
+  ): Promise<void> {
     await em.query(`SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE`, [
       orgId,
     ]);
+    // the guard checked before the lock wait; a concurrent demotion may have happened since
+    await recheckPermission(this.resolver, em, orgId, userId, permission);
   }
 
   async find(em: EntityManager, orgId: string, id: string): Promise<Contact> {

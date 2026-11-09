@@ -3,9 +3,10 @@ import { ActivityModule } from '@/modules/org/activity/activity.module';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import { OrgsController } from '@/modules/org/orgs/orgs.controller';
 import { OrgsService } from '@/modules/org/orgs/orgs.service';
+import { PermissionsModule } from '@/modules/org/permissions/permissions.module';
 
 @Module({
-  imports: [ActivityModule],
+  imports: [ActivityModule, PermissionsModule],
   controllers: [OrgsController],
   providers: [OrgsService, OrgTransaction],
 })

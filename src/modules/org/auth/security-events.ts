@@ -14,8 +14,8 @@ export type SecurityEventType = Extract<
 
 /**
  * User-scoped security events (`user_security_events`, amendment A3); the IP
- * is stored encrypted. Each event is also written to the activity log of
- * every active org where the user is an active member.
+ * is stored encrypted. Each event except sign-in is also written to the
+ * activity log of every active org where the user is an active member.
  */
 @Injectable()
 export class SecurityEvents {
@@ -33,7 +33,8 @@ export class SecurityEvents {
     userAgent?: string | null,
   ): Promise<void> {
     // One statement, so the user event and its copy in every org where the
-    // user is an active member commit together (Task 8 fan-out).
+    // user is an active member commit together. Sign-ins stay per user
+    // (plan Task 7); step-up and factor changes are fanned out.
     await this.db.query(
       `WITH event AS (
          INSERT INTO user_security_events (user_id, type, payload, ip_encrypted, user_agent, created_at)
@@ -43,7 +44,8 @@ export class SecurityEvents {
        SELECT m.org_id, e.user_id, e.type, e.payload, e.ip_encrypted, e.user_agent, e.created_at
        FROM event e
        JOIN members m ON m.user_id = e.user_id AND m.status = 'active'
-       JOIN organizations o ON o.id = m.org_id AND o.status = 'active'`,
+       JOIN organizations o ON o.id = m.org_id AND o.status = 'active'
+       WHERE e.type <> 'security.signed_in'`,
       [
         userId,
         type,

@@ -434,7 +434,7 @@ describe('route order of static org routes', () => {
       .overrideProvider(SessionsRepository)
       .useValue({ findActive: jest.fn().mockResolvedValue(session) })
       .overrideProvider(AuthService)
-      .useValue({})
+      .useValue({ stepUpMethods: jest.fn().mockResolvedValue(['siwe']) })
       .overrideProvider(RateLimiter)
       .useValue({})
       .overrideProvider(SecurityEvents)

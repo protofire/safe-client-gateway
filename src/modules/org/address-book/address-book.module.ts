@@ -5,9 +5,10 @@ import { ContactRequestsService } from '@/modules/org/address-book/contact-reque
 import { ContactsController } from '@/modules/org/address-book/contacts.controller';
 import { ContactsService } from '@/modules/org/address-book/contacts.service';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
+import { PermissionsModule } from '@/modules/org/permissions/permissions.module';
 
 @Module({
-  imports: [ActivityModule],
+  imports: [ActivityModule, PermissionsModule],
   controllers: [ContactsController],
   providers: [
     ContactsService,

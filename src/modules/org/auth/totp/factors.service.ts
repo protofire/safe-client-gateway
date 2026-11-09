@@ -196,6 +196,14 @@ export class FactorsService {
       await this.lockUser(em, userId);
       await em.query(`DELETE FROM factors WHERE user_id = $1`, [userId]);
       await em.query(`DELETE FROM recovery_codes WHERE user_id = $1`, [userId]);
+      // without a wallet the user has no strong factor left: this session is
+      // no longer strong either (gate B F6)
+      await em.query(
+        `UPDATE sessions SET last_strong_auth_at = NULL
+         WHERE id = $1 AND NOT EXISTS (
+           SELECT 1 FROM identities WHERE user_id = $2 AND kind = 'wallet')`,
+        [session.sessionId, userId],
+      );
       await this.sessions.revokeOthers(
         userId,
         session.sessionId,

@@ -6,6 +6,7 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import type { EntityManager } from 'typeorm';
 import { IConfigurationService } from '@/config/configuration.service.interface';
@@ -36,7 +37,11 @@ import {
   toMemberView,
   type MemberView,
 } from '@/modules/org/members/members.service';
-import { conflict, lockOrgs } from '@/modules/org/orgs/org-lock';
+import {
+  conflict,
+  lockOrgs,
+  recheckPermission,
+} from '@/modules/org/orgs/org-lock';
 import { assertOrgLimit } from '@/modules/org/orgs/orgs.service';
 import type { Actor } from '@/modules/org/orgs/parse';
 import { PermissionResolver } from '@/modules/org/permissions/permission.resolver';
@@ -294,6 +299,14 @@ export class InvitationsService {
         ? await em.query(`SELECT status FROM organizations WHERE id = $1`, [org])
         : [{ status: 'gone' }];
       if (status !== 'active') throw invalidInvitation();
+      // The caller's account may have been deleted while we waited; the row
+      // lock also makes a later account deletion wait for this commit, after
+      // which it deletes the new membership too.
+      const [caller]: Array<{ status: string }> = await em.query(
+        `SELECT status FROM users WHERE id = $1 FOR NO KEY UPDATE`,
+        [by.userId],
+      );
+      if (caller?.status !== 'active') throw new UnauthorizedException();
 
       // A9: single use, decided under the org lock by this conditional update
       const [[claimed]]: [Array<{ id: string }>, number] = await em.query(
@@ -356,6 +369,8 @@ export class InvitationsService {
            JOIN members m ON m.id = i.member_id AND m.status = 'invited'
            WHERE i.org_id = $2 AND i.accepted_at IS NULL AND i.declined_at IS NULL
              AND i.expires_at > $3 AND ${MATCHES_CALLER}
+             -- A9: only wallet invitations are answered by org id; email ones need the token
+             AND i.target_kind = 'wallet'
            ORDER BY i.created_at DESC LIMIT 1`,
           [userId, (ref as { orgId: string }).orgId, now],
         ),
@@ -399,12 +414,7 @@ export class InvitationsService {
     userId: string,
   ): Promise<{ permissions: Array<Permission> }> {
     await lockOrgs(em, [orgId]);
-    const caller = await this.resolver.effective(orgId, userId);
-    if (!caller || caller.orgStatus !== 'active') throw new NotFoundException();
-    if (!caller.permissions.includes('members.invite')) {
-      throw new ForbiddenException();
-    }
-    return caller;
+    return recheckPermission(this.resolver, em, orgId, userId, 'members.invite');
   }
 
   private async orgName(em: EntityManager, orgId: string): Promise<string> {

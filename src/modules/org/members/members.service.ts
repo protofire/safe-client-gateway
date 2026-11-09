@@ -14,7 +14,11 @@ import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.se
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import { maskEmail, maskIdentity } from '@/modules/org/members/identity-mask';
 import { memberRows, type MemberRow } from '@/modules/org/members/member-rows';
-import { lockOrgs, mapLastAdmin } from '@/modules/org/orgs/org-lock';
+import {
+  lockOrgs,
+  mapLastAdmin,
+  recheckPermission,
+} from '@/modules/org/orgs/org-lock';
 import type { Actor } from '@/modules/org/orgs/parse';
 import {
   type EffectivePermissions,
@@ -268,10 +272,15 @@ export class MembersService {
     try {
       await this.tx.runInOrgTx(async (em) => {
         await lockOrgs(em, [orgId]);
-        const effective = await this.resolver.effective(orgId, userId);
-        if (!effective || effective.orgStatus !== 'active') {
-          throw new NotFoundException();
-        }
+        // permission checked after the trigger below, see there
+        const effective = await recheckPermission(
+          this.resolver,
+          em,
+          orgId,
+          userId,
+          permission,
+          { deferForbidden: true },
+        );
         await fn(em, effective);
         // Invariant before the permission recheck: when two admins demote or
         // remove each other, the one that waited sees 409 last_admin (A4)

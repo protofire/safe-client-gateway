@@ -1,6 +1,7 @@
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { createSiweMessage } from 'viem/siwe';
 import { APP_URL } from '@/modules/org/auth/__tests__/auth-test-app';
+import { SecurityEvents } from '@/modules/org/auth/security-events';
 import { PurgeProcessor } from '@/modules/org/jobs/purge.processor';
 import {
   createOrgTestApp,
@@ -301,7 +302,7 @@ describe('organizations (org)', () => {
     });
   });
 
-  it('writes a sign-in security event into the activity of each org of the user', async () => {
+  it('keeps sign-in per user and fans other security events out to each org of the user (F4)', async () => {
     const account = privateKeyToAccount(generatePrivateKey());
     const signIn = async (): Promise<string> => {
       const { body } = await t
@@ -335,18 +336,82 @@ describe('organizations (org)', () => {
     await t.addMember(b, user, 'member');
 
     await signIn();
+    await t.app
+      .get(SecurityEvents)
+      .record(userId, 'security.step_up', { method: 'totp' }, '10.8.0.2');
 
-    const events: Array<{ orgId: string }> = await t.sql.query(
-      `SELECT org_id AS "orgId" FROM activity_events
-       WHERE type = 'security.signed_in' AND actor_user_id = $1 ORDER BY org_id`,
+    const events: Array<{ orgId: string; type: string }> = await t.sql.query(
+      `SELECT org_id AS "orgId", type FROM activity_events
+       WHERE actor_user_id = $1 ORDER BY org_id`,
       [userId],
     );
-    expect(events.map((e) => e.orgId)).toEqual([a, b].toSorted());
+    expect(events).toEqual(
+      [a, b].toSorted().map((orgId) => ({ orgId, type: 'security.step_up' })),
+    );
     expect(events.map((e) => e.orgId)).not.toContain(other);
     const [{ count }] = await t.sql.query(
       `SELECT count(*)::int AS count FROM user_security_events WHERE user_id = $1 AND type = 'security.signed_in'`,
       [userId],
     );
     expect(count).toBe(2);
+  });
+
+  it('re-checks the permission under the org lock: the waiting delete of a demoted admin gets 403 (F3)', async () => {
+    const a = await t.user({ wallet: true });
+    const b = await t.user({ wallet: true });
+    const orgId = await t.createOrg(a);
+    const bId = await t.addMember(orgId, b, 'admin');
+    const lock = await t.holdOrgLock(orgId);
+    let pending: Promise<{ status: number }> | undefined;
+    try {
+      pending = t.del(`/v1/orgs/${orgId}`).set('Cookie', b.cookie).then((r) => r);
+      await lock.blocked();
+    } finally {
+      await lock.release(async (q) => {
+        await q.query(
+          `UPDATE role_bindings SET role_id = (SELECT id FROM roles WHERE org_id IS NULL AND key = 'member')
+           WHERE member_id = $1`,
+          [bId],
+        );
+      });
+    }
+
+    expect((await pending).status).toBe(403);
+    const [org] = await t.sql.query(`SELECT status FROM organizations WHERE id = $1`, [orgId]);
+    expect(org.status).toBe('active');
+  });
+
+  it('answers totp_required after a wallet-less user removes their last TOTP, even within the window (F6)', async () => {
+    const user = await t.user({ email: 'f6@example.com', totp: true });
+    const orgId = await t.createOrg(user);
+
+    await t.del('/v1/orgs/auth/totp').set('Cookie', user.cookie).expect(204);
+
+    const res = await t
+      .patch(`/v1/orgs/${orgId}`)
+      .set('Cookie', user.cookie)
+      .send({ name: 'X' })
+      .expect(403);
+    expect(res.body.code).toBe('totp_required');
+    const [session] = await t.sql.query(
+      `SELECT last_strong_auth_at AS "at" FROM sessions WHERE user_id = $1`,
+      [user.userId],
+    );
+    expect(session.at).toBeNull();
+  });
+
+  it('applies the 10-org limit on restore (F7)', async () => {
+    const owner = await t.user({ wallet: true });
+    const ids: Array<string> = [];
+    for (let i = 0; i < 10; i++) ids.push(await t.createOrg(owner, `org ${i}`));
+    await t.del(`/v1/orgs/${ids[0]}`).set('Cookie', owner.cookie).expect(200);
+    await t.createOrg(owner, 'replacement');
+
+    const res = await t
+      .post(`/v1/orgs/${ids[0]}/restore`)
+      .set('Cookie', owner.cookie)
+      .expect(409);
+
+    expect(res.body.code).toBe('org_limit');
   });
 });

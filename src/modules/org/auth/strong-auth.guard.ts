@@ -28,7 +28,11 @@ export class StrongAuthGuard implements CanActivate {
     const session = context.switchToHttp().getRequest<OrgRequest>().orgSession;
     if (!session) throw new Error('StrongAuthGuard needs SessionGuard first');
 
-    if (this.isFresh(session)) return true;
+    // Factors first: a fresh session of a user without any strong factor
+    // (e.g. right after removing their last TOTP) still needs one (A17).
+    if (this.isFresh(session) && (await this.hasStrongFactor(session.userId))) {
+      return true;
+    }
     throw await this.denial(session.userId);
   }
 
@@ -38,6 +42,10 @@ export class StrongAuthGuard implements CanActivate {
       last !== null &&
       this.clock.now().getTime() - last.getTime() <= this.windowMs
     );
+  }
+
+  private async hasStrongFactor(userId: string): Promise<boolean> {
+    return (await this.auth.stepUpMethods(userId)).length > 0;
   }
 
   /** The 403 for a session without fresh strong auth. */

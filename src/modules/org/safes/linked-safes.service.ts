@@ -10,6 +10,8 @@ import { getAddress, type Address } from 'viem';
 import { DataSourceError } from '@/domain/errors/data-source.error';
 import { ActivityLog } from '@/modules/org/activity/activity-log.service';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
+import { recheckPermission } from '@/modules/org/orgs/org-lock';
+import { PermissionResolver } from '@/modules/org/permissions/permission.resolver';
 import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
 import { mapLimit } from '@/modules/org/safes/map-limit';
 
@@ -39,6 +41,7 @@ export class LinkedSafesService {
     private readonly tx: OrgTransaction,
     private readonly activity: ActivityLog,
     @Inject(ISafeRepository) private readonly safes: ISafeRepository,
+    private readonly resolver: PermissionResolver,
   ) {}
 
   async link(
@@ -71,6 +74,7 @@ export class LinkedSafesService {
       await em.query(`SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE`, [
         orgId,
       ]);
+      await recheckPermission(this.resolver, em, orgId, actor.userId, 'safes.link');
       const [{ count }] = await em.query(
         `SELECT count(*)::int AS count FROM linked_safes WHERE org_id = $1`,
         [orgId],
@@ -126,6 +130,10 @@ export class LinkedSafesService {
     actor: Actor,
   ): Promise<void> {
     await this.tx.runInOrgTx(async (em) => {
+      await em.query(`SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE`, [
+        orgId,
+      ]);
+      await recheckPermission(this.resolver, em, orgId, actor.userId, 'safes.unlink');
       const rows: Array<{
         chain_id: string;
         address: string;

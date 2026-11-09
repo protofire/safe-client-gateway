@@ -1,6 +1,7 @@
 import { Global, Module } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import type request from 'supertest';
+import type { QueryRunner } from 'typeorm';
 import { NetworkService } from '@/datasources/network/network.service.interface';
 import { OrgAccountModule } from '@/modules/org/account/account.module';
 import { ActivityModule } from '@/modules/org/activity/activity.module';
@@ -9,8 +10,10 @@ import {
   seedUser,
   type AuthTestApp,
 } from '@/modules/org/auth/__tests__/auth-test-app';
+import { OrgTotpModule } from '@/modules/org/auth/totp/totp.module';
 import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
 import { hmacEmail } from '@/modules/org/crypto/hashing';
+import { ORG_PG_POOL } from '@/modules/org/db/org-database.module';
 import { OrgJobsModule } from '@/modules/org/jobs/org-jobs.module';
 import { MembersModule } from '@/modules/org/members/members.module';
 import { OrgsModule } from '@/modules/org/orgs/orgs.module';
@@ -33,6 +36,15 @@ export type OrgTestApp = AuthTestApp & {
   /** Adds an active member with a system role, straight in SQL. */
   addMember(orgId: string, user: TestUser, roleKey: string): Promise<string>;
   adminCount(orgId: string): Promise<number>;
+  /**
+   * Holds the org row FOR UPDATE in a separate transaction; `blocked()`
+   * resolves once another backend waits on a lock, `release(fn)` runs `fn`
+   * inside the holding transaction and commits.
+   */
+  holdOrgLock(orgId: string): Promise<{
+    blocked(): Promise<void>;
+    release(fn?: (q: QueryRunner) => Promise<void>): Promise<void>;
+  }>;
 };
 
 export type TestUser = {
@@ -46,6 +58,8 @@ const EMAIL_HASH_KEY = randomBytes(32).toString('base64');
 
 /** Org feature modules on a fresh org DB, Resend stubbed, mail key set. */
 export async function createOrgTestApp(redisDb: number): Promise<OrgTestApp> {
+  // a small pool: a path that needs a second connection while holding the
+  // org lock exhausts it under the parallel tests (gate B F1)
   const mailPost = jest.fn().mockResolvedValue({ status: 200, data: {} });
 
   @Global()
@@ -63,8 +77,10 @@ export async function createOrgTestApp(redisDb: number): Promise<OrgTestApp> {
       'org.mail.from': 'noreply@example.com',
       'org.mail.baseUrl': 'https://mail.example.com',
     },
+    dataSource: { extra: { ...ORG_PG_POOL, max: 5 } },
     imports: [
       NetworkStubModule,
+      OrgTotpModule,
       OrgAccountModule,
       MembersModule,
       OrgsModule,
@@ -72,9 +88,6 @@ export async function createOrgTestApp(redisDb: number): Promise<OrgTestApp> {
       OrgJobsModule,
     ],
   });
-  // bounded waits for the concurrency tests: new pool connections inherit these
-  await t.sql.query(`ALTER ROLE CURRENT_USER SET lock_timeout = '5s'`);
-  await t.sql.query(`ALTER ROLE CURRENT_USER SET statement_timeout = '20s'`);
   const encryption = t.app.get(FieldEncryptionService);
   const key = Buffer.from(EMAIL_HASH_KEY, 'base64');
 
@@ -154,6 +167,35 @@ export async function createOrgTestApp(redisDb: number): Promise<OrgTestApp> {
         );
         return memberId as string;
       });
+    },
+    holdOrgLock: async (orgId) => {
+      const runner = t.sql.createQueryRunner();
+      await runner.connect();
+      await runner.startTransaction();
+      await runner.query(`SET LOCAL lock_timeout = '5s'`);
+      await runner.query(`SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE`, [orgId]);
+      return {
+        blocked: async (): Promise<void> => {
+          for (let i = 0; i < 100; i++) {
+            const [{ waiting }] = await t.sql.query(
+              `SELECT count(*)::int AS waiting FROM pg_stat_activity
+               WHERE datname = current_database() AND wait_event_type = 'Lock'`,
+            );
+            if (waiting > 0) return;
+            await new Promise((r) => setTimeout(r, 50));
+          }
+          throw new Error('no backend blocked on the org lock within 5 s');
+        },
+        release: async (fn): Promise<void> => {
+          try {
+            if (fn) await fn(runner);
+            await runner.commitTransaction();
+          } finally {
+            if (runner.isTransactionActive) await runner.rollbackTransaction();
+            await runner.release();
+          }
+        },
+      };
     },
     adminCount: async (orgId) => {
       const [{ count }] = await t.sql.query(

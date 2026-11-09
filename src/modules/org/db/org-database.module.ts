@@ -7,6 +7,16 @@ import { OrgTransaction } from '@/modules/org/db/org-transaction';
 export { ORG_DATA_SOURCE };
 
 /**
+ * Explicit pg pool and server-side bounds: a request waiting on an org row
+ * lock fails after 5 s instead of holding its connection indefinitely.
+ */
+export const ORG_PG_POOL = {
+  max: 20,
+  connectionTimeoutMillis: 5000,
+  options: '-c lock_timeout=5000 -c statement_timeout=15000',
+};
+
+/**
  * The org database, connected with the app login (ORG_DB_APP_*: not the
  * owner, no BYPASSRLS). Never migrates: migrations run only from org-migrate.
  */
@@ -26,6 +36,7 @@ export { ORG_DATA_SOURCE };
         username: config.getOrThrow<string>('org.db.app.username'),
         password: config.getOrThrow<string>('org.db.app.password'),
         ssl: config.getOrThrow<boolean>('org.db.ssl'),
+        extra: ORG_PG_POOL,
         autoLoadEntities: true,
         synchronize: false,
         migrationsRun: false,

@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource } from 'typeorm';
+import { DataSource, type EntityManager } from 'typeorm';
 import { ORG_DATA_SOURCE } from '@/modules/org/db/org-data-source';
 import {
   PERMISSIONS,
@@ -22,16 +22,19 @@ export class PermissionResolver {
   /**
    * Union of the permissions of the user's org-scoped roles, or null unless
    * an active user is an active member. Deleted orgs resolve too (see `orgStatus`).
+   * Pass the transaction's `em` when re-checking under a lock, so no second
+   * pool connection is needed while the lock is held.
    */
   async effective(
     orgId: string,
     userId: string,
+    em: Pick<EntityManager, 'query'> = this.dataSource,
   ): Promise<EffectivePermissions | null> {
     const rows: Array<{
       member_id: string;
       org_status: 'active' | 'deleted';
       permissions: Array<string> | null;
-    }> = await this.dataSource.query(
+    }> = await em.query(
       `SELECT m.id AS member_id, o.status AS org_status, r.permissions
        FROM members m
        JOIN organizations o ON o.id = m.org_id

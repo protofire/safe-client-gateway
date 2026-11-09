@@ -252,6 +252,105 @@ describe('members and invitations (org)', () => {
     });
   });
 
+  describe('gate B fixes', () => {
+    it('completes 15 parallel leaves on a small pool without hanging (F1)', async () => {
+      const admin = await t.user({ wallet: true });
+      const orgId = await t.createOrg(admin);
+      const members: Array<TestUser> = [];
+      for (let i = 0; i < 15; i++) {
+        const m = await t.user({ wallet: true });
+        await t.addMember(orgId, m, 'member');
+        members.push(m);
+      }
+
+      const statuses = (
+        await Promise.all(
+          members.map((m) =>
+            t.post(`/v1/orgs/${orgId}/members/leave`).set('Cookie', m.cookie),
+          ),
+        )
+      ).map((r) => r.status);
+
+      expect(statuses.filter((s) => s !== 204 && s !== 409)).toEqual([]);
+      const [{ count }] = await t.sql.query(
+        `SELECT count(*)::int AS count FROM members WHERE org_id = $1`,
+        [orgId],
+      );
+      expect(count).toBe(1);
+    });
+
+    it('refuses an accept whose user was deleted while it waited on the org lock (F2)', async () => {
+      const admin = await t.user({ wallet: true });
+      const orgId = await t.createOrg(admin);
+      const invitee = await t.user({ wallet: true });
+      await t
+        .post(`/v1/orgs/${orgId}/members/invite`)
+        .set('Cookie', admin.cookie)
+        .send({ wallet: invitee.wallet, role: 'admin' })
+        .expect(201);
+      const lock = await t.holdOrgLock(orgId);
+      let pending: Promise<{ status: number }> | undefined;
+      try {
+        pending = t
+          .post(`/v1/orgs/${orgId}/members/accept`)
+          .set('Cookie', invitee.cookie)
+          .then((r) => r);
+        await lock.blocked();
+      } finally {
+        await lock.release(async (q) => {
+          await q.query(`UPDATE users SET status = 'deleted' WHERE id = $1`, [
+            invitee.userId,
+          ]);
+        });
+      }
+
+      expect((await pending).status).toBe(401);
+      expect(
+        await t.sql.query(
+          `SELECT 1 FROM members WHERE org_id = $1 AND user_id = $2 AND status = 'active'`,
+          [orgId, invitee.userId],
+        ),
+      ).toEqual([]);
+    });
+
+    it('does not count an admin whose user is deleted (F2 trigger)', async () => {
+      const a = await t.user({ wallet: true });
+      const ghost = await t.user({ wallet: true });
+      const orgId = await t.createOrg(a);
+      await t.addMember(orgId, ghost, 'admin');
+      await t.sql.query(`UPDATE users SET status = 'deleted' WHERE id = $1`, [
+        ghost.userId,
+      ]);
+      const [{ id }] = await t.sql.query(
+        `SELECT id FROM members WHERE org_id = $1 AND user_id = $2`,
+        [orgId, a.userId],
+      );
+
+      const res = await t
+        .patch(`/v1/orgs/${orgId}/members/${id}/role`)
+        .set('Cookie', a.cookie)
+        .send({ role: 'member' })
+        .expect(409);
+
+      expect(res.body.code).toBe('last_admin');
+    });
+
+    it('accepts by org id only wallet invitations; email ones need the token (F5)', async () => {
+      const admin = await t.user({ wallet: true });
+      const orgId = await t.createOrg(admin);
+      const to = email();
+      const { token } = await inviteEmail(orgId, admin, to);
+      const invitee = await t.user({ email: to });
+
+      expect(
+        (await t.http().get('/v1/orgs').set('Cookie', invitee.cookie).expect(200)).body,
+      ).toEqual([]);
+      await t.post(`/v1/orgs/${orgId}/members/accept`).set('Cookie', invitee.cookie).expect(404);
+      await t.post(`/v1/orgs/${orgId}/members/decline`).set('Cookie', invitee.cookie).expect(404);
+      await accept(invitee, token).expect(200);
+    });
+  });
+
   describe('members list', () => {
     it('shows identities, masking emails for members who are not admins or self', async () => {
       const adminEmail = `boss.${randomBytes(3).toString('hex')}@example.com`;
