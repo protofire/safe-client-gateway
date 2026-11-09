@@ -14,6 +14,7 @@
     "start:debug": "node --env-file=.env node_modules/.bin/nest start --debug --watch",
     "start:org": "node --env-file=.env.org node_modules/.bin/nest start --entryFile org-main",
     "start:org:dev": "node --env-file=.env.org node_modules/.bin/nest start --entryFile org-main --watch",
+    "org:migrate": "node --env-file=.env.org node_modules/.bin/nest start --entryFile org-migrate",
     "start:prod": "node --env-file=.env dist/src/main",
     "lint": "eslint \"{src,apps,libs,test,migrations}/**/*.ts\" --fix",
     "lint-check": "eslint \"{src,apps,libs,test,migrations}/**/*.ts\"",

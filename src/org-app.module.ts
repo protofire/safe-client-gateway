@@ -16,6 +16,7 @@ import { CacheModule } from '@/datasources/cache/cache.module';
 import { CircuitBreakerModule } from '@/datasources/circuit-breaker/circuit-breaker.module';
 import { NetworkModule } from '@/datasources/network/network.module';
 import { RequestScopedLoggingModule } from '@/logging/logging.module';
+import { OrgDatabaseModule } from '@/modules/org/db/org-database.module';
 import { OrgHealthController } from '@/modules/org/health/org-health.controller';
 import { GlobalErrorFilter } from '@/routes/common/filters/global-error.filter';
 
@@ -47,6 +48,7 @@ export class OrgAppModule implements NestModule {
         }),
         InMemoryCacheModule.register({ isGlobal: true }),
         NetworkModule,
+        OrgDatabaseModule,
         RequestScopedLoggingModule,
       ],
       controllers: [OrgHealthController],

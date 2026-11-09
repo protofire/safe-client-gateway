@@ -9,6 +9,23 @@ import orgConfiguration from '@/config/org/org-configuration';
 import { ConfigurationModule } from '@/config/configuration.module';
 import { OrgConfigurationSchema } from '@/config/org/org-configuration.schema';
 import { Module } from '@nestjs/common';
+import { getDataSourceToken } from '@nestjs/typeorm';
+import { ORG_DATA_SOURCE } from '@/modules/org/db/org-database.module';
+import { OrgTransaction } from '@/modules/org/db/org-transaction';
+
+// No database in unit tests: the 'org' DataSource is replaced, never connected.
+// The connection options factory still runs, so its keys must be present.
+const fakeOrgDataSource = {
+  manager: {},
+  isInitialized: true,
+  destroy: jest.fn(),
+};
+Object.assign(process.env, {
+  ORG_DB_HOST: 'localhost',
+  ORG_DB_NAME: 'org',
+  ORG_DB_APP_USERNAME: 'org_app',
+  ORG_DB_APP_PASSWORD: 'test-password',
+});
 
 const SENTINEL = 'gateway-secret-sentinel';
 
@@ -19,10 +36,30 @@ describe('OrgAppModule', () => {
     })
       .overrideProvider('RedisClient')
       .useValue({ ping: jest.fn(), isReady: true, quit: jest.fn() })
+      .overrideProvider(getDataSourceToken(ORG_DATA_SOURCE))
+      .useValue(fakeOrgDataSource)
       .compile();
 
     expect(moduleRef.get(CacheKeyPrefix, { strict: false })).toBe('org:');
     await moduleRef.close();
+  });
+
+  it('compiles with OrgDatabaseModule and provides OrgTransaction', async () => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [OrgAppModule.register()],
+    })
+      .overrideProvider('RedisClient')
+      .useValue({ ping: jest.fn(), isReady: true, quit: jest.fn() })
+      .overrideProvider(getDataSourceToken(ORG_DATA_SOURCE))
+      .useValue(fakeOrgDataSource)
+      .compile();
+
+    expect(moduleRef.get(OrgTransaction, { strict: false })).toBeInstanceOf(
+      OrgTransaction,
+    );
+    fakeOrgDataSource.destroy.mockClear();
+    await moduleRef.close();
+    expect(fakeOrgDataSource.destroy).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -80,6 +117,8 @@ describe('env file isolation', () => {
     })
       .overrideProvider('RedisClient')
       .useValue({ ping: jest.fn(), isReady: true, quit: jest.fn() })
+      .overrideProvider(getDataSourceToken(ORG_DATA_SOURCE))
+      .useValue(fakeOrgDataSource)
       .compile();
 
     expect(process.env.JWT_SECRET).toBeUndefined();
