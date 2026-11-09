@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Controller,
   Get,
+  Inject,
   Query,
   Req,
   Res,
@@ -11,6 +12,10 @@ import type { Request, Response } from 'express';
 import { Readable } from 'stream';
 import { DataSource } from 'typeorm';
 import { z } from 'zod';
+import {
+  type ILoggingService,
+  LoggingService,
+} from '@/logging/logging.interface';
 import { CsvService } from '@/modules/csv-export/csv-utils/csv.service';
 import { ACTIVITY_EVENT_TYPES } from '@/modules/org/activity/activity-event-types';
 import { ActivityLog } from '@/modules/org/activity/activity-log.service';
@@ -36,7 +41,7 @@ type Filter = z.infer<typeof FilterSchema>;
 
 // created_at stays text: JS Dates would drop Postgres' microseconds and make
 // the keyset cursor skip or repeat rows
-const CursorSchema = z.tuple([z.string().min(1), z.uuid()]);
+const CursorSchema = z.tuple([z.iso.datetime(), z.uuid()]);
 type Cursor = z.infer<typeof CursorSchema>;
 
 type Row = {
@@ -85,6 +90,7 @@ export class ActivityController {
     private readonly encryption: FieldEncryptionService,
     private readonly log: ActivityLog,
     private readonly csv: CsvService,
+    @Inject(LoggingService) private readonly logger: ILoggingService,
   ) {}
 
   @Get('activity')
@@ -134,18 +140,26 @@ export class ActivityController {
     );
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="activity.csv"');
-    await this.csv.toCsv(Readable.from(this.csvRows(orgId, filter)), res, {
-      header: true,
-      cast: csvCast,
-      columns: [
-        { key: 'createdAt', header: 'createdAt' },
-        { key: 'type', header: 'type' },
-        { key: 'actorUserId', header: 'actorUserId' },
-        { key: 'targetType', header: 'targetType' },
-        { key: 'targetId', header: 'targetId' },
-        { key: 'payload', header: 'payload' },
-      ],
-    });
+    try {
+      await this.csv.toCsv(Readable.from(this.csvRows(orgId, filter)), res, {
+        header: true,
+        cast: csvCast,
+        columns: [
+          { key: 'createdAt', header: 'createdAt' },
+          { key: 'type', header: 'type' },
+          { key: 'actorUserId', header: 'actorUserId' },
+          { key: 'targetType', header: 'targetType' },
+          { key: 'targetId', header: 'targetId' },
+          { key: 'payload', header: 'payload' },
+        ],
+      });
+    } catch (error) {
+      // headers are already sent: log and cut the connection so the client sees a truncated download
+      this.logger.error(
+        `activity CSV export failed mid-stream: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      res.destroy();
+    }
   }
 
   // Keyset pages, so memory stays flat however long the log is
@@ -188,6 +202,7 @@ export class ActivityController {
     if (filter.actor) {
       params.push(filter.actor);
       where.push(`e.actor_user_id = $${params.length}`);
+      where.push(`u.status <> 'deleted'`);
     }
     if (cursor) {
       params.push(cursor[0], cursor[1]);

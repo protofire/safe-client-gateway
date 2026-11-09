@@ -278,6 +278,10 @@ describe('org activity log', () => {
     expect(third.body.nextCursor).toBeNull();
     await list(admin.cookie, '?cursor=garbage').expect(400);
     await list(admin.cookie, '?limit=101').expect(400);
+    const forged = Buffer.from(
+      JSON.stringify(['not-a-date', admin.userId]),
+    ).toString('base64url');
+    await list(admin.cookie, `?cursor=${forged}`).expect(400);
   });
 
   it('filters by type and actor', async () => {
@@ -292,6 +296,15 @@ describe('org activity log', () => {
     );
     expect(byActor.body.items).toHaveLength(1);
     expect(byActor.body.items[0].actorUserId).toBe(member.userId);
+  });
+
+  it('excludes deleted users from the actor filter', async () => {
+    const [{ id: ghost }] = await sql.query(
+      `INSERT INTO users (status, deleted_at) VALUES ('deleted', now()) RETURNING id`,
+    );
+    await record({ actorUserId: ghost });
+    const { body } = await list(admin.cookie, `?actor=${ghost}`).expect(200);
+    expect(body.items).toEqual([]);
   });
 
   it('answers 404 to a user of another org', async () => {
