@@ -609,6 +609,7 @@ describe('payout runs API', () => {
       'post',
       `${orgA}/payout-runs/${run.id}/build`,
       member,
+      { expectedVersion: 1 },
     ).expect(200);
     const built = res.body.run;
     expect(built.calls).toEqual([
@@ -645,6 +646,7 @@ describe('payout runs API', () => {
       'post',
       `${orgA}/payout-runs/${run.id}/build`,
       member,
+      { expectedVersion: 1 },
     ).expect(200);
     expect(res.body.run.evaluation.violations[0].callPath).toBe('');
     expect(res.body.items[0].warnings).toContain('policy');
@@ -664,6 +666,7 @@ describe('payout runs API', () => {
       'post',
       `${orgA}/payout-runs/${run.id}/build`,
       member,
+      { expectedVersion: 1 },
     ).expect(422);
     expect(res.body).toEqual({
       statusCode: 422,
@@ -729,9 +732,9 @@ describe('payout runs API', () => {
 
   it('replaces the rows on PATCH, resets a built run to draft and records payout_run.updated', async () => {
     const { run } = await createRun();
-    await write('post', `${orgA}/payout-runs/${run.id}/build`, member).expect(
-      200,
-    );
+    await write('post', `${orgA}/payout-runs/${run.id}/build`, member, {
+      expectedVersion: 1,
+    }).expect(200);
     const res = await write('patch', `${orgA}/payout-runs/${run.id}`, member, {
       expectedVersion: 2,
       rows: [{ address: BOB, amount: '7', token: 'native' }],
@@ -746,12 +749,14 @@ describe('payout runs API', () => {
     expect(res.body.items).toEqual([
       expect.objectContaining({ line: 1, recipient: BOB, amount: '7' }),
     ]);
-    const [ev] = await events('payout_run.updated');
+    const [, ev] = await events('payout_run.updated');
     expect(ev.payload).toEqual({
       name: 'March',
       chainId: '1',
       address: SAFE_A,
       items: 1,
+      itemsHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+      fromStatus: 'draft',
     });
   });
 
@@ -761,12 +766,14 @@ describe('payout runs API', () => {
       'post',
       `${orgA}/payout-runs/${run.id}/build`,
       member,
+      { expectedVersion: 1 },
     ).expect(200);
     expect(first.body.run.version).toBe(2);
     const second = await write(
       'post',
       `${orgA}/payout-runs/${run.id}/build`,
       member,
+      { expectedVersion: 2 },
     ).expect(200);
     expect(second.body.run.version).toBe(3);
     expect(second.body.run.calls).toEqual(first.body.run.calls);
@@ -796,6 +803,7 @@ describe('payout runs API', () => {
         'post',
         `${orgA}/payout-runs/${run.id}/build`,
         member,
+        { expectedVersion: 1 },
       ).expect(409);
       expect(build.body.code).toBe('run_locked');
     }
@@ -809,9 +817,9 @@ describe('payout runs API', () => {
       rows: [{ address: BOB, amount: '7', token: 'native' }],
     }).expect(409);
     expect(res.body.code).toBe('run_locked');
-    await write('post', `${orgA}/payout-runs/${run.id}/build`, member).expect(
-      409,
-    );
+    await write('post', `${orgA}/payout-runs/${run.id}/build`, member, {
+      expectedVersion: 1,
+    }).expect(409);
     const items = await get(`${orgA}/payout-runs/${run.id}`, member).expect(
       200,
     );
@@ -829,6 +837,7 @@ describe('payout runs API', () => {
       'post',
       `${orgA}/payout-runs/${run.id}/build`,
       member,
+      { expectedVersion: 2 },
     ).expect(200);
     expect(res.body.run).toMatchObject({
       status: 'draft',
@@ -954,9 +963,9 @@ describe('payout runs API', () => {
   it('answers 404 for a run of another org and for a linkedSafeId of another org', async () => {
     const { run } = await createRun();
     await get(`${orgB}/payout-runs/${run.id}`, adminB).expect(404);
-    await write('post', `${orgB}/payout-runs/${run.id}/build`, adminB).expect(
-      404,
-    );
+    await write('post', `${orgB}/payout-runs/${run.id}/build`, adminB, {
+      expectedVersion: 1,
+    }).expect(404);
     await write('delete', `${orgB}/payout-runs/${run.id}`, adminB).expect(404);
     await get(`${orgA}/payout-runs?linkedSafeId=${safeB}`, member).expect(404);
     await write('post', `${orgA}/payout-runs`, member, {
@@ -974,7 +983,13 @@ describe('payout runs API', () => {
     expect(created).toEqual([
       expect.objectContaining({
         target_id: run.id,
-        payload: { name: 'March', chainId: '1', address: SAFE_A, items: 2 },
+        payload: {
+          name: 'March',
+          chainId: '1',
+          address: SAFE_A,
+          items: 2,
+          itemsHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+        },
       }),
     ]);
     // now() is the transaction start: equal timestamps mean one transaction
@@ -987,5 +1002,239 @@ describe('payout runs API', () => {
       ),
     );
     expect(same.same).toBe(true);
+  });
+
+  it('answers 409 version_conflict to a build with a stale expectedVersion and 400 without one', async () => {
+    const { run } = await createRun();
+    const stale = await write(
+      'post',
+      `${orgA}/payout-runs/${run.id}/build`,
+      member,
+      { expectedVersion: 2 },
+    ).expect(409);
+    expect(stale.body.code).toBe('version_conflict');
+    await write('post', `${orgA}/payout-runs/${run.id}/build`, member).expect(
+      400,
+    );
+  });
+
+  it('answers 409 version_conflict to a stale PATCH before reading any token', async () => {
+    const { run } = await createRun();
+    txService.getToken.mockClear();
+    chainsRepo.getChain.mockClear();
+    const res = await write('patch', `${orgA}/payout-runs/${run.id}`, member, {
+      expectedVersion: 5,
+      rows: [{ address: BOB, amount: '7', token: USDC }],
+    }).expect(409);
+    expect(res.body.code).toBe('version_conflict');
+    expect(txService.getToken).not.toHaveBeenCalled();
+    expect(chainsRepo.getChain).not.toHaveBeenCalled();
+  });
+
+  it('answers 422 invalid_rows to JSON rows with wrong types or oversized cells', async () => {
+    const res = await write('post', `${orgA}/payout-runs`, member, {
+      linkedSafeId: safeA,
+      name: 'March',
+      rows: [
+        { address: ALICE, amount: 5, token: 'native' },
+        { address: ALICE, amount: '1'.repeat(150), token: 'native' },
+        { address: ALICE, amount: '1', token: 'native', name: 'x'.repeat(70) },
+        'not a row',
+        { address: 'x'.repeat(300), amount: '1', token: 'native' },
+      ],
+    }).expect(422);
+    expect(res.body).toMatchObject({
+      code: 'invalid_rows',
+      errors: [
+        { line: 1, reason: 'invalid_row' },
+        { line: 2, reason: 'invalid_amount' },
+        { line: 3, reason: 'name_too_long' },
+        { line: 4, reason: 'invalid_row' },
+        { line: 5, reason: 'invalid_address' },
+      ],
+    });
+    const empty = await write('post', `${orgA}/payout-runs`, member, {
+      linkedSafeId: safeA,
+      name: 'March',
+      rows: [],
+    }).expect(422);
+    expect(empty.body.errors).toEqual([{ line: 1, reason: 'no_rows' }]);
+    expect(await runCount(orgA)).toBe(0);
+  });
+
+  it('computes unknown_recipient, policy and evaluation from the current contacts and policies on read', async () => {
+    const { run } = await createRun();
+    expect(run.evaluation).toBeNull();
+    await addContact(orgA, ALICE);
+    await addPolicy(orgA, [
+      {
+        kind: 'amount_cap',
+        capMode: 'per_transfer',
+        caps: [
+          {
+            chainId: '1',
+            token: USDC.toLowerCase(),
+            maxRaw: '1000000000',
+            decimals: 6,
+            symbol: 'USDC',
+          },
+        ],
+      },
+    ]);
+    // not built: the item warnings already show the policy
+    const draft = await get(`${orgA}/payout-runs/${run.id}`, member).expect(
+      200,
+    );
+    expect(
+      (draft.body as PayoutRunDetail).items.map((i) => i.warnings),
+    ).toEqual([[], ['unknown_recipient', 'policy']]);
+    expect(draft.body.run.evaluation).toBeNull();
+    await write('post', `${orgA}/payout-runs/${run.id}/build`, member, {
+      expectedVersion: 1,
+    }).expect(200);
+    await asOrg(orgA, (em) => em.query(`DELETE FROM policies`));
+    await addContact(orgA, BOB);
+    const built = await get(`${orgA}/payout-runs/${run.id}`, member).expect(
+      200,
+    );
+    expect(built.body.run.evaluation).toEqual({ status: 'ok' });
+    expect(
+      (built.body as PayoutRunDetail).items.map((i) => i.warnings),
+    ).toEqual([[], []]);
+  });
+
+  it('exposes the attempt of the active proposal, not the newest one, after release A, claim and release B, late report of A', async () => {
+    const { run } = await createRun();
+    const attempt = (): Promise<string> =>
+      asOrg(orgA, async (em) => {
+        const [{ id }] = await em.query(
+          `INSERT INTO payout_proposal_attempts (org_id, run_id, run_version, nonce, calls, created_by)
+           VALUES ($1, $2, 1, 9, '[]', $3) RETURNING id`,
+          [orgA, run.id, member.userId],
+        );
+        return id;
+      });
+    const setAttempt = (id: string, set: string): Promise<unknown> =>
+      asOrg(orgA, (em) =>
+        em.query(`UPDATE payout_proposal_attempts SET ${set} WHERE id = $1`, [
+          id,
+        ]),
+      );
+    const a = await attempt();
+    await setAttempt(a, `status = 'released', release_reason = 'released'`);
+    const b = await attempt();
+    await setRun(orgA, run.id, `status = 'proposing', pinned_nonce = 9`);
+    const proposing = await get(`${orgA}/payout-runs/${run.id}`, member).expect(
+      200,
+    );
+    expect(proposing.body.run.latestAttempt).toMatchObject({
+      id: b,
+      status: 'open',
+      releasable: true,
+    });
+    await setAttempt(b, `status = 'released', release_reason = 'released'`);
+    await setRun(orgA, run.id, `status = 'draft'`);
+    const draft = await get(`${orgA}/payout-runs/${run.id}`, member).expect(
+      200,
+    );
+    expect(draft.body.run.latestAttempt).toMatchObject({
+      id: b,
+      releasable: false,
+    });
+    const hash = `0x${'ab'.repeat(32)}`;
+    await setAttempt(a, `status = 'reported', safe_tx_hash = '${hash}'`);
+    await setRun(
+      orgA,
+      run.id,
+      `status = 'proposed', safe_tx_hash = '${hash}', nonce = 9`,
+    );
+    const proposed = await get(`${orgA}/payout-runs/${run.id}`, member).expect(
+      200,
+    );
+    expect(proposed.body.run.latestAttempt).toMatchObject({
+      id: a,
+      status: 'reported',
+      releasable: true,
+    });
+  });
+
+  it('records payout_run.updated with fromStatus on build and an itemsHash that changes when recipients are swapped', async () => {
+    const two: Array<Row> = [
+      { address: ALICE, amount: '1', token: 'native' },
+      { address: BOB, amount: '2', token: 'native' },
+    ];
+    const { run } = await createRun(two);
+    await setRun(orgA, run.id, `status = 'failed'`);
+    await write('post', `${orgA}/payout-runs/${run.id}/build`, member, {
+      expectedVersion: 1,
+    }).expect(200);
+    await write('patch', `${orgA}/payout-runs/${run.id}`, member, {
+      expectedVersion: 2,
+      rows: [
+        { ...two[0], address: BOB },
+        { ...two[1], address: ALICE },
+      ],
+    }).expect(200);
+    const [created] = await events('payout_run.created');
+    const [built, patched] = await events('payout_run.updated');
+    expect(built.payload).toMatchObject({
+      fromStatus: 'failed',
+      items: 2,
+      itemsHash: created.payload.itemsHash,
+    });
+    expect(patched.payload.fromStatus).toBe('draft');
+    expect(patched.payload.itemsHash).not.toBe(created.payload.itemsHash);
+  });
+
+  it('answers 409 safe_unlinked to PATCH and build after the Safe is unlinked', async () => {
+    const { run } = await createRun();
+    await sql.query(`DELETE FROM linked_safes WHERE id = $1`, [safeA]);
+    const patch = await write(
+      'patch',
+      `${orgA}/payout-runs/${run.id}`,
+      member,
+      {
+        expectedVersion: 1,
+        name: 'x',
+      },
+    ).expect(409);
+    expect(patch.body.code).toBe('safe_unlinked');
+    const build = await write(
+      'post',
+      `${orgA}/payout-runs/${run.id}/build`,
+      member,
+      { expectedVersion: 1 },
+    ).expect(409);
+    expect(build.body.code).toBe('safe_unlinked');
+  });
+
+  it('limits multipart fields and parts on the CSV import', async () => {
+    const req = http()
+      .post(`/v1/orgs/${orgA}/payout-runs/import`)
+      .set('Cookie', member.cookie)
+      .set('X-Org-Request', '1')
+      .field('linkedSafeId', safeA)
+      .field('name', 'March');
+    for (let i = 0; i < 4; i++) req.field(`extra${i}`, 'x');
+    await req
+      .attach(
+        'file',
+        Buffer.from(`address,amount,token\n${ALICE},1,native`),
+        'p.csv',
+      )
+      .expect(400);
+    await http()
+      .post(`/v1/orgs/${orgA}/payout-runs/import`)
+      .set('Cookie', member.cookie)
+      .set('X-Org-Request', '1')
+      .field('linkedSafeId', safeA)
+      .field('name', 'x'.repeat(2000))
+      .attach(
+        'file',
+        Buffer.from(`address,amount,token\n${ALICE},1,native`),
+        'p.csv',
+      )
+      .expect(400);
+    expect(await runCount(orgA)).toBe(0);
   });
 });

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   BadGatewayException,
   Inject,
@@ -16,8 +17,6 @@ import {
   type Address,
   type Hex,
 } from 'viem';
-import { z } from 'zod';
-import { DataSourceError } from '@/domain/errors/data-source.error';
 import { ITransactionApiManager } from '@/domain/interfaces/transaction-api.manager.interface';
 import { IBalancesRepository } from '@/modules/balances/domain/balances.repository.interface';
 import { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
@@ -28,6 +27,7 @@ import {
   parseAmountStrict,
 } from '@/modules/org/common/amounts';
 import type { SafeCall } from '@/modules/org/common/multisend';
+import { tokenMeta, type TokenMeta } from '@/modules/org/common/token-meta';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import { conflict } from '@/modules/org/orgs/org-lock';
 import type { Actor } from '@/modules/org/orgs/parse';
@@ -49,11 +49,11 @@ import {
 } from '@/modules/org/payouts/payout-csv.parser';
 import {
   EDITABLE_STATUSES,
+  PayoutRowInputSchema,
   type PayoutAttemptView,
   type PayoutItemView,
   type PayoutItemWarning,
   type PayoutReview,
-  type PayoutRowInput,
   type PayoutRunDetail,
   type PayoutRunListItem,
   type PayoutRunStatus,
@@ -87,7 +87,7 @@ export type PayoutRunRow = {
   created_at: Date;
 };
 
-/** A `payout_items` row as read by {@link readItems}. */
+/** A `payout_items` row as read by {@link readItems}. `warnings` holds the static ones only. */
 export type PayoutItemRow = {
   id: string;
   line_no: number;
@@ -134,18 +134,6 @@ export function readItems(
   );
 }
 
-async function itemCount(
-  em: EntityManager,
-  orgId: string,
-  runId: string,
-): Promise<number> {
-  const [{ n }]: Array<{ n: number }> = await em.query(
-    `SELECT count(*)::int AS n FROM payout_items WHERE org_id = $1 AND run_id = $2`,
-    [orgId, runId],
-  );
-  return n;
-}
-
 /** The run's calls in line order, as the UI and B7 compare them. */
 export function itemCalls(
   items: ReadonlyArray<
@@ -166,6 +154,32 @@ export const storedCalls = (
 ): Array<StoredCall> =>
   calls.map(({ to, value, data }) => ({ to, value: value.toString(), data }));
 
+/** Inverse of {@link storedCalls}: every payout call is a plain call. */
+export const fromStoredCalls = (
+  calls: ReadonlyArray<StoredCall>,
+): Array<SafeCall> =>
+  calls.map((c) => ({
+    to: getAddress(c.to),
+    value: BigInt(c.value),
+    data: c.data as Hex,
+    operation: 0,
+  }));
+
+/**
+ * sha256 hex of the sorted `line|recipient|token|amount_raw` tuples, so an
+ * activity entry shows when the money content changed (e.g. swapped recipients).
+ */
+export function itemsHash(
+  items: ReadonlyArray<
+    Pick<PayoutItemRow, 'line_no' | 'recipient' | 'token' | 'amount_raw'>
+  >,
+): string {
+  const tuples = items
+    .map((i) => `${i.line_no}|${i.recipient}|${i.token}|${i.amount_raw}`)
+    .sort();
+  return createHash('sha256').update(tuples.join('\n')).digest('hex');
+}
+
 /** Items not yet paid out: their balance still matters. */
 const BALANCE_STATUSES: ReadonlyArray<PayoutRunStatus> = [
   ...EDITABLE_STATUSES,
@@ -181,14 +195,11 @@ const AMOUNT_REASONS: Record<AmountError['code'], string> = {
   zero: 'zero_amount',
   overflow: 'amount_overflow',
 };
-
-// only what an item needs from the raw tx-service token; decimals may be absent upstream
-const RawTokenSchema = z.object({
-  type: z.string(),
-  symbol: z.string(),
-  decimals: z.number().int().min(0).max(255).nullish(),
-});
-type TokenMeta = { decimals: number; symbol: string } | { reason: string };
+const TOKEN_REASONS: Record<Exclude<TokenMeta, object>, string> = {
+  unknown: 'unknown_token',
+  not_erc20: 'not_erc20',
+  decimals_unknown: 'token_decimals_unknown',
+};
 
 type PreparedItem = {
   line: number;
@@ -202,9 +213,15 @@ type PreparedItem = {
 };
 
 const multiSendAbi = parseAbi(['function multiSend(bytes transactions)']);
+/**
+ * The wrapper of the policy preview. Its inner calls are the run's own plain
+ * calls, so trusting this one address checks exactly what the UI's
+ * MultiSendCallOnly will carry, without reading the chain config (no HTTP).
+ */
+const PREVIEW_MULTISEND: Address = zeroAddress;
 
 /** The outer shape the UI builds (SafeAppsTxFlow): one call direct, more as a MultiSend delegatecall. */
-function outerTx(calls: ReadonlyArray<SafeCall>, multiSend: Address): SafeCall {
+function outerTx(calls: ReadonlyArray<SafeCall>): SafeCall {
   if (calls.length === 1) return calls[0];
   const packed = encodePacked(
     calls.flatMap(() => ['uint8', 'address', 'uint256', 'uint256', 'bytes']),
@@ -221,13 +238,31 @@ function outerTx(calls: ReadonlyArray<SafeCall>, multiSend: Address): SafeCall {
     functionName: 'multiSend',
     args: [packed],
   });
-  return { to: multiSend, value: 0n, data, operation: 1 };
+  return { to: PREVIEW_MULTISEND, value: 0n, data, operation: 1 };
 }
 
 /** Item index a violation belongs to: '' is the direct call of a one-item run, else the first path segment. */
 function itemIndex(callPath: string, count: number): number | null {
   if (callPath === '') return count === 1 ? 0 : null;
   return Number(callPath.split('.')[0]);
+}
+
+/** Warnings that depend only on the rows and the run's Safe; stored with the items. */
+function staticWarnings(
+  safeAddress: string,
+  items: ReadonlyArray<{ recipient: string; token: string }>,
+): Array<Array<PayoutItemWarning>> {
+  const key = (i: { recipient: string; token: string }): string =>
+    `${i.recipient}:${i.token}`;
+  const seen = new Map<string, number>();
+  for (const i of items) seen.set(key(i), (seen.get(key(i)) ?? 0) + 1);
+  return items.map((i) => {
+    const w: Array<PayoutItemWarning> = [];
+    if (seen.get(key(i))! > 1) w.push('duplicate');
+    if (i.recipient === safeAddress) w.push('self');
+    if (i.recipient === i.token) w.push('token_contract');
+    return w;
+  });
 }
 
 function invalidRows(
@@ -239,6 +274,13 @@ function invalidRows(
     code: 'invalid_rows',
     errors: [...errors].sort((a, b) => a.line - b.line),
   });
+}
+
+function versionConflict(): ReturnType<typeof conflict> {
+  return conflict(
+    'version_conflict',
+    'The run was changed meanwhile; reload and try again',
+  );
 }
 
 /** Throws 422 `run_too_large` when the calls do not fit one transaction. */
@@ -254,6 +296,31 @@ export function assertRunSize(calls: ReadonlyArray<SafeCall>): bigint {
     estimatedGas: Number(size.estimatedGas),
     gasBound,
   });
+}
+
+/** JSON rows get the CSV row checks; lines are 1-based row positions. */
+export function checkJsonRows(rows: ReadonlyArray<unknown>): {
+  rows: Array<PayoutCsvRow>;
+  errors: Array<PayoutCsvError>;
+} {
+  if (rows.length === 0) {
+    return { rows: [], errors: [{ line: 1, reason: 'no_rows' }] };
+  }
+  if (rows.length > MAX_PAYOUT_ROWS) {
+    return {
+      rows: [],
+      errors: [{ line: MAX_PAYOUT_ROWS + 1, reason: 'too_many_rows' }],
+    };
+  }
+  const errors: Array<PayoutCsvError> = [];
+  const cells: Array<PayoutRowCells> = [];
+  rows.forEach((raw, i) => {
+    const row = PayoutRowInputSchema.safeParse(raw);
+    if (row.success) cells.push({ line: i + 1, ...row.data });
+    else errors.push({ line: i + 1, reason: 'invalid_row' });
+  });
+  const checked = checkPayoutRows(cells);
+  return { rows: checked.rows, errors: [...errors, ...checked.errors] };
 }
 
 /** Payout run drafts: rows, warnings and the one-transaction build. */
@@ -324,29 +391,23 @@ export class PayoutRunsService {
     runId: string,
     userId: string,
   ): Promise<PayoutRunDetail> {
-    const { run, items } = await this.tx.runInOrgTx(
+    const { run, items, rows } = await this.tx.runInOrgTx(
       (em) => this.read(em, orgId, runId, userId),
       orgId,
     );
     // balances over HTTP after the transaction
     const runWarnings = BALANCE_STATUSES.includes(run.status)
-      ? await this.runWarnings(run.chainId, run.safeAddress, items)
+      ? await this.runWarnings(run.chainId, run.safeAddress, rows)
       : [];
     return { run, items, runWarnings };
   }
 
-  /** JSON rows: lines are 1-based row positions. */
   create(
     orgId: string,
-    input: { linkedSafeId: string; name: string; rows: Array<PayoutRowInput> },
+    input: { linkedSafeId: string; name: string; rows: Array<unknown> },
     actor: Actor,
   ): Promise<PayoutRunDetail> {
-    return this.createFrom(
-      orgId,
-      input,
-      () => this.checkJsonRows(input.rows),
-      actor,
-    );
+    return this.createFrom(orgId, input, checkJsonRows(input.rows), actor);
   }
 
   /** CSV rows: lines are file lines. */
@@ -355,18 +416,11 @@ export class PayoutRunsService {
     input: { linkedSafeId: string; name: string; csv: string },
     actor: Actor,
   ): Promise<PayoutRunDetail> {
-    return this.createFrom(
-      orgId,
-      input,
-      () => {
-        const { rows, errors } = parsePayoutCsv(input.csv);
-        if (rows.length === 0 && errors.length === 0) {
-          errors.push({ line: 2, reason: 'no_rows' });
-        }
-        return { rows, errors };
-      },
-      actor,
-    );
+    const { rows, errors } = parsePayoutCsv(input.csv);
+    if (rows.length === 0 && errors.length === 0) {
+      errors.push({ line: 2, reason: 'no_rows' });
+    }
+    return this.createFrom(orgId, input, { rows, errors }, actor);
   }
 
   async update(
@@ -375,31 +429,26 @@ export class PayoutRunsService {
     input: UpdatePayoutRun,
     actor: Actor,
   ): Promise<PayoutRunDetail> {
-    const before = await this.peek(orgId, runId);
-    const { rows } = input;
-    const prepared = rows
-      ? await this.prepare(before.chain_id, this.checkJsonRows(rows))
-      : null;
-    const trusted = prepared
-      ? await this.policies.trustedMultiSend(before.chain_id)
+    // fast 409s before any token read; rechecked under the lock
+    const before = await this.peek(orgId, runId, input.expectedVersion);
+    const prepared = input.rows
+      ? await this.prepare(before.chain_id, checkJsonRows(input.rows))
       : null;
     await this.tx.runInOrgTx(async (em) => {
-      const run = await lockRun(em, orgId, runId);
-      this.assertEditable(run);
-      if (run.version !== input.expectedVersion) {
-        throw conflict(
-          'version_conflict',
-          'The run was changed meanwhile; reload and try again',
-        );
-      }
+      const run = await this.lockEditable(
+        em,
+        orgId,
+        runId,
+        input.expectedVersion,
+      );
       const name = input.name ?? run.name;
       if (!prepared && name === run.name) return;
-      if (prepared && trusted) {
+      if (prepared) {
         await em.query(
           `DELETE FROM payout_items WHERE org_id = $1 AND run_id = $2`,
           [orgId, runId],
         );
-        await this.insertItems(em, run, prepared, trusted);
+        await this.insertItems(em, run, prepared);
       }
       // a pinned draft keeps its pin: every later claim of this run uses it
       await em.query(
@@ -410,8 +459,9 @@ export class PayoutRunsService {
           WHERE org_id = $1 AND id = $2`,
         [orgId, runId, name],
       );
-      const n = await itemCount(em, orgId, runId);
-      await this.event(em, 'payout_run.updated', { ...run, name }, n, actor);
+      await this.event(em, 'payout_run.updated', { ...run, name }, actor, {
+        fromStatus: run.status,
+      });
     }, orgId);
     return this.get(orgId, runId, actor.userId);
   }
@@ -426,12 +476,11 @@ export class PayoutRunsService {
           `The run holds nonce ${run.pinned_nonce}; it can be deleted once a transaction at that nonce executes`,
         );
       }
-      const n = await itemCount(em, orgId, runId);
+      await this.event(em, 'payout_run.deleted', run, actor);
       await em.query(`DELETE FROM payout_runs WHERE org_id = $1 AND id = $2`, [
         orgId,
         runId,
       ]);
-      await this.event(em, 'payout_run.deleted', run, n, actor);
     }, orgId);
   }
 
@@ -439,36 +488,14 @@ export class PayoutRunsService {
   async build(
     orgId: string,
     runId: string,
-    userId: string,
+    expectedVersion: number,
+    actor: Actor,
   ): Promise<PayoutRunDetail> {
-    const before = await this.peek(orgId, runId);
-    const trusted = await this.policies.trustedMultiSend(before.chain_id);
     await this.tx.runInOrgTx(async (em) => {
-      const run = await lockRun(em, orgId, runId);
-      this.assertEditable(run);
-      const items = await readItems(em, orgId, runId);
-      const calls = itemCalls(items);
+      const run = await this.lockEditable(em, orgId, runId, expectedVersion);
+      const calls = itemCalls(await readItems(em, orgId, runId));
       const estimatedGas = assertRunSize(calls);
-      const evaluation = await this.evaluateCalls(em, run, calls, trusted);
-      const warnings = await this.itemWarnings(
-        em,
-        run,
-        items.map((i) => ({ recipient: i.recipient, token: i.token })),
-        evaluation,
-      );
-      await em.query(
-        `UPDATE payout_items i
-            SET warnings = ARRAY(SELECT jsonb_array_elements_text(x.warnings)), updated_at = now()
-           FROM jsonb_to_recordset($3::jsonb) AS x(id uuid, warnings jsonb)
-          WHERE i.org_id = $1 AND i.run_id = $2 AND i.id = x.id`,
-        [
-          orgId,
-          runId,
-          JSON.stringify(
-            items.map((i, n) => ({ id: i.id, warnings: warnings[n] })),
-          ),
-        ],
-      );
+      const evaluation = await this.evaluateCalls(em, run, calls);
       // a new transaction: earlier proposal fields go; the pin stays
       await em.query(
         `UPDATE payout_runs
@@ -484,8 +511,11 @@ export class PayoutRunsService {
           JSON.stringify(evaluation),
         ],
       );
+      await this.event(em, 'payout_run.updated', run, actor, {
+        fromStatus: run.status,
+      });
     }, orgId);
-    return this.get(orgId, runId, userId);
+    return this.get(orgId, runId, actor.userId);
   }
 
   // ---- helpers ----
@@ -493,16 +523,15 @@ export class PayoutRunsService {
   private async createFrom(
     orgId: string,
     input: { linkedSafeId: string; name: string },
-    rows: () => { rows: Array<PayoutCsvRow>; errors: Array<PayoutCsvError> },
+    checked: { rows: Array<PayoutCsvRow>; errors: Array<PayoutCsvError> },
     actor: Actor,
   ): Promise<PayoutRunDetail> {
     const safe = await this.tx.runInOrgTx(
       (em) => this.linkedSafe(em, orgId, input.linkedSafeId),
       orgId,
     );
-    // token, chain and MultiSend reads before the transaction: no DB connection held during HTTP
-    const prepared = await this.prepare(safe.chainId, rows());
-    const trusted = await this.policies.trustedMultiSend(safe.chainId);
+    // token and chain reads before the transaction: no DB connection held during HTTP
+    const prepared = await this.prepare(safe.chainId, checked);
     const runId = await this.tx.runInOrgTx(async (em) => {
       // the Safe may have been unlinked meanwhile
       await this.linkedSafe(em, orgId, input.linkedSafeId);
@@ -511,28 +540,11 @@ export class PayoutRunsService {
          VALUES ($1, $2, $3, $4, $5) RETURNING ${RUN_COLUMNS}`,
         [orgId, safe.chainId, safe.address, input.name, actor.userId],
       );
-      await this.insertItems(em, run, prepared, trusted);
-      await this.event(em, 'payout_run.created', run, prepared.length, actor);
+      await this.insertItems(em, run, prepared);
+      await this.event(em, 'payout_run.created', run, actor);
       return run.id;
     }, orgId);
     return this.get(orgId, runId, actor.userId);
-  }
-
-  private checkJsonRows(rows: Array<PayoutRowInput>): {
-    rows: Array<PayoutCsvRow>;
-    errors: Array<PayoutCsvError>;
-  } {
-    if (rows.length > MAX_PAYOUT_ROWS) {
-      return {
-        rows: [],
-        errors: [{ line: MAX_PAYOUT_ROWS + 1, reason: 'too_many_rows' }],
-      };
-    }
-    const cells: Array<PayoutRowCells> = rows.map((r, i) => ({
-      line: i + 1,
-      ...r,
-    }));
-    return checkPayoutRows(cells);
   }
 
   /**
@@ -552,14 +564,14 @@ export class PayoutRunsService {
       await mapLimit(
         tokens,
         5,
-        async (t) => [t, await this.tokenMeta(chainId, t)] as const,
+        async (t) => [t, await this.meta(chainId, t)] as const,
       ),
     );
     const items: Array<PreparedItem> = [];
     for (const row of checked.rows) {
       const meta = metas.get(row.token)!;
-      if ('reason' in meta) {
-        errors.push({ line: row.line, reason: meta.reason });
+      if (typeof meta === 'string') {
+        errors.push({ line: row.line, reason: TOKEN_REASONS[meta] });
         continue;
       }
       try {
@@ -583,27 +595,14 @@ export class PayoutRunsService {
     return items;
   }
 
-  private async tokenMeta(chainId: string, token: string): Promise<TokenMeta> {
+  private async meta(chainId: string, token: string): Promise<TokenMeta> {
     try {
-      if (token === 'native') {
-        const { nativeCurrency } = await this.chains.getChain(chainId);
-        return {
-          decimals: nativeCurrency.decimals,
-          symbol: nativeCurrency.symbol,
-        };
-      }
-      const api = await this.transactionApis.getApi(chainId);
-      const t = RawTokenSchema.parse(await api.getToken(getAddress(token)));
-      if (t.type !== 'ERC20') return { reason: 'not_erc20' };
-      // the gateway token schema turns absent decimals into 0: never guess
-      if (t.decimals === null || t.decimals === undefined) {
-        return { reason: 'token_decimals_unknown' };
-      }
-      return { decimals: t.decimals, symbol: t.symbol };
-    } catch (error) {
-      if (error instanceof DataSourceError && error.code === 404) {
-        return { reason: 'unknown_token' };
-      }
+      return await tokenMeta(
+        { chains: this.chains, transactionApis: this.transactionApis },
+        chainId,
+        token === 'native' ? 'native' : getAddress(token),
+      );
+    } catch {
       throw new BadGatewayException('Could not read token details');
     }
   }
@@ -612,11 +611,8 @@ export class PayoutRunsService {
     em: EntityManager,
     run: PayoutRunRow,
     items: Array<PreparedItem>,
-    trusted: ReadonlySet<string>,
   ): Promise<void> {
-    const calls = itemCalls(items.map(asItemRow));
-    const evaluation = await this.evaluateCalls(em, run, calls, trusted);
-    const warnings = await this.itemWarnings(em, run, items, evaluation);
+    const warnings = staticWarnings(run.safe_address, items);
     await em.query(
       `INSERT INTO payout_items
          (org_id, run_id, line_no, recipient, token, amount, amount_raw, decimals, symbol, name, warnings)
@@ -645,12 +641,11 @@ export class PayoutRunsService {
     );
   }
 
-  /** Policy check of the transaction the UI will build; not logged (a preview). */
+  /** Policy check of the transaction the UI will build, from the current policies; DB only, not logged. */
   private async evaluateCalls(
     em: EntityManager,
     run: PayoutRunRow,
     calls: ReadonlyArray<SafeCall>,
-    trusted: ReadonlySet<string>,
   ): Promise<Evaluation> {
     const policies = await this.policies.activePolicies(em, run.org_id, {
       chainId: run.chain_id,
@@ -661,68 +656,29 @@ export class PayoutRunsService {
       em,
       run.org_id,
       run.chain_id,
-      trusted,
+      new Set([PREVIEW_MULTISEND]),
     );
-    // any trusted MultiSend unpacks the same; none known → evaluate reports it as undecodable
-    const multiSend = ([...trusted][0] ?? zeroAddress) as Address;
-    return evaluate(policies, outerTx(calls, multiSend), ctx);
+    return evaluate(policies, outerTx(calls), ctx);
   }
 
-  /** Per item, in input order. */
-  private async itemWarnings(
-    em: EntityManager,
-    run: PayoutRunRow,
-    items: ReadonlyArray<{ recipient: string; token: string }>,
-    evaluation: Evaluation,
-  ): Promise<Array<Array<PayoutItemWarning>>> {
-    const contacts: Array<{ address: string }> = await em.query(
-      `SELECT lower(address::text) AS address FROM contacts
-        WHERE org_id = $1 AND chain_ids @> ARRAY[$2::text]`,
-      [run.org_id, run.chain_id],
-    );
-    const known = new Set(contacts.map((c) => c.address));
-    const key = (i: { recipient: string; token: string }): string =>
-      `${i.recipient}:${i.token}`;
-    const seen = new Map<string, number>();
-    for (const i of items) seen.set(key(i), (seen.get(key(i)) ?? 0) + 1);
-    const flagged = new Set<number>();
-    if (evaluation.status === 'violation') {
-      for (const v of evaluation.violations) {
-        const index = itemIndex(v.callPath, items.length);
-        if (index !== null) flagged.add(index);
-      }
-    }
-    return items.map((i, index) => {
-      const w: Array<PayoutItemWarning> = [];
-      if (!known.has(i.recipient)) w.push('unknown_recipient');
-      if (seen.get(key(i))! > 1) w.push('duplicate');
-      if (i.recipient === run.safe_address) w.push('self');
-      if (i.recipient === i.token) w.push('token_contract');
-      if (flagged.has(index)) w.push('policy');
-      return w;
-    });
-  }
-
-  /** Per token, Σ amounts against the Safe's balance; HTTP, so never inside a transaction. */
+  /** Per token, Σ amount_raw against the Safe's balance; HTTP, so never inside a transaction. */
   private async runWarnings(
     chainId: string,
     safeAddress: string,
-    items: ReadonlyArray<PayoutItemView>,
+    items: ReadonlyArray<PayoutItemRow>,
   ): Promise<Array<PayoutRunWarning>> {
     const sums = new Map<
       string,
-      { raw: bigint; decimals: number; symbol: string; token: string }
+      { raw: bigint; decimals: number; symbol: string }
     >();
     for (const i of items) {
-      const key = i.token.toLowerCase();
-      const s = sums.get(key) ?? {
+      const s = sums.get(i.token) ?? {
         raw: 0n,
         decimals: i.decimals,
         symbol: i.symbol,
-        token: i.token,
       };
-      s.raw += parseAmountStrict(i.amount, i.decimals);
-      sums.set(key, s);
+      s.raw += BigInt(i.amount_raw);
+      sums.set(i.token, s);
     }
     let available: Map<string, bigint> | null = null;
     try {
@@ -744,25 +700,22 @@ export class PayoutRunsService {
       available = null;
     }
     const out: Array<PayoutRunWarning> = [];
-    for (const [key, s] of sums) {
-      const required = formatAmount(s.raw, s.decimals);
+    for (const [token, s] of sums) {
+      const view = {
+        token: token === 'native' ? 'native' : getAddress(token),
+        symbol: s.symbol,
+        required: formatAmount(s.raw, s.decimals),
+      };
       if (available === null) {
-        out.push({
-          code: 'balance_unknown',
-          token: s.token,
-          symbol: s.symbol,
-          required,
-        });
+        out.push({ code: 'balance_unknown', ...view });
         continue;
       }
       // a token missing from the list is held at 0
-      const has = available.get(key) ?? 0n;
+      const has = available.get(token) ?? 0n;
       if (has < s.raw) {
         out.push({
           code: 'insufficient_balance',
-          token: s.token,
-          symbol: s.symbol,
-          required,
+          ...view,
           available: formatAmount(has, s.decimals),
         });
       }
@@ -770,56 +723,48 @@ export class PayoutRunsService {
     return out;
   }
 
+  /**
+   * The run under FOR SHARE (items consistent with it). `unknown_recipient`,
+   * `policy` and `evaluation` come from the current contacts and policies.
+   */
   private async read(
     em: EntityManager,
     orgId: string,
     runId: string,
     userId: string,
-  ): Promise<{ run: PayoutRunView; items: Array<PayoutItemView> }> {
+  ): Promise<{
+    run: PayoutRunView;
+    items: Array<PayoutItemView>;
+    rows: Array<PayoutItemRow>;
+  }> {
     const [r]: Array<PayoutRunRow & { linked_safe_id: string | null }> =
       await em.query(
         `SELECT ${RUN_COLUMNS},
                 (SELECT ls.id FROM linked_safes ls
                   WHERE ls.org_id = r.org_id AND ls.chain_id = r.chain_id
                     AND ls.address = r.safe_address) AS linked_safe_id
-           FROM payout_runs r WHERE r.org_id = $1 AND r.id = $2`,
+           FROM payout_runs r WHERE r.org_id = $1 AND r.id = $2 FOR SHARE OF r`,
         [orgId, runId],
       );
     if (!r) throw new NotFoundException('Payout run not found');
-    const items = await readItems(em, orgId, runId);
-    const [a]: Array<{
-      id: string;
-      status: PayoutAttemptView['status'];
-      nonce: string;
-      created_by: string | null;
-      created_at: Date;
-    }> = await em.query(
-      `SELECT id, status, nonce::text AS nonce, created_by, created_at
-         FROM payout_proposal_attempts WHERE org_id = $1 AND run_id = $2
-        ORDER BY created_at DESC, id DESC LIMIT 1`,
-      [orgId, runId],
-    );
-    let latestAttempt: PayoutAttemptView | null = null;
-    if (a) {
-      // the claimer or payouts.manage may release an open or reported attempt (B8)
-      const open =
-        (r.status === 'proposing' || r.status === 'proposed') &&
-        a.status !== 'released';
-      const releasable =
-        open &&
-        (a.created_by === userId ||
-          !!(
-            await this.resolver.effective(orgId, userId, em)
-          )?.permissions.includes('payouts.manage'));
-      latestAttempt = {
-        id: a.id,
-        status: a.status,
-        nonce: a.nonce,
-        createdBy: a.created_by,
-        createdAt: a.created_at.toISOString(),
-        releasable,
-      };
+    const rows = await readItems(em, orgId, runId);
+
+    const calls = r.calls ? fromStoredCalls(r.calls) : itemCalls(rows);
+    const evaluation = await this.evaluateCalls(em, r, calls);
+    const flagged = new Set<number>();
+    if (evaluation.status === 'violation') {
+      for (const v of evaluation.violations) {
+        const index = itemIndex(v.callPath, calls.length);
+        if (index !== null) flagged.add(index);
+      }
     }
+    const contacts: Array<{ address: string }> = await em.query(
+      `SELECT lower(address::text) AS address FROM contacts
+        WHERE org_id = $1 AND chain_ids @> ARRAY[$2::text]`,
+      [orgId, r.chain_id],
+    );
+    const known = new Set(contacts.map((c) => c.address));
+
     return {
       run: {
         id: r.id,
@@ -832,7 +777,7 @@ export class PayoutRunsService {
         calls: r.calls,
         estimatedGas: r.est_gas === null ? null : Number(r.est_gas),
         gasBound: Number(PAYOUT_GAS_BOUND),
-        evaluation: r.evaluation,
+        evaluation: r.calls ? evaluation : null,
         safeTxHash: r.safe_tx_hash,
         nonce: r.nonce,
         executedTxHash: r.executed_tx_hash,
@@ -840,9 +785,9 @@ export class PayoutRunsService {
         pinnedNonce: r.pinned_nonce,
         verifyingSince: r.verifying_since?.toISOString() ?? null,
         delayNotified: r.delay_notified_at !== null,
-        latestAttempt,
+        latestAttempt: await this.latestAttempt(em, r, userId),
       },
-      items: items.map((i) => ({
+      items: rows.map((i, index) => ({
         id: i.id,
         line: i.line_no,
         recipient: getAddress(i.recipient),
@@ -851,13 +796,70 @@ export class PayoutRunsService {
         symbol: i.symbol,
         decimals: i.decimals,
         amount: i.amount,
-        warnings: i.warnings,
+        warnings: [
+          ...(known.has(i.recipient) ? [] : ['unknown_recipient' as const]),
+          ...i.warnings,
+          ...(flagged.has(index) ? ['policy' as const] : []),
+        ],
       })),
+      rows,
     };
   }
 
-  /** Unlocked read for the HTTP done before a mutation; the mutation re-reads under the lock. */
-  private async peek(orgId: string, runId: string): Promise<PayoutRunRow> {
+  /**
+   * While `proposing | proposed`: the attempt bound to the active proposal
+   * (the open one, or the reported one carrying the run's safeTxHash), the
+   * one a release acts on. Otherwise the newest attempt.
+   */
+  private async latestAttempt(
+    em: EntityManager,
+    r: PayoutRunRow,
+    userId: string,
+  ): Promise<PayoutAttemptView | null> {
+    const active = r.status === 'proposing' || r.status === 'proposed';
+    const WHERE: Partial<Record<PayoutRunStatus, string>> = {
+      proposing: `AND status = 'open'`,
+      proposed: `AND status = 'reported' AND safe_tx_hash = $3`,
+    };
+    const where = WHERE[r.status] ?? '';
+    const [a]: Array<{
+      id: string;
+      status: PayoutAttemptView['status'];
+      nonce: string;
+      created_by: string | null;
+      created_at: Date;
+    }> = await em.query(
+      `SELECT id, status, nonce::text AS nonce, created_by, created_at
+         FROM payout_proposal_attempts WHERE org_id = $1 AND run_id = $2 ${where}
+        ORDER BY created_at DESC, id DESC LIMIT 1`,
+      r.status === 'proposed'
+        ? [r.org_id, r.id, r.safe_tx_hash]
+        : [r.org_id, r.id],
+    );
+    if (!a) return null;
+    // the claimer or payouts.manage may release the active attempt (B8)
+    const releasable =
+      active &&
+      (a.created_by === userId ||
+        !!(
+          await this.resolver.effective(r.org_id, userId, em)
+        )?.permissions.includes('payouts.manage'));
+    return {
+      id: a.id,
+      status: a.status,
+      nonce: a.nonce,
+      createdBy: a.created_by,
+      createdAt: a.created_at.toISOString(),
+      releasable,
+    };
+  }
+
+  /** Unlocked read for fast 409s before any HTTP; the mutation re-checks under the lock. */
+  private async peek(
+    orgId: string,
+    runId: string,
+    expectedVersion: number,
+  ): Promise<PayoutRunRow> {
     const [run]: Array<PayoutRunRow> = await this.tx.runInOrgTx(
       (em) =>
         em.query(
@@ -867,8 +869,32 @@ export class PayoutRunsService {
       orgId,
     );
     if (!run) throw new NotFoundException('Payout run not found');
-    // fail early, before any HTTP; rechecked under the lock
     this.assertEditable(run);
+    if (run.version !== expectedVersion) throw versionConflict();
+    return run;
+  }
+
+  /** Row lock, then status, version and link checks (PATCH, build). */
+  private async lockEditable(
+    em: EntityManager,
+    orgId: string,
+    runId: string,
+    expectedVersion: number,
+  ): Promise<PayoutRunRow> {
+    const run = await lockRun(em, orgId, runId);
+    this.assertEditable(run);
+    if (run.version !== expectedVersion) throw versionConflict();
+    // linked_safes has no RLS (A3): filter by org explicitly
+    const linked: Array<unknown> = await em.query(
+      `SELECT 1 FROM linked_safes WHERE org_id = $1 AND chain_id = $2 AND address = $3`,
+      [orgId, run.chain_id, run.safe_address],
+    );
+    if (linked.length === 0) {
+      throw conflict(
+        'safe_unlinked',
+        'The Safe of this run is no longer linked to the organization',
+      );
+    }
     return run;
   }
 
@@ -892,14 +918,16 @@ export class PayoutRunsService {
     return { chainId: row.chain_id, address: row.address };
   }
 
-  private event(
+  /** Item count and hash read in the same transaction, after the change. */
+  private async event(
     em: EntityManager,
     type: 'payout_run.created' | 'payout_run.updated' | 'payout_run.deleted',
     run: PayoutRunRow,
-    items: number,
     actor: Actor,
+    extra: { fromStatus?: PayoutRunStatus } = {},
   ): Promise<void> {
-    return this.log.record(em, {
+    const items = await readItems(em, run.org_id, run.id);
+    await this.log.record(em, {
       orgId: run.org_id,
       actorUserId: actor.userId,
       type,
@@ -909,7 +937,9 @@ export class PayoutRunsService {
         name: run.name,
         chainId: run.chain_id,
         address: getAddress(run.safe_address),
-        items,
+        items: items.length,
+        itemsHash: itemsHash(items),
+        ...extra,
       },
       ip: actor.ip,
       userAgent: actor.userAgent,

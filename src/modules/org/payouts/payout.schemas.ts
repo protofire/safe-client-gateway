@@ -1,15 +1,17 @@
 import { z } from 'zod';
 import type { Evaluation } from '@/modules/org/policies/evaluate';
 
-// the row count and every cell are checked by checkPayoutRows (422 invalid_rows), not here
-const PayoutRowInputSchema = z.object({
-  address: z.string().max(200),
-  amount: z.string().max(200),
-  token: z.string().max(200),
-  name: z.string().max(200).optional(),
+/** One JSON row; a row that does not match is a 422 `invalid_rows` line (`invalid_row`), not a 400. */
+export const PayoutRowInputSchema = z.object({
+  address: z.string(),
+  amount: z.string(),
+  token: z.string(),
+  name: z.string().optional(),
 });
-const rows = z.array(PayoutRowInputSchema).min(1).max(5_000);
+// count and cells are checked per line (checkPayoutRows); the body itself is bounded by express.jsonLimit
+const rows = z.array(z.unknown());
 const name = z.string().trim().min(1).max(64);
+const expectedVersion = z.number().int().min(1);
 
 export const CreatePayoutRunSchema = z.object({
   linkedSafeId: z.uuid(),
@@ -18,10 +20,11 @@ export const CreatePayoutRunSchema = z.object({
 });
 export const ImportPayoutRunSchema = z.object({ linkedSafeId: z.uuid(), name });
 export const UpdatePayoutRunSchema = z.object({
-  expectedVersion: z.number().int().min(1),
+  expectedVersion,
   name: name.optional(),
   rows: rows.optional(),
 });
+export const BuildPayoutRunSchema = z.object({ expectedVersion });
 export const ListPayoutRunsSchema = z.object({
   linkedSafeId: z.uuid().optional(),
 });

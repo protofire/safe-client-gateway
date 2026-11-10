@@ -18,11 +18,12 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import type { Request } from 'express';
 import { z } from 'zod';
 import { OrgSession } from '@/modules/org/auth/decorators';
-import { MAX_CSV_BYTES } from '@/modules/org/common/csv';
+import { CSV_UPLOAD_LIMITS } from '@/modules/org/common/csv';
 import { actor, parse } from '@/modules/org/orgs/parse';
 import { RequirePermission } from '@/modules/org/permissions/require-permission.decorator';
 import { PayoutRunsService } from '@/modules/org/payouts/payout-runs.service';
 import {
+  BuildPayoutRunSchema,
   CreatePayoutRunSchema,
   ImportPayoutRunSchema,
   ListPayoutRunsSchema,
@@ -68,9 +69,7 @@ export class PayoutRunsController {
 
   @Post('payout-runs/import')
   @RequirePermission('payouts.prepare')
-  @UseInterceptors(
-    FileInterceptor('file', { limits: { fileSize: MAX_CSV_BYTES, files: 1 } }),
-  )
+  @UseInterceptors(FileInterceptor('file', { limits: CSV_UPLOAD_LIMITS }))
   import(
     @Req() req: Request,
     @Param('orgId') orgId: string,
@@ -132,10 +131,17 @@ export class PayoutRunsController {
   @HttpCode(200)
   @RequirePermission('payouts.prepare')
   build(
+    @Req() req: Request,
     @Param('orgId') orgId: string,
     @Param('runId') runId: string,
     @OrgSession() session: OrgSession,
+    @Body() body: unknown,
   ): Promise<PayoutRunDetail> {
-    return this.runs.build(orgId, uuid(runId), session.userId);
+    return this.runs.build(
+      orgId,
+      uuid(runId),
+      parse(BuildPayoutRunSchema, body).expectedVersion,
+      actor(req, session.userId),
+    );
   }
 }
