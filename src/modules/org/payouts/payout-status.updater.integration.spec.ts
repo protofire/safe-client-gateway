@@ -971,6 +971,36 @@ describe('PayoutStatusUpdater', () => {
     expect(await status(b.runId)).toBe('executed');
   });
 
+  it('coalesces concurrent work on one run: never two handles at once, one rerun for any number of events', async () => {
+    const r = await proposed();
+    let active = 0;
+    let maxActive = 0;
+    const original = p.updater.handle.bind(p.updater);
+    const spy = jest
+      .spyOn(p.updater, 'handle')
+      .mockImplementation(async (...args) => {
+        maxActive = Math.max(maxActive, ++active);
+        await new Promise((res) => setTimeout(res, 30));
+        try {
+          return await original(...args);
+        } finally {
+          active--;
+        }
+      });
+    try {
+      await Promise.all([
+        p.updater.onExecuted('1', SAFE_A, r.tx.safeTxHash),
+        p.updater.onExecuted('1', SAFE_A, r.tx.safeTxHash),
+        p.updater.onExecuted('1', SAFE_A, r.tx.safeTxHash),
+        p.updater.run(),
+      ]);
+      expect(maxActive).toBe(1);
+      expect(spy.mock.calls.length).toBeLessThanOrEqual(2);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('returns null from run while another replica holds the lock', async () => {
     const runner = p.t.sql.createQueryRunner();
     await runner.connect();

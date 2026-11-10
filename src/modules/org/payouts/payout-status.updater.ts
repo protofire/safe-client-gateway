@@ -97,6 +97,11 @@ export class PayoutStatusUpdater
 {
   private timer: NodeJS.Timeout | undefined;
   private bootTimer: NodeJS.Timeout | undefined;
+  /** Per run: the handling in progress, and whether another was asked for meanwhile. */
+  private readonly inFlight = new Map<
+    string,
+    { done: Promise<void>; again: boolean }
+  >();
 
   constructor(
     @InjectDataSource(ORG_DATA_SOURCE) private readonly db: DataSource,
@@ -432,7 +437,37 @@ export class PayoutStatusUpdater
 
   // ---- helpers ----
 
-  private async handleSafely(
+  /**
+   * Coalesced per run: while one handling runs, any number of further
+   * requests (events, the periodic pass) become one rerun after it, so a
+   * burst of events never handles one run concurrently or N times.
+   */
+  private handleSafely(
+    orgId: string,
+    runId: string,
+    safeTxHash?: string,
+  ): Promise<void> {
+    const current = this.inFlight.get(runId);
+    if (current) {
+      current.again = true;
+      return current.done;
+    }
+    const entry = { done: Promise.resolve(), again: false };
+    entry.done = (async (): Promise<void> => {
+      try {
+        do {
+          entry.again = false;
+          await this.handleOnce(orgId, runId, safeTxHash);
+        } while (entry.again);
+      } finally {
+        this.inFlight.delete(runId);
+      }
+    })();
+    this.inFlight.set(runId, entry);
+    return entry.done;
+  }
+
+  private async handleOnce(
     orgId: string,
     runId: string,
     safeTxHash?: string,

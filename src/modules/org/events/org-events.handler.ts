@@ -79,7 +79,7 @@ export class OrgEventsHandler {
         : [];
     if (orgIds.length === 0) {
       await this.invalidate(e);
-      this.settlePayouts(e);
+      await this.settlePayouts(e);
       return;
     }
     if (isConfigCandidate || isSeedOnly) {
@@ -97,14 +97,18 @@ export class OrgEventsHandler {
         (e as { safeTxHash: string }).safeTxHash,
       );
     }
-    this.settlePayouts(e);
+    await this.settlePayouts(e);
   }
 
-  /** Payout runs pinned on any Safe (linked or not, unlinked runs still settle); returns at once when none watches it. */
-  private settlePayouts(e: TxEvent): void {
+  /**
+   * Payout runs pinned on any Safe (linked or not, unlinked runs still settle);
+   * returns at once when none watches it. Awaited so the AMQP prefetch bounds
+   * the work; a failure is only logged (the periodic pass retries).
+   */
+  private async settlePayouts(e: TxEvent): Promise<void> {
     if (e.type !== TransactionEventType.EXECUTED_MULTISIG_TRANSACTION) return;
     const safeTxHash = (e as { safeTxHash: string }).safeTxHash;
-    this.payouts
+    await this.payouts
       ?.onExecuted(e.chainId, e.address, safeTxHash)
       .catch((error: unknown) =>
         this.logger.warn({
