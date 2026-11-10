@@ -158,6 +158,7 @@ export interface ISafeRepository {
     to?: string;
     value?: string;
     nonce?: string;
+    nonceGte?: number;
     limit?: number;
     offset?: number;
   }): Promise<Page<MultisigTransaction>>;

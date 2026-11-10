@@ -62,6 +62,8 @@ export class FakeChain {
   failNonces = false;
   /** Server cap on transfers per page (below any `limit`); tests of the paging lower it. */
   pageSize = 100;
+  /** Server cap on multisig txs per page. */
+  txPageSize = 100;
 
   readonly repo = {
     getNonces: jest.fn(
@@ -94,18 +96,32 @@ export class FakeChain {
           : Promise.reject(new DataSourceError('Not Found', 404));
       },
     ),
+    // ordering -nonce, then insertion order; pages capped at txPageSize
     getMultisigTransactions: jest.fn(
-      (args: { safeAddress: Address; nonce?: string }) => {
-        const results = this.txs.filter(
-          (t) =>
-            t.safe.toLowerCase() === args.safeAddress.toLowerCase() &&
-            (args.nonce === undefined || String(t.nonce) === args.nonce),
-        );
+      (args: {
+        safeAddress: Address;
+        nonce?: string;
+        nonceGte?: number;
+        executed?: boolean;
+        limit?: number;
+        offset?: number;
+      }) => {
+        const all = this.txs
+          .filter(
+            (t) =>
+              t.safe.toLowerCase() === args.safeAddress.toLowerCase() &&
+              (args.nonce === undefined || String(t.nonce) === args.nonce) &&
+              (args.nonceGte === undefined || t.nonce >= args.nonceGte) &&
+              (args.executed === undefined || t.isExecuted === args.executed),
+          )
+          .sort((a, b) => b.nonce - a.nonce);
+        const size = Math.min(args.limit ?? 20, this.txPageSize);
+        const offset = args.offset ?? 0;
         return Promise.resolve({
-          count: results.length,
-          next: null,
+          count: all.length,
+          next: offset + size < all.length ? 'next' : null,
           previous: null,
-          results: structuredClone(results),
+          results: structuredClone(all.slice(offset, offset + size)),
         });
       },
     ),
@@ -145,6 +161,7 @@ export class FakeChain {
     this.notDeployed.clear();
     this.failNonces = false;
     this.pageSize = 100;
+    this.txPageSize = 100;
   }
 
   setNonce(safe: Address, nonce: number): void {

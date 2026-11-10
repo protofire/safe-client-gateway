@@ -28,11 +28,15 @@ import {
   PayoutStatusUpdater,
   type NonceEvidence,
 } from '@/modules/org/payouts/payout-status.updater';
-import { verifyProposedTx } from '@/modules/org/payouts/payout-verify';
+import {
+  callsMismatch,
+  verifyProposedTx,
+} from '@/modules/org/payouts/payout-verify';
 import {
   EDITABLE_STATUSES,
   type PayoutRunDetail,
   type PayoutRunStatus,
+  type StoredCall,
 } from '@/modules/org/payouts/payout.schemas';
 import type { MultisigTransaction } from '@/modules/safe/domain/entities/multisig-transaction.entity';
 import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
@@ -127,7 +131,11 @@ export class PayoutProposalsService {
       BigInt(nonces.currentNonce) > BigInt(before.pinned_nonce)
     ) {
       // N was used: settle first (committed), then decide
-      await this.updater.handle(orgId, runId);
+      try {
+        await this.updater.handle(orgId, runId);
+      } catch {
+        throw unavailable();
+      }
       before = await this.peek(orgId, runId);
       if (before.pinned_nonce !== null) {
         throw conflict(
@@ -136,6 +144,19 @@ export class PayoutProposalsService {
         );
       }
       nonces = await this.nonces(before.chain_id, safeAddress);
+    }
+    // the run's calls queued at another nonce could execute besides the pinned one
+    let queued: Array<MultisigTransaction>;
+    let callOnly: ReadonlySet<string>;
+    try {
+      [queued, callOnly] = await Promise.all([
+        this.updater.readQueued(before.chain_id, safeAddress, {
+          nonceGte: nonces.currentNonce,
+        }),
+        this.updater.callOnly(before.chain_id),
+      ]);
+    } catch {
+      throw unavailable();
     }
 
     return this.tx.runInOrgTx(async (em) => {
@@ -169,6 +190,25 @@ export class PayoutProposalsService {
         BigInt(nonces.currentNonce) > BigInt(run.pinned_nonce)
       ) {
         throw conflict('retry_later', `Nonce ${expected} was used on-chain`);
+      }
+      const attemptCalls: Array<{ calls: Array<StoredCall> }> = await em.query(
+        `SELECT calls FROM payout_proposal_attempts WHERE org_id = $1 AND run_id = $2`,
+        [orgId, run.id],
+      );
+      const known = [run.calls!, ...attemptCalls.map((a) => a.calls)].map(
+        fromStoredCalls,
+      );
+      const stray = queued.find(
+        (t) =>
+          BigInt(t.nonce) !== BigInt(expected) &&
+          known.some((calls) => callsMismatch(t, calls, callOnly) === null),
+      );
+      if (stray) {
+        throw conflictWith('stray_proposal', {
+          message: `This payout is already queued at nonce ${stray.nonce}; reject that transaction in the Safe queue before proposing it at ${expected}`,
+          nonce: String(stray.nonce),
+          safeTxHash: stray.safeTxHash,
+        });
       }
       // the stored evaluation is the one the run is proposed with
       const evaluation = await this.runs.evaluateCalls(
@@ -229,7 +269,12 @@ export class PayoutProposalsService {
     const before = await this.peek(orgId, runId);
     if (before.safe_tx_hash === body.safeTxHash)
       return this.runs.get(orgId, runId, actor.userId);
-    if (before.pinned_nonce === null) throw proposalClosed();
+    // eligibility before any external read; re-checked under the lock
+    if (
+      before.pinned_nonce === null ||
+      (before.status !== 'proposing' && before.status !== 'draft')
+    )
+      throw proposalClosed();
 
     let tx: MultisigTransaction;
     try {
@@ -243,7 +288,13 @@ export class PayoutProposalsService {
       });
     } catch (error) {
       if (error instanceof DataSourceError && error.code === 404) {
-        throw mismatch('tx_mismatch', 'safeTxHash');
+        // not indexed yet (or unknown): retryable, the attempt stays open
+        throw new ServiceUnavailableException({
+          statusCode: 503,
+          code: 'tx_not_indexed',
+          message:
+            'The transaction service does not list this transaction yet; try again shortly',
+        });
       }
       throw unavailable();
     }
@@ -302,6 +353,26 @@ export class PayoutProposalsService {
               },
               callOnly,
             );
+      if (!result.ok && result.field === 'nonce') {
+        const atTxNonce = verifyProposedTx(
+          tx,
+          {
+            safeAddress: getAddress(run.safe_address),
+            nonce: BigInt(tx.nonce),
+            calls: fromStoredCalls(run.calls!),
+          },
+          callOnly,
+        );
+        if (atTxNonce.ok) {
+          throw new UnprocessableEntityException({
+            statusCode: 422,
+            code: 'tx_wrong_nonce',
+            nonce: String(tx.nonce),
+            expectedNonce: run.pinned_nonce,
+            message: `This payout was signed at nonce ${tx.nonce} instead of ${run.pinned_nonce}; reject the transaction at nonce ${tx.nonce} in the Safe queue so it cannot execute`,
+          });
+        }
+      }
       if (!result.ok) {
         // a late tx of another version is not adopted; settlement judges it if it executes
         if (late) throw proposalClosed();
@@ -387,7 +458,8 @@ export class PayoutProposalsService {
       const [run]: Array<
         Pick<PayoutRunRow, 'status' | 'safe_tx_hash' | 'executed_tx_hash'>
       > = await em.query(
-        `SELECT status, safe_tx_hash, executed_tx_hash FROM payout_runs WHERE org_id = $1 AND id = $2`,
+        `SELECT status, safe_tx_hash, executed_tx_hash FROM payout_runs
+          WHERE org_id = $1 AND id = $2 FOR SHARE`,
         [orgId, runId],
       );
       if (!run) throw new NotFoundException('Payout run not found');
@@ -491,6 +563,12 @@ function conflictWith(
 }
 
 function assertClaimable(run: PayoutRunRow, expectedVersion: number): void {
+  if (run.status === 'verifying') {
+    throw conflict(
+      'retry_later',
+      'The nonce of this run was used on-chain; it is settled once the transaction is confirmed',
+    );
+  }
   if (OPEN_STATUSES.includes(run.status)) {
     throw conflict(
       'proposal_open',

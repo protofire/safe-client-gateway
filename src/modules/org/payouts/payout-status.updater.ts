@@ -30,6 +30,7 @@ import {
 import {
   callsEqual,
   multiSendCallOnlySet,
+  reorgMarginMs,
   verifyProposedTx,
 } from '@/modules/org/payouts/payout-verify';
 import type {
@@ -47,6 +48,8 @@ const BOOT_DELAY_MS = MINUTE;
 const DELAY_NOTICE_MS = 10 * MINUTE;
 const DEADLINE_MS = 24 * 60 * MINUTE;
 const TRANSFER_PAGE = 100;
+const QUEUED_PAGE = 100;
+const MAX_QUEUED_PAGES = 5;
 const MAX_TRANSFER_PAGES = 10;
 const SAFE_CONCURRENCY = 5;
 // two-int4 advisory key space: never collides with the per-Safe bigint locks
@@ -56,8 +59,12 @@ const RUN_LOCK = [0x6f7267, 3] as const;
 export type NonceEvidence = {
   nonce: bigint;
   currentNonce: bigint;
-  /** Every tx the tx-service lists at N, executed and queued. */
-  atNonce: Array<MultisigTransaction>;
+  /** The tx executed at N, read with the `executed` filter (not from a page of queued ones). */
+  executed: MultisigTransaction | null;
+  /** Queued txs at N (adoption candidates), up to {@link MAX_QUEUED_PAGES} pages. */
+  queued: Array<MultisigTransaction>;
+  /** Taken before any read: evidence older than a run's `verifying_since` cannot roll it back. */
+  readAt: Date;
   /** ERC20/native transfers of the tx executed at N, as far as they could be read. */
   transfers: Array<Transfer>;
   callOnly: ReadonlySet<string>;
@@ -191,6 +198,7 @@ export class PayoutStatusUpdater
     address: string,
     nonce: bigint,
   ): Promise<NonceEvidence> {
+    const readAt = this.clock.now();
     const safeAddress = getAddress(address);
     await Promise.all([
       this.safes.clearSafe({ chainId, address: safeAddress }),
@@ -201,16 +209,23 @@ export class PayoutStatusUpdater
       chainId,
       safeAddress,
     });
-    const page = await this.safes.getMultisigTransactions({
-      chainId,
-      safeAddress,
-      nonce: nonce.toString(),
-      limit: 100,
-    });
-    const atNonce = page.results.filter(
-      (t) => BigInt(t.nonce) === nonce && lower(t.safe) === lower(safeAddress),
-    );
-    const executed = atNonce.find((t) => t.isExecuted);
+    const [executedPage, queued] = await Promise.all([
+      this.safes.getMultisigTransactions({
+        chainId,
+        safeAddress,
+        nonce: nonce.toString(),
+        executed: true,
+        limit: 1,
+      }),
+      this.readQueued(chainId, safeAddress, { nonce: nonce.toString() }),
+    ]);
+    const executed =
+      executedPage.results.find(
+        (t) =>
+          t.isExecuted &&
+          BigInt(t.nonce) === nonce &&
+          lower(t.safe) === lower(safeAddress),
+      ) ?? null;
     const [transfers, callOnly, trusted] = await Promise.all([
       executed?.transactionHash
         ? this.readTransfers(chainId, safeAddress, executed.transactionHash)
@@ -221,11 +236,37 @@ export class PayoutStatusUpdater
     return {
       nonce,
       currentNonce: BigInt(currentNonce),
-      atNonce,
+      executed,
+      queued: queued.filter((t) => BigInt(t.nonce) === nonce),
+      readAt,
       transfers,
       callOnly,
       trusted,
     };
+  }
+
+  /** Trusted queued txs of the Safe matching `filter`, paged up to a cap (a capped read just sees fewer). */
+  async readQueued(
+    chainId: string,
+    safeAddress: Address,
+    filter: { nonce?: string; nonceGte?: number },
+  ): Promise<Array<MultisigTransaction>> {
+    const out: Array<MultisigTransaction> = [];
+    for (let page = 0; page < MAX_QUEUED_PAGES; page++) {
+      const { results, next } = await this.safes.getMultisigTransactions({
+        chainId,
+        safeAddress,
+        ...filter,
+        executed: false,
+        limit: QUEUED_PAGE,
+        offset: out.length,
+      });
+      out.push(...results);
+      if (next === null || results.length === 0) break;
+    }
+    return out.filter(
+      (t) => !t.isExecuted && lower(t.safe) === lower(safeAddress),
+    );
   }
 
   async callOnly(chainId: string): Promise<ReadonlySet<string>> {
@@ -257,7 +298,10 @@ export class PayoutStatusUpdater
       run = await this.adopt(em, run, ev, consumed);
     }
     if (!consumed) {
-      if (run.status === 'verifying') await this.unverify(em, run);
+      // only evidence read after the run entered verifying may roll it back
+      const stale =
+        run.verifying_since !== null && run.verifying_since > ev.readAt;
+      if (run.status === 'verifying' && !stale) await this.unverify(em, run);
       return;
     }
     await this.settle(em, run, ev);
@@ -363,14 +407,18 @@ export class PayoutStatusUpdater
     if (run.calls === null) return run;
     const calls = fromStoredCalls(run.calls);
     const attempts = await this.attempts(em, run);
+    // a pinned draft was released on purpose: its released hashes are not re-adopted
     const skip = new Set(
-      attempts
-        .filter((a) => a.status === 'released' && a.safe_tx_hash !== null)
-        .map((a) => lower(a.safe_tx_hash!)),
+      run.status === 'draft'
+        ? attempts
+            .filter((a) => a.status === 'released' && a.safe_tx_hash !== null)
+            .map((a) => lower(a.safe_tx_hash!))
+        : [],
     );
-    const match = ev.atNonce.find(
+    const executedAtN = ev.executed ? [ev.executed] : [];
+    const candidates = consumed ? executedAtN : ev.queued;
+    const match = candidates.find(
       (t) =>
-        t.isExecuted === consumed &&
         !skip.has(lower(t.safeTxHash)) &&
         verifyProposedTx(
           t,
@@ -408,9 +456,12 @@ export class PayoutStatusUpdater
     const attempts = (await this.attempts(em, run)).filter(
       (a) => BigInt(a.nonce) === ev.nonce,
     );
-    const executed = ev.atNonce.find((t) => t.isExecuted) ?? null;
+    const executed = ev.executed;
     const now = this.clock.now();
-    const outcome = settlementOutcome({
+    const deadline = run.verifying_since
+      ? new Date(run.verifying_since.getTime() + DEADLINE_MS)
+      : null;
+    let outcome = settlementOutcome({
       run: {
         chainId: run.chain_id,
         safeAddress: getAddress(run.safe_address),
@@ -428,14 +479,23 @@ export class PayoutStatusUpdater
       trusted: ev.trusted,
       callOnly: ev.callOnly,
       now,
-      deadline: run.verifying_since
-        ? new Date(run.verifying_since.getTime() + DEADLINE_MS)
-        : null,
+      deadline,
     });
-    if (outcome.status === 'pending') return;
+    if (outcome.status === 'pending') {
+      // N is used but the execution is not visible or not decided yet: wait, never forever
+      const executedTxHash = executed?.transactionHash ?? undefined;
+      outcome =
+        deadline !== null && now >= deadline
+          ? {
+              status: 'needs_review',
+              review: { reason: 'undecodable' },
+              ...(executedTxHash && { executedTxHash }),
+            }
+          : { status: 'verifying', ...(executedTxHash && { executedTxHash }) };
+    }
     if (outcome.status === 'verifying')
-      return this.markVerifying(em, run, outcome, now);
-    await this.finish(em, run, outcome, executed!, items.length);
+      return this.markVerifying(em, run, outcome, now, executed);
+    await this.finish(em, run, outcome, executed, items.length);
   }
 
   private async markVerifying(
@@ -443,11 +503,16 @@ export class PayoutStatusUpdater
     run: PayoutRunRow,
     outcome: Settlement,
     now: Date,
+    executed: MultisigTransaction | null,
   ): Promise<void> {
     const since = run.verifying_since ?? now;
+    // the delay counts from the end of the reorg margin (verifying before it is expected)
+    const delayFrom = executed?.executionDate
+      ? executed.executionDate.getTime() + reorgMarginMs(run.chain_id)
+      : since.getTime();
     const notify =
       run.delay_notified_at === null &&
-      now.getTime() - since.getTime() >= DELAY_NOTICE_MS;
+      now.getTime() - delayFrom >= DELAY_NOTICE_MS;
     const executedTxHash = outcome.executedTxHash ?? null;
     if (
       run.status === 'verifying' &&
@@ -500,10 +565,11 @@ export class PayoutStatusUpdater
   private async finish(
     em: EntityManager,
     run: PayoutRunRow,
-    outcome: Settlement,
-    executed: MultisigTransaction,
+    settlement: Settlement,
+    executed: MultisigTransaction | null,
     itemCount: number,
   ): Promise<void> {
+    let outcome = settlement;
     if (
       outcome.status === 'replaced' &&
       (await this.restingStatus(em, run)) === 'draft'
@@ -521,8 +587,26 @@ export class PayoutStatusUpdater
       return;
     }
     const ownTx = outcome.status === 'executed' || outcome.status === 'failed';
-    const safeTxHash =
-      run.safe_tx_hash ?? (ownTx ? lower(executed.safeTxHash) : null);
+    let safeTxHash =
+      run.safe_tx_hash ??
+      (ownTx && executed ? lower(executed.safeTxHash) : null);
+    if (safeTxHash !== null && run.safe_tx_hash === null) {
+      const taken: Array<unknown> = await em.query(
+        `SELECT 1 FROM payout_runs WHERE org_id = $1 AND safe_tx_hash = $2 AND id <> $3`,
+        [run.org_id, safeTxHash, run.id],
+      );
+      if (taken.length > 0) {
+        // another run of the org records this tx: both cannot own one payment
+        safeTxHash = null;
+        outcome = {
+          status: 'needs_review',
+          review: { reason: 'partial_overlap' },
+          ...(outcome.executedTxHash && {
+            executedTxHash: outcome.executedTxHash,
+          }),
+        };
+      }
+    }
     await em.query(
       `UPDATE payout_runs
           SET status = $3, executed_tx_hash = $4, review = $5::jsonb, safe_tx_hash = $6,

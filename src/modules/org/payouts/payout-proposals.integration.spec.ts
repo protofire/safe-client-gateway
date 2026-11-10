@@ -236,6 +236,46 @@ describe('payout proposals API', () => {
       expect(await p.events('payout_run.proposal_claimed')).toEqual([]);
     });
 
+    it('answers 409 stray_proposal while the run calls are queued at another nonce', async () => {
+      const b = await built();
+      const { run } = await p.detail(orgA, b.runId, member);
+      // signed outside the claim at 5; the recommended nonce is now 6
+      const stray = p.chain.propose(SAFE_A, 5, toCalls(run.calls!));
+      const res = await p
+        .claim(orgA, b.runId, member, { expectedVersion: b.version, nonce: 6 })
+        .expect(409);
+      expect(res.body).toMatchObject({
+        code: 'stray_proposal',
+        nonce: '5',
+        safeTxHash: stray.safeTxHash,
+      });
+    });
+
+    it('answers 409 stray_proposal while an earlier attempt calls are queued at another nonce', async () => {
+      const c = await claimed();
+      await p.release(orgA, c.runId, c.attemptId, member).expect(200);
+      let { run } = await p.detail(orgA, c.runId, member);
+      await p
+        .write('patch', `${orgA}/payout-runs/${c.runId}`, member, {
+          expectedVersion: run.version,
+          rows: [{ address: CAROL, amount: '2', token: 'native' }],
+        })
+        .expect(200);
+      ({ run } = await p.build(orgA, c.runId, member));
+      const stray = p.chain.propose(SAFE_A, 6, c.calls);
+      const res = await p
+        .claim(orgA, c.runId, member, {
+          expectedVersion: run.version,
+          nonce: 5,
+        })
+        .expect(409);
+      expect(res.body).toMatchObject({
+        code: 'stray_proposal',
+        nonce: '6',
+        safeTxHash: stray.safeTxHash,
+      });
+    });
+
     it('answers 409 proposal_open to a second claim from another tab', async () => {
       const c = await claimed();
       const res = await p
@@ -374,7 +414,7 @@ describe('payout proposals API', () => {
       });
     });
 
-    it('rejects a report of a tx at another nonce with tx_mismatch field nonce', async () => {
+    it('answers 422 tx_wrong_nonce to the run calls signed at another nonce, and tx_mismatch field nonce when more differs', async () => {
       const c = await claimed();
       const tx = p.chain.propose(SAFE_A, 6, c.calls);
       const res = await p
@@ -384,7 +424,50 @@ describe('payout proposals API', () => {
           safeTxHash: tx.safeTxHash,
         })
         .expect(422);
-      expect(res.body).toMatchObject({ code: 'tx_mismatch', field: 'nonce' });
+      expect(res.body).toMatchObject({
+        code: 'tx_wrong_nonce',
+        nonce: '6',
+        expectedNonce: '5',
+      });
+      const other = p.chain.propose(SAFE_A, 6, [c.calls[0]]);
+      const res2 = await p
+        .report(orgA, c.runId, member, {
+          attemptId: c.attemptId,
+          expectedVersion: c.version,
+          safeTxHash: other.safeTxHash,
+        })
+        .expect(422);
+      expect(res2.body).toMatchObject({ code: 'tx_mismatch', field: 'nonce' });
+    });
+
+    it('answers 503 tx_not_indexed to a hash the tx-service does not know yet and keeps the attempt open', async () => {
+      const c = await claimed();
+      const res = await p
+        .report(orgA, c.runId, member, {
+          attemptId: c.attemptId,
+          expectedVersion: c.version,
+          safeTxHash: `0x${'7'.repeat(64)}`,
+        })
+        .expect(503);
+      expect(res.body.code).toBe('tx_not_indexed');
+      expect(await p.runRow(orgA, c.runId)).toMatchObject({
+        status: 'proposing',
+      });
+    });
+
+    it('answers 409 proposal_closed before any tx-service read when the run is not open for a report', async () => {
+      const pr = await proposed();
+      p.chain.repo.getMultiSigTransaction.mockClear();
+      const other = p.chain.propose(SAFE_A, 5, pr.calls);
+      const res = await p
+        .report(orgA, pr.runId, member, {
+          attemptId: pr.attemptId,
+          expectedVersion: pr.version,
+          safeTxHash: other.safeTxHash,
+        })
+        .expect(409);
+      expect(res.body.code).toBe('proposal_closed');
+      expect(p.chain.repo.getMultiSigTransaction).not.toHaveBeenCalled();
     });
 
     it('rejects a tampered tx with tx_mismatch and keeps the attempt open', async () => {

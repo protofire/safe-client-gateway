@@ -18,6 +18,7 @@ import {
   type User,
 } from '@/modules/org/payouts/__tests__/payout-test-app';
 import { toCall } from '@/modules/org/payouts/payout-calls';
+import { lockRun } from '@/modules/org/payouts/payout-runs.service';
 
 const STRANGER = addr(0x5742);
 const native = (to: Address, amountRaw = 1n): SafeCall =>
@@ -134,9 +135,10 @@ describe('PayoutStatusUpdater', () => {
     expect(await p.events('payout_run.proposal_released')).toEqual([]);
   });
 
-  it('keeps the run verifying while transfers are not indexed, logs verification_delayed once after 10 minutes and upgrades to executed when they appear', async () => {
+  it('keeps the run verifying while transfers are not indexed, logs verification_delayed once 10 minutes after the reorg margin and upgrades to executed when they appear', async () => {
     const r = await proposed();
-    const hash = p.chain.execute(r.tx);
+    // executed 20 min ago; chain 1 margin 15 min: 5 min past the margin
+    const hash = p.chain.execute(r.tx, { ago: 20 * 60_000 });
     await p.updater.run();
     const first = await p.runRow(orgA, r.runId);
     expect(first).toMatchObject({
@@ -148,12 +150,8 @@ describe('PayoutStatusUpdater', () => {
     await p.updater.run();
     expect(await p.events('payout_run.verification_delayed')).toEqual([]);
 
-    await p.asOrg(orgA, (em) =>
-      em.query(
-        `UPDATE payout_runs SET verifying_since = now() - interval '11 minutes' WHERE id = $1`,
-        [r.runId],
-      ),
-    );
+    // measured from the end of the reorg margin, not from verifying_since
+    r.tx.executionDate = new Date(Date.now() - 26 * 60_000);
     await p.updater.run();
     await p.updater.run();
     const delayed = await p.events('payout_run.verification_delayed');
@@ -459,7 +457,7 @@ describe('PayoutStatusUpdater', () => {
     const hash = p.chain.execute(r.tx);
     await p.updater.run();
     expect(await status(r.runId)).toBe('verifying');
-    expect(await tryAll()).toEqual(['run_locked', 'proposal_open']);
+    expect(await tryAll()).toEqual(['run_locked', 'retry_later']);
     p.chain.indexTransfers(SAFE_A, hash, r.items);
     await p.updater.run();
     expect(await status(r.runId)).toBe('executed');
@@ -529,6 +527,132 @@ describe('PayoutStatusUpdater', () => {
     await p.updater.run();
     expect(await status(a.runId)).toBe('executed');
     expect(await status(b.runId, orgB)).toBe('replaced');
+  });
+
+  it('settles a tx executed at N that the tx-service lists beyond the first page', async () => {
+    const r = await proposed();
+    // 150 queued proposals at N fill the first pages; the executed one comes last
+    for (let i = 0; i < 150; i++)
+      p.chain.propose(SAFE_A, 5, [native(STRANGER, BigInt(i + 1))]);
+    const twin = p.chain.propose(SAFE_A, 5, r.calls);
+    p.chain.indexTransfers(SAFE_A, p.chain.execute(twin), r.items);
+    await p.updater.run();
+    expect(await status(r.runId)).toBe('executed');
+  });
+
+  it('moves a used nonce whose execution the tx-service does not show to verifying and to needs_review at the deadline', async () => {
+    const r = await proposed();
+    p.chain.setNonce(SAFE_A, 6); // N used on-chain, nothing indexed yet
+    await p.updater.run();
+    expect(await p.runRow(orgA, r.runId)).toMatchObject({
+      status: 'verifying',
+      pinned_nonce: '5',
+    });
+    await p.asOrg(orgA, (em) =>
+      em.query(
+        `UPDATE payout_runs SET verifying_since = now() - interval '24 hours 1 minute' WHERE id = $1`,
+        [r.runId],
+      ),
+    );
+    await p.updater.run();
+    expect(await p.runRow(orgA, r.runId)).toMatchObject({
+      status: 'needs_review',
+      review: { reason: 'undecodable' },
+      pinned_nonce: null,
+    });
+  });
+
+  it('does not roll a verifying run back with evidence read before it entered verifying', async () => {
+    const r = await proposed();
+    const stale = await p.updater.readEvidence('1', SAFE_A, 5n);
+    p.chain.execute(r.tx, { ago: 20 * 60_000 });
+    await p.updater.run();
+    expect(await status(r.runId)).toBe('verifying');
+    await p.t.sql.transaction(async (em) => {
+      await em.query(`SELECT set_config('app.org_id', $1, true)`, [orgA]);
+      const run = await lockRun(em, orgA, r.runId);
+      await p.updater.apply(em, run, stale);
+    });
+    expect(await status(r.runId)).toBe('verifying');
+    r.tx.executionDate = new Date(Date.now() - 26 * 60_000);
+    await p.updater.run();
+    await p.updater.run();
+    expect(await p.events('payout_run.verification_delayed')).toHaveLength(1);
+  });
+
+  it('adopts a matching queued tx for a new open attempt even if an earlier attempt released that hash', async () => {
+    const r = await proposed();
+    await p.release(orgA, r.runId, r.attemptId, member).expect(200);
+    const rebuilt = await p.build(orgA, r.runId, member);
+    await p
+      .claim(orgA, r.runId, member, {
+        expectedVersion: rebuilt.run.version,
+        nonce: 5,
+      })
+      .expect(201);
+    // the report of the new attempt is lost; the same tx H is still queued at N
+    await p.updater.run();
+    expect(await p.runRow(orgA, r.runId)).toMatchObject({
+      status: 'proposed',
+      safe_tx_hash: r.tx.safeTxHash,
+    });
+  });
+
+  it('settles needs_review partial_overlap without writing a hash another run of the org already holds', async () => {
+    const c = await claimed();
+    await p.release(orgA, c.runId, c.attemptId, member).expect(200);
+    const tx = p.chain.propose(SAFE_A, 5, c.calls);
+    // another run of the org already records this hash
+    const other = await p.createRun(orgA, safeA, member);
+    await p.asOrg(orgA, (em) =>
+      em.query(
+        `UPDATE payout_runs SET status = 'failed', safe_tx_hash = $2 WHERE id = $1`,
+        [other.run.id, tx.safeTxHash],
+      ),
+    );
+    p.chain.indexTransfers(SAFE_A, p.chain.execute(tx), c.items);
+    await p.updater.run();
+    expect(await p.runRow(orgA, c.runId)).toMatchObject({
+      status: 'needs_review',
+      review: { reason: 'partial_overlap' },
+      safe_tx_hash: null,
+      pinned_nonce: null,
+    });
+  });
+
+  it('returns a reorged-out never-reported proposing run to proposing', async () => {
+    const c = await claimed();
+    const outside = p.chain.propose(SAFE_A, 5, [native(STRANGER)]);
+    p.chain.execute(outside, { ago: 60_000 });
+    await p.updater.run();
+    expect(await status(c.runId)).toBe('verifying');
+    p.chain.setNonce(SAFE_A, 5);
+    Object.assign(outside, {
+      isExecuted: false,
+      isSuccessful: null,
+      executionDate: null,
+      transactionHash: null,
+    });
+    await p.updater.run();
+    expect(await p.runRow(orgA, c.runId)).toMatchObject({
+      status: 'proposing',
+      verifying_since: null,
+      pinned_nonce: '5',
+    });
+  });
+
+  it('answers 503 to a claim when settling the used nonce cannot read the tx-service', async () => {
+    const c = await claimed();
+    await p.release(orgA, c.runId, c.attemptId, member).expect(200);
+    p.chain.execute(p.chain.propose(SAFE_A, 5, [native(STRANGER)]));
+    p.chain.repo.getMultisigTransactions.mockRejectedValueOnce(
+      new Error('down'),
+    );
+    const { run } = await p.detail(orgA, c.runId, member);
+    const res = await p
+      .claim(orgA, c.runId, member, { expectedVersion: run.version, nonce: 5 })
+      .expect(503);
+    expect(res.body.code).toBe('tx_service_unavailable');
   });
 
   it('returns null from run while another replica holds the lock', async () => {
