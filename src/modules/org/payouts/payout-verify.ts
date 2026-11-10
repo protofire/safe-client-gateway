@@ -127,7 +127,6 @@ export function verifyProposedTx(
     return mismatch('gasPrice');
   if (!isZeroAddress(tx.gasToken)) return mismatch('gasToken');
   if (!isZeroAddress(tx.refundReceiver)) return mismatch('refundReceiver');
-  // safeTxGas > 0 lets an inner failure execute (consuming N) instead of reverting
-  if (tx.safeTxGas !== null && tx.safeTxGas !== 0) return mismatch('safeTxGas');
+  // shortcut: any safeTxGas is accepted (Safes < 1.3.0 require one, the signing flow may set an estimate); a too-low value can only make the tx fail (`failed`, nothing paid), accepted griefing
   return callsMismatch(tx, run.calls, callOnly) ?? { ok: true };
 }

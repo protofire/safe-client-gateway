@@ -92,10 +92,9 @@ describe('verifyProposedTx', () => {
     expect(verify(tx)).toEqual({ ok: true });
   });
 
-  it('rejects a non-zero safeTxGas (a proposal that may fail on purpose)', () => {
-    expect(verify({ ...multiTx(), safeTxGas: 1 })).toEqual(
-      mismatch('safeTxGas'),
-    );
+  it('accepts any safeTxGas (legacy Safes need one; it can only make the tx fail)', () => {
+    expect(verify({ ...multiTx(), safeTxGas: 1 })).toEqual({ ok: true });
+    expect(verify({ ...multiTx(), safeTxGas: 250_000 })).toEqual({ ok: true });
   });
 
   it('reports the first tampered field in the documented order', () => {
@@ -109,7 +108,7 @@ describe('verifyProposedTx', () => {
       verify({ ...multiTx([CALLS[1], CALLS[0]]), refundReceiver: BOB }),
     ).toEqual(mismatch('refundReceiver'));
     expect(verify({ ...multiTx(), safeTxGas: 1, value: '1' })).toEqual(
-      mismatch('safeTxGas'),
+      mismatch('value'),
     );
     expect(verify({ ...multiTx(), operation: 0, value: '1' })).toEqual(
       mismatch('operation'),
