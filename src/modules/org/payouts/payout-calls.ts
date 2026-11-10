@@ -1,7 +1,7 @@
 import { encodeFunctionData, erc20Abi, size } from 'viem';
 import type { Address, Hex } from 'viem';
 
-// Same shape as B2's `SafeCall` in common/multisend.ts (parallel lane); switch to that import once merged
+// Local copy: B2's `SafeCall` in common/multisend.ts replaces it at merge
 export type SafeCall = {
   to: Address;
   value: bigint;

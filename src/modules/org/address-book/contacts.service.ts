@@ -2,6 +2,7 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { getAddress } from 'viem';
 import type { EntityManager } from 'typeorm';
@@ -158,6 +159,18 @@ export class ContactsService {
     skipped: Array<{ line: number; reason: string; lines?: Array<number> }>;
   }> {
     const parsed = parseSafeAddressBookCsv(text);
+    // Broken quoting shifts or swallows later lines: reject the file, never import part of it
+    const malformed = parsed.errors.filter(
+      (e) => e.reason === 'unterminated_quote' || e.reason === 'stray_quote',
+    );
+    if (malformed.length > 0) {
+      throw new UnprocessableEntityException({
+        statusCode: 422,
+        message: 'The CSV has malformed quoting; fix the listed lines',
+        code: 'invalid_rows',
+        errors: malformed,
+      });
+    }
     const skipped: Array<{
       line: number;
       reason: string;

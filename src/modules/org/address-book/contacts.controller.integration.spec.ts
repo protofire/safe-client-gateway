@@ -529,6 +529,24 @@ describe('org address book', () => {
       .expect(413);
   });
 
+  it('rejects the whole import with 422 invalid_rows on malformed quoting and writes nothing', async () => {
+    const before = await listOf(`${orgA}/contacts`, admin);
+    const csv = [
+      'address,name,chainId',
+      `${ADDR3},Valid,1`,
+      `${ADDR2},"Unterminated,1`,
+      `${ADDR},Lost,1`,
+    ].join('\n');
+    const res = await upload(orgA, admin, csv).expect(422);
+    expect(res.body).toMatchObject({
+      statusCode: 422,
+      code: 'invalid_rows',
+      errors: [{ line: 3, reason: 'unterminated_quote' }],
+    });
+    expect(await listOf(`${orgA}/contacts`, admin)).toEqual(before);
+    expect(await events('contact.imported')).toHaveLength(0);
+  });
+
   it('caps contacts at 1000 per org', async () => {
     await asOrg(orgA, (em) =>
       em.query(

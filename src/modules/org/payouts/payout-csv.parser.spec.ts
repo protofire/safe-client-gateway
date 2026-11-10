@@ -11,7 +11,7 @@ function addr(i: number): string {
 describe('parsePayoutCsv', () => {
   it('parses the four columns with BOM and CRLF', () => {
     const text =
-      '﻿Address,Amount,Token,Name,Extra\r\n' +
+      '\uFEFFAddress,Amount,Token,Name,Extra\r\n' +
       `${A},1000.5,${USDC},"Alice, Inc",x\r\n` +
       `${A},0.1,native,,x\r\n` +
       '\r\n';
@@ -19,12 +19,12 @@ describe('parsePayoutCsv', () => {
       rows: [
         {
           line: 2,
-          address: A,
+          address: A.toLowerCase(),
           amount: '1000.5',
           token: USDC.toLowerCase(),
           name: 'Alice, Inc',
         },
-        { line: 3, address: A, amount: '0.1', token: 'native' },
+        { line: 3, address: A.toLowerCase(), amount: '0.1', token: 'native' },
       ],
       errors: [],
     });
@@ -111,4 +111,55 @@ describe('parsePayoutCsv', () => {
     expect(errors).toEqual([{ line: 2, reason: 'name_too_long' }]);
     expect(rows.map((r) => r.line)).toEqual([3]);
   });
+
+  it('reports a row with more cells than the header as too_many_cells', () => {
+    const { rows, errors } = parsePayoutCsv(
+      `address,token,amount\n${A},native,1,000\n${A},native,1`,
+    );
+    expect(errors).toEqual([{ line: 2, reason: 'too_many_cells' }]);
+    expect(rows.map((r) => r.line)).toEqual([3]);
+  });
+
+  it('rejects duplicate header names as invalid_header', () => {
+    expect(
+      parsePayoutCsv(`address,amount,token,Amount\n${A},1,native,2`).errors,
+    ).toEqual([{ line: 1, reason: 'invalid_header' }]);
+  });
+
+  it('accepts uppercase hex, rejects a 0X prefix and returns addresses lowercased', () => {
+    const upper = '0x' + A.slice(2).toUpperCase();
+    const { rows, errors } = parsePayoutCsv(
+      `address,amount,token\n${upper},1,${'0x' + USDC.slice(2).toUpperCase()}\n0X${A.slice(2).toLowerCase()},1,native\n${A},1,0X${USDC.slice(2).toLowerCase()}`,
+    );
+    expect(rows).toEqual([
+      {
+        line: 2,
+        address: A.toLowerCase(),
+        amount: '1',
+        token: USDC.toLowerCase(),
+      },
+    ]);
+    expect(errors).toEqual([
+      { line: 3, reason: 'invalid_address' },
+      { line: 4, reason: 'invalid_token' },
+    ]);
+  });
+
+  it('rejects the zero address as token', () => {
+    expect(
+      parsePayoutCsv(
+        `address,amount,token\n${A},1,0x0000000000000000000000000000000000000000`,
+      ).errors,
+    ).toEqual([{ line: 2, reason: 'invalid_token' }]);
+  });
+
+  it.each(['Al\u0000ice', 'Bob\u200b', 'Eve\u202e', 'Tab\tbed'])(
+    'rejects a name with control or format characters (%j)',
+    (name) => {
+      expect(
+        parsePayoutCsv(`address,amount,token,name\n${A},1,native,${name}`)
+          .errors,
+      ).toEqual([{ line: 2, reason: 'invalid_name' }]);
+    },
+  );
 });

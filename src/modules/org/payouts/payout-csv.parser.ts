@@ -7,6 +7,7 @@ export const PAYOUT_NAME_MAX = 64;
 
 export type PayoutCsvRow = {
   line: number;
+  /** lowercase */
   address: string;
   amount: string;
   /** 'native' or a lowercase token address */
@@ -17,8 +18,9 @@ export type PayoutCsvError = { line: number; reason: string };
 
 const REQUIRED = ['address', 'amount', 'token'];
 
-/** All-lowercase, all-uppercase hex, or a valid EIP-55 checksum. */
+/** `0x` + all-lowercase, all-uppercase hex, or a valid EIP-55 checksum. */
 function isStrictAddress(value: string): boolean {
+  if (!value.startsWith('0x')) return false;
   const hex = value.slice(2);
   return isAddress(hex === hex.toUpperCase() ? value.toLowerCase() : value, {
     strict: true,
@@ -35,13 +37,20 @@ export function parsePayoutCsv(text: string): {
   rows: Array<PayoutCsvRow>;
   errors: Array<PayoutCsvError>;
 } {
-  const parsed = csvRecords(text.startsWith('﻿') ? text.slice(1) : text);
+  const parsed = csvRecords(text.startsWith('\uFEFF') ? text.slice(1) : text);
   const errors: Array<PayoutCsvError> = [...parsed.errors];
   const [head, ...records] = parsed.records;
   const names = head?.cells.map((c) => c.trim().toLowerCase()) ?? [];
   const [iAddress, iAmount, iToken] = REQUIRED.map((h) => names.indexOf(h));
   const iName = names.indexOf('name');
-  if (!head || iAddress < 0 || iAmount < 0 || iToken < 0) {
+  const named = names.filter((n) => n !== '');
+  if (
+    !head ||
+    iAddress < 0 ||
+    iAmount < 0 ||
+    iToken < 0 ||
+    new Set(named).size !== named.length
+  ) {
     return {
       rows: [],
       errors: [...errors, { line: head?.line ?? 1, reason: 'invalid_header' }],
@@ -76,14 +85,25 @@ export function parsePayoutCsv(text: string): {
         ? 'native'
         : rawToken.toLowerCase();
     let reason: string | null = null;
-    if (!isStrictAddress(address) || address.toLowerCase() === zeroAddress) {
+    if (cells.length > head.cells.length) {
+      // e.g. an unquoted `1,000` would shift every later column
+      reason = 'too_many_cells';
+    } else if (
+      !isStrictAddress(address) ||
+      address.toLowerCase() === zeroAddress
+    ) {
       reason = 'invalid_address';
     } else if (amount === '') {
       reason = 'missing_amount';
-    } else if (token !== 'native' && !isStrictAddress(rawToken)) {
+    } else if (
+      token !== 'native' &&
+      (!isStrictAddress(rawToken) || token === zeroAddress)
+    ) {
       reason = 'invalid_token';
     } else if (name.length > PAYOUT_NAME_MAX) {
       reason = 'name_too_long';
+    } else if (/[\p{Cc}\p{Cf}]/u.test(name)) {
+      reason = 'invalid_name';
     } else if (!tokens.has(token) && tokens.size >= MAX_PAYOUT_TOKENS) {
       reason = 'too_many_tokens';
     }
@@ -92,7 +112,13 @@ export function parsePayoutCsv(text: string): {
       continue;
     }
     tokens.add(token);
-    rows.push({ line, address, amount, token, ...(name ? { name } : {}) });
+    rows.push({
+      line,
+      address: address.toLowerCase(),
+      amount,
+      token,
+      ...(name ? { name } : {}),
+    });
   }
   errors.sort((a, b) => a.line - b.line);
   return { rows, errors };
