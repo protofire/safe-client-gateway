@@ -305,7 +305,10 @@ describe('payout proposals API', () => {
       const res = await p
         .claim(orgA, b.runId, member, { expectedVersion: b.version, nonce: 11 })
         .expect(503);
-      expect(res.body.code).toBe('tx_service_unavailable');
+      expect(res.body).toMatchObject({
+        code: 'tx_service_unavailable',
+        message: expect.stringContaining('contact support'),
+      });
     });
 
     it('answers 409 proposal_open to a second claim from another tab', async () => {

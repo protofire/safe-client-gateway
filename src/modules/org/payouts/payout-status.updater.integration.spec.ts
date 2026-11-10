@@ -797,20 +797,48 @@ describe('PayoutStatusUpdater', () => {
     });
   });
 
-  it('flags a proposed run needs_review on the periodic check when a copy is queued at a later nonce', async () => {
+  it('warns on a proposed run with a copy queued at a later nonce, keeps it tracked, and settles needs_review when N executes', async () => {
     const r = await proposed();
     const copy = p.chain.propose(SAFE_A, 6, r.calls, { trusted: false });
     await p.updater.run();
+    await p.updater.run();
     expect(await p.runRow(orgA, r.runId)).toMatchObject({
-      status: 'needs_review',
+      status: 'proposed',
+      pinned_nonce: '5',
+      safe_tx_hash: r.tx.safeTxHash,
       review: {
         reason: 'stray_proposal',
         nonce: '6',
         safeTxHash: copy.safeTxHash,
       },
+    });
+    expect(await p.watchRows()).toEqual([{ run_id: r.runId, org_id: orgA }]);
+    const detected = await p.events('payout_run.stray_detected');
+    expect(detected).toHaveLength(1);
+    expect(detected[0].payload).toEqual({
+      name: 'March',
+      safeTxHash: r.tx.safeTxHash,
+      nonce: '5',
+      strayNonce: '6',
+      straySafeTxHash: copy.safeTxHash,
+    });
+    const { run } = await p.detail(orgA, r.runId, member);
+    expect(run).toMatchObject({
+      status: 'proposed',
+      review: {
+        reason: 'stray_proposal',
+        nonce: '6',
+        safeTxHash: copy.safeTxHash,
+      },
+    });
+
+    p.chain.indexTransfers(SAFE_A, p.chain.execute(r.tx), r.items);
+    await p.updater.run();
+    expect(await p.runRow(orgA, r.runId)).toMatchObject({
+      status: 'needs_review',
+      review: { reason: 'stray_proposal', nonce: '6' },
       pinned_nonce: null,
     });
-    expect(await p.watchRows()).toEqual([]);
   });
 
   it('returns null from run while another replica holds the lock', async () => {

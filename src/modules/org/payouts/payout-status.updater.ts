@@ -384,10 +384,7 @@ export class PayoutStatusUpdater
           await knownCalls(em, run),
           ev.callOnly,
         );
-        if (stray) {
-          const items = await readItems(em, run.org_id, run.id);
-          await this.finish(em, run, strayReview(stray), null, items.length);
-        }
+        if (stray) await this.warnStray(em, run, stray);
       }
       return;
     }
@@ -622,6 +619,35 @@ export class PayoutStatusUpdater
     await this.finish(em, run, outcome, executed, items.length);
   }
 
+  /**
+   * A proposed run stays proposed and tracked (its tx at N is still queued);
+   * the copy is shown as `review` and logged once. Settlement later ends it
+   * `needs_review stray_proposal`.
+   */
+  private async warnStray(
+    em: EntityManager,
+    run: PayoutRunRow,
+    stray: MultisigTransaction,
+  ): Promise<void> {
+    const review = strayReview(stray).review!;
+    if (
+      run.review?.reason === review.reason &&
+      run.review.safeTxHash === review.safeTxHash
+    )
+      return;
+    await em.query(
+      `UPDATE payout_runs SET review = $3::jsonb, updated_at = now() WHERE org_id = $1 AND id = $2`,
+      [run.org_id, run.id, JSON.stringify(review)],
+    );
+    await this.event(em, run, 'payout_run.stray_detected', {
+      name: run.name,
+      safeTxHash: run.safe_tx_hash,
+      nonce: run.pinned_nonce,
+      strayNonce: review.nonce,
+      straySafeTxHash: review.safeTxHash,
+    });
+  }
+
   private async markVerifying(
     em: EntityManager,
     run: PayoutRunRow,
@@ -804,6 +830,7 @@ export class PayoutStatusUpdater
       | 'payout_run.proposed'
       | 'payout_run.proposal_released'
       | 'payout_run.verification_delayed'
+      | 'payout_run.stray_detected'
       | 'payout_run.settled',
     payload: Record<string, unknown>,
     actor?: Actor,

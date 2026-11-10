@@ -491,9 +491,15 @@ export class PayoutProposalsService {
       ]);
       if (view.complete) return { queued: view.txs, callOnly, lowest };
     } catch {
-      // mapped below
+      throw unavailable();
     }
-    throw unavailable();
+    // fail closed: a copy could hide in the part not read
+    throw new ServiceUnavailableException({
+      statusCode: 503,
+      code: 'tx_service_unavailable',
+      message:
+        'Too much transaction history to check this payout for copies; contact support',
+    });
   }
 
   /** Fails closed: a Safe the tx-service does not know (counterfactual) cannot be claimed. */
