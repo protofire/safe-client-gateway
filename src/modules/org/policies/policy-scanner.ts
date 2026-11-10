@@ -55,7 +55,12 @@ export class PolicyScanner implements OnApplicationBootstrap, OnModuleDestroy {
   private bootTimer: NodeJS.Timeout | undefined;
   private readonly pending = new Map<
     string,
-    { chainId: string; address: Address; hashes: Set<string> }
+    {
+      chainId: string;
+      address: Address;
+      hashes: Set<string>;
+      dropped: number;
+    }
   >();
   private readonly flushing = new Set<string>();
   private readonly flushTimers = new Set<NodeJS.Timeout>();
@@ -202,7 +207,7 @@ export class PolicyScanner implements OnApplicationBootstrap, OnModuleDestroy {
           `SELECT safe_tx_hash FROM policy_findings
             WHERE org_id = $1 AND linked_safe_id = $2 AND resolved_at IS NULL
               AND last_seen_at < $3
-            ORDER BY last_seen_at, id LIMIT ${PAGE}`,
+            ORDER BY coalesce(last_rechecked_at, last_seen_at), id LIMIT ${PAGE}`,
           [orgId, linkedSafeId, pass_started_at],
         );
         rows.forEach((r) => hashes.add(r.safe_tx_hash));
@@ -236,13 +241,11 @@ export class PolicyScanner implements OnApplicationBootstrap, OnModuleDestroy {
       .then((s) => s.nonce)
       .catch(() => null);
     for (let i = 0; i < hashes.length; i += PAGE) {
-      const reads = await mapLimit(
-        hashes.slice(i, i + PAGE),
-        READ_CONCURRENCY,
-        (safeTxHash) => this.readTx(chainId, address, safeTxHash, safeNonce),
+      const chunk = hashes.slice(i, i + PAGE);
+      const reads = await mapLimit(chunk, READ_CONCURRENCY, (safeTxHash) =>
+        this.readTx(chainId, address, safeTxHash, safeNonce),
       );
       const items = reads.filter((r): r is Item => r !== null);
-      if (items.length === 0 && safeNonce === null) continue;
       await this.tx.runInOrgTx(async (em) => {
         await lockSafe(em, chainId, address);
         const orgs = await this.linking(em, chainId, address);
@@ -250,6 +253,7 @@ export class PolicyScanner implements OnApplicationBootstrap, OnModuleDestroy {
           readAt,
           safeNonce,
           items,
+          rechecked: chunk,
         });
       });
     }
@@ -267,7 +271,8 @@ export class PolicyScanner implements OnApplicationBootstrap, OnModuleDestroy {
         safeTransactionHash: safeTxHash,
       });
       if (tx.safe.toLowerCase() !== address.toLowerCase()) return null;
-      if (!tx.trusted) return null;
+      // not a trusted queued tx (any more): nothing to warn about
+      if (!tx.trusted) return { safeTxHash, tx: null };
       const gone =
         tx.isExecuted || (safeNonce !== null && tx.nonce < safeNonce);
       return { safeTxHash, tx: gone ? null : tx };
@@ -316,13 +321,16 @@ export class PolicyScanner implements OnApplicationBootstrap, OnModuleDestroy {
     const key = `${chainId}:${address.toLowerCase()}`;
     let entry = this.pending.get(key);
     if (!entry) {
-      entry = { chainId, address, hashes: new Set() };
+      entry = { chainId, address, hashes: new Set(), dropped: 0 };
       this.pending.set(key, entry);
       if (!this.flushing.has(key)) this.schedule(key);
     }
     // the rest waits for the next timer pass
-    if (entry.hashes.size < MAX_PENDING_PER_SAFE) {
-      entry.hashes.add(safeTxHash.toLowerCase());
+    const hash = safeTxHash.toLowerCase();
+    if (entry.hashes.size < MAX_PENDING_PER_SAFE || entry.hashes.has(hash)) {
+      entry.hashes.add(hash);
+    } else {
+      entry.dropped++;
     }
   }
 
@@ -340,6 +348,14 @@ export class PolicyScanner implements OnApplicationBootstrap, OnModuleDestroy {
     if (!entry) return;
     this.pending.delete(key);
     this.flushing.add(key);
+    if (entry.dropped > 0) {
+      this.logger.warn({
+        type: 'policy_scan_pending_dropped',
+        chainId: entry.chainId,
+        address: entry.address,
+        dropped: entry.dropped,
+      });
+    }
     this.scanTxs(entry.chainId, entry.address, [...entry.hashes])
       .catch((error: unknown) =>
         this.logger.warn({
@@ -373,7 +389,13 @@ export class PolicyScanner implements OnApplicationBootstrap, OnModuleDestroy {
     orgs: Array<Linked>,
     safe: { chainId: string; address: Address },
     trusted: ReadonlySet<string>,
-    read: { readAt: Date; safeNonce: number | null; items: Array<Item> },
+    read: {
+      readAt: Date;
+      safeNonce: number | null;
+      items: Array<Item>;
+      /** Hashes read by hash (failed reads included): rotates the bounded recheck. */
+      rechecked?: Array<string>;
+    },
   ): Promise<void> {
     for (const org of orgs) {
       await setOrg(em, org.orgId);
@@ -382,10 +404,17 @@ export class PolicyScanner implements OnApplicationBootstrap, OnModuleDestroy {
         await resolveAll(em, org);
         continue;
       }
+      if (read.rechecked?.length) {
+        await em.query(
+          `UPDATE policy_findings SET last_rechecked_at = clock_timestamp()
+            WHERE org_id = $1 AND linked_safe_id = $2 AND safe_tx_hash = ANY($3)`,
+          [org.orgId, org.linkedSafeId, read.rechecked],
+        );
+      }
       if (read.safeNonce !== null) {
         // a nonce below the Safe's can never execute any more
         await em.query(
-          `UPDATE policy_findings SET resolved_at = now(), updated_at = now()
+          `UPDATE policy_findings SET resolved_at = clock_timestamp(), updated_at = now()
             WHERE org_id = $1 AND linked_safe_id = $2 AND resolved_at IS NULL AND nonce < $3`,
           [org.orgId, org.linkedSafeId, read.safeNonce],
         );
@@ -426,7 +455,7 @@ export class PolicyScanner implements OnApplicationBootstrap, OnModuleDestroy {
     const key = [org.orgId, org.linkedSafeId, safeTxHash];
     if (!tx || result?.status !== 'violation') {
       await em.query(
-        `UPDATE policy_findings SET resolved_at = now(), updated_at = now()
+        `UPDATE policy_findings SET resolved_at = clock_timestamp(), updated_at = now()
           WHERE org_id = $1 AND linked_safe_id = $2 AND safe_tx_hash = $3 AND resolved_at IS NULL`,
         key,
       );
@@ -508,7 +537,7 @@ function violatingPolicies(
 
 function resolveAll(em: EntityManager, org: Linked): Promise<unknown> {
   return em.query(
-    `UPDATE policy_findings SET resolved_at = now(), updated_at = now()
+    `UPDATE policy_findings SET resolved_at = clock_timestamp(), updated_at = now()
       WHERE org_id = $1 AND linked_safe_id = $2 AND resolved_at IS NULL`,
     [org.orgId, org.linkedSafeId],
   );

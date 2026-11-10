@@ -98,6 +98,7 @@ export class PoliciesPayouts1794614400000 implements MigrationInterface {
       violations jsonb NOT NULL,
       first_seen_at timestamptz NOT NULL DEFAULT now(),
       last_seen_at timestamptz NOT NULL DEFAULT now(),
+      last_rechecked_at timestamptz,
       resolved_at timestamptz,
       ${timestamps},
       UNIQUE (org_id, linked_safe_id, safe_tx_hash),

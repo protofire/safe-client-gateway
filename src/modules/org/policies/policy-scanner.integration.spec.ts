@@ -617,7 +617,7 @@ describe('PolicyScanner', () => {
     expect(await logged(org)).toEqual([]);
   });
 
-  it('neither creates nor resolves a finding for an untrusted tx named by an event', async () => {
+  it('creates no finding for an untrusted tx and resolves one whose tx now reads untrusted', async () => {
     const org = await newOrg();
     await link(org);
     await addPolicy(org, ALLOWLIST);
@@ -626,18 +626,17 @@ describe('PolicyScanner', () => {
     queue.push(known);
     await scanner.scanSafe(CHAIN, SAFE);
     direct.set(untrusted.safeTxHash, untrusted);
-    direct.set(known.safeTxHash, {
-      ...known,
-      trusted: false,
-      isExecuted: true,
-    });
+    direct.set(known.safeTxHash, { ...known, trusted: false });
 
     await scanner.scanTxs(CHAIN, SAFE, [
       untrusted.safeTxHash,
       known.safeTxHash,
     ]);
 
-    expect(await open(org)).toEqual([known.safeTxHash]);
+    expect(await findings(org)).toEqual([
+      expect.objectContaining({ safe_tx_hash: known.safeTxHash }),
+    ]);
+    expect(await open(org)).toEqual([]);
     expect(await logged(org)).toHaveLength(1);
   });
 
@@ -724,6 +723,12 @@ describe('PolicyScanner', () => {
       jest.advanceTimersByTime(2000);
       expect(spy).toHaveBeenCalledTimes(1);
       expect(spy.mock.calls[0][2]).toHaveLength(500);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'policy_scan_pending_dropped',
+          dropped: 100,
+        }),
+      );
     } finally {
       jest.useRealTimers();
       spy.mockRestore();
@@ -851,12 +856,76 @@ describe('PolicyScanner', () => {
     expect(await open(org)).toHaveLength(1);
   });
 
-  it('returns every open finding and caps status=all at 1000', async () => {
+  it('caps open findings at 5000 and status=all at 1000', async () => {
     const org = await newOrg();
     const linked = await link(org);
-    await insertFindings(org, linked, 1001);
+    await insertFindings(org, linked, 5001);
 
-    expect(await findingsApi.list(org, {})).toHaveLength(1001);
+    expect(await findingsApi.list(org, {})).toHaveLength(5000);
     expect(await findingsApi.list(org, { status: 'all' })).toHaveLength(1000);
+  });
+  it('rotates the bounded recheck so failing reads do not starve the rest', async () => {
+    const org = await newOrg();
+    const linked = await link(org);
+    await addPolicy(org, ALLOWLIST);
+    await insertFindings(org, linked, 101);
+    safeRepo.getMultiSigTransaction.mockImplementation(() =>
+      Promise.reject(new DataSourceError('Bad gateway', 502)),
+    );
+    const hash101 = `0x${(101).toString(16).padStart(64, '0')}`;
+
+    await scanner.scanSafe(CHAIN, SAFE);
+    const first = safeRepo.getMultiSigTransaction.mock.calls.map(
+      ([a]: [{ safeTransactionHash: string }]) => a.safeTransactionHash,
+    );
+    expect(first).toHaveLength(100);
+    expect(first).not.toContain(hash101);
+
+    safeRepo.getMultiSigTransaction.mockClear();
+    await scanner.scanSafe(CHAIN, SAFE);
+    const second = safeRepo.getMultiSigTransaction.mock.calls.map(
+      ([a]: [{ safeTransactionHash: string }]) => a.safeTransactionHash,
+    );
+    expect(second[0]).toBe(hash101);
+    expect(await open(org)).toHaveLength(101);
+    const [{ moved }] = await asOrg(org, (em) =>
+      em.query(
+        `SELECT count(*)::int AS moved FROM policy_findings WHERE last_seen_at > now() - interval '1 second' AND safe_tx_hash <> $1`,
+        [hash101],
+      ),
+    );
+    expect(moved).toBe(0); // rechecks do not touch last_seen_at
+  });
+
+  it('stamps resolved_at after the Safe lock is acquired, not at transaction start', async () => {
+    const org = await newOrg();
+    await link(org);
+    const policy = await addPolicy(org, ALLOWLIST);
+    queue.push(tx('10'));
+    await scanner.scanSafe(CHAIN, SAFE);
+    await setStatus(org, policy, 'disabled');
+    const other = sql.createQueryRunner();
+    await other.connect();
+    await other.startTransaction();
+    let released: Date;
+    try {
+      await other.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
+        `${CHAIN}:${SAFE.toLowerCase()}`,
+      ]);
+      const scan = scanner.scanSafe(CHAIN, SAFE);
+      await new Promise((r) => setTimeout(r, 300));
+      [{ released }] = await other.query(
+        `SELECT clock_timestamp() AS released`,
+      );
+      await other.commitTransaction();
+      await scan;
+    } finally {
+      if (other.isTransactionActive) await other.rollbackTransaction();
+      await other.release();
+    }
+    const [f] = await findings(org);
+    expect(f.resolved_at!.getTime()).toBeGreaterThanOrEqual(
+      released!.getTime(),
+    );
   });
 });
