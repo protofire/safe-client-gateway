@@ -103,6 +103,7 @@ export interface ISafeRepository {
     safe: Safe;
     limit?: number;
     offset?: number;
+    trusted?: boolean;
   }): Promise<Page<MultisigTransaction>>;
 
   /**
