@@ -337,6 +337,15 @@ describe('org schema (through the app login)', () => {
     ).rejects.toThrow(/duplicate key/);
   });
 
+  it('sessions carry no IP column (item 14: never written)', async () => {
+    const columns: Array<{ column_name: string }> = await app.query(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'sessions'`,
+    );
+    expect(columns.map((c) => c.column_name)).not.toContain('ip_encrypted');
+    expect(columns.map((c) => c.column_name)).toContain('user_agent');
+  });
+
   it('the app login cannot run DDL', async () => {
     await expect(app.query(`CREATE TABLE evil (id int)`)).rejects.toThrow(
       /permission denied/,
