@@ -77,12 +77,15 @@ export class ContactsController {
     @OrgSession() session: OrgSession,
   ): Promise<void> {
     await limitExports(this.rateLimiter, session.userId);
+    // read before streaming: pipeline destroys the response on any error, so
+    // a failure here must surface as an ordinary error response
+    const first = await this.contacts.page(orgId, null, EXPORT_PAGE);
     await this.contacts.recordExport(orgId, actor(req, session.userId));
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="contacts.csv"');
     try {
       // Same shape as the Safe export (one row per chain), plus tags
-      await this.csv.toCsv(Readable.from(this.csvRows(orgId)), res, {
+      await this.csv.toCsv(Readable.from(this.csvRows(orgId, first)), res, {
         header: true,
         cast: csvCast,
         columns: ['address', 'name', 'chainId', 'tags'].map((k) => ({
@@ -101,10 +104,10 @@ export class ContactsController {
 
   private async *csvRows(
     orgId: string,
+    first: Array<Contact>,
   ): AsyncGenerator<Record<string, string>> {
-    let after: string | null = null;
+    let page = first;
     for (;;) {
-      const page = await this.contacts.page(orgId, after, EXPORT_PAGE);
       for (const c of page) {
         for (const chainId of c.chainIds) {
           yield {
@@ -116,7 +119,11 @@ export class ContactsController {
         }
       }
       if (page.length < EXPORT_PAGE) return;
-      after = page[page.length - 1].id;
+      page = await this.contacts.page(
+        orgId,
+        page[page.length - 1].id,
+        EXPORT_PAGE,
+      );
     }
   }
 

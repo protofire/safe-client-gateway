@@ -881,4 +881,17 @@ describe('org address book', () => {
       spy.mockRestore();
     }
   });
+  it('answers a normal error response when the export fails before any byte is sent (round 2 item 10)', async () => {
+    const contacts = app.get(ContactsService);
+    const spy = jest
+      .spyOn(contacts, 'page')
+      .mockRejectedValueOnce(new Error('db gone'));
+    try {
+      const res = await get(`${orgA}/contacts.csv`, admin).expect(500);
+      expect(res.headers['content-type']).toContain('application/json');
+      expect(res.body).toEqual({ code: 500, message: 'Internal server error' });
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
