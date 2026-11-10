@@ -10,6 +10,7 @@ import {
 } from '@/logging/logging.interface';
 import { Clock, type IClock } from '@/modules/org/common/clock';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
+import { deleteUnlinkedSnapshots } from '@/modules/org/events/safe-snapshot';
 
 const HOUR_MS = 3600 * 1000;
 const BOOT_DELAY_MS = 60 * 1000;
@@ -103,10 +104,17 @@ export class PurgeProcessor implements OnApplicationBootstrap, OnModuleDestroy {
         );
         const ids = rows.map((r) => r.id);
         if (ids.length > 0) {
+          const safes: Array<{ chainId: string; address: string }> =
+            await em.query(
+              `SELECT DISTINCT chain_id AS "chainId", address FROM linked_safes
+               WHERE org_id = ANY($1::uuid[])`,
+              [ids],
+            );
           await em.query(
             `DELETE FROM organizations WHERE id = ANY($1::uuid[])`,
             [ids],
           );
+          await deleteUnlinkedSnapshots(em, safes);
         }
         return ids;
       });

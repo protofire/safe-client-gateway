@@ -11,6 +11,8 @@ import {
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import { OrgEventsHandler } from '@/modules/org/events/org-events.handler';
 import { OrgEventsReconciler } from '@/modules/org/events/org-events.reconciler';
+import { systemClock } from '@/modules/org/common/clock';
+import { PurgeProcessor } from '@/modules/org/jobs/purge.processor';
 import {
   seedSnapshotIfAbsent,
   toSnapshot,
@@ -403,6 +405,134 @@ describe('OrgEventsHandler', () => {
       ).resolves.toMatchObject({ address: SAFE });
       expect(logger.warn).toHaveBeenCalled();
     });
+  });
+
+  describe('snapshot lifecycle on relink (item 8)', () => {
+    const allowAll = {
+      effective: () =>
+        Promise.resolve({
+          orgStatus: 'active',
+          permissions: ['safes.link', 'safes.unlink'],
+        }),
+    } as never;
+    const service = (): LinkedSafesService =>
+      new LinkedSafesService(
+        new OrgTransaction(sql),
+        new ActivityLog({} as FieldEncryptionService),
+        {
+          isSafe: jest.fn().mockResolvedValue(true),
+          getSafe: safeRepo.getSafe,
+        } as never,
+        allowAll,
+        logger as never,
+      );
+    const snapshot = (): Promise<Array<{ owners: Array<string> }>> =>
+      sql.query(`SELECT owners FROM linked_safe_snapshots`);
+
+    it('link, unlink, owner change while unlinked, relink: no historic owner event', async () => {
+      await sql.query(`DELETE FROM linked_safes`);
+      safeRepo.getSafe.mockResolvedValue(safeState());
+      const { id } = await service().link(
+        orgA,
+        { chainId: CHAIN, address: SAFE },
+        { userId: userA },
+      );
+      await service().unlink(orgA, id, { userId: userA });
+
+      // owners change while no org links the Safe: nobody records it
+      safeRepo.getSafe.mockResolvedValue(safeState({ owners: [O1, O3] }));
+      await handler.handle(executed());
+      await service().link(
+        orgA,
+        { chainId: CHAIN, address: SAFE },
+        { userId: userA },
+      );
+      // the next unrelated execution sees no owner change
+      await handler.handle(executed());
+
+      expect((await events(orgA)).map((e) => e.type)).toEqual([
+        'safe.linked',
+        'safe.linked',
+        'safe.unlinked',
+      ]);
+    });
+
+    it('deletes the snapshot on the last unlink only', async () => {
+      await seed();
+      const ids: Array<{ id: string; org_id: string }> = await sql.query(
+        `SELECT id, org_id FROM linked_safes`,
+      );
+      const idOf = (org: string): string =>
+        ids.find((r) => r.org_id === org)!.id;
+
+      await service().unlink(orgA, idOf(orgA), { userId: userA });
+      expect(await snapshot()).toHaveLength(1);
+      await service().unlink(orgB, idOf(orgB), { userId: userA });
+      expect(await snapshot()).toEqual([]);
+    });
+
+    it('overwrites a stale snapshot on link when no other org links the Safe', async () => {
+      await sql.query(`DELETE FROM linked_safes`);
+      await seedStale();
+      safeRepo.getSafe.mockResolvedValue(safeState({ owners: [O1, O3] }));
+      await service().link(
+        orgA,
+        { chainId: CHAIN, address: SAFE },
+        { userId: userA },
+      );
+      expect(await snapshot()).toEqual([{ owners: [O1, O3] }]);
+    });
+
+    it('keeps the snapshot other orgs diff against when one more org links', async () => {
+      await sql.query(`DELETE FROM linked_safes WHERE org_id = $1`, [orgA]);
+      await seedStale();
+      safeRepo.getSafe.mockResolvedValue(safeState({ owners: [O1, O3] }));
+      await service().link(
+        orgA,
+        { chainId: CHAIN, address: SAFE },
+        { userId: userA },
+      );
+      expect(await snapshot()).toEqual([{ owners: [O1, O2] }]);
+    });
+
+    it('purge deletes the snapshots only the purged org linked', async () => {
+      const [{ id: gone }] = await sql.query(
+        `INSERT INTO organizations (name, status, deleted_at, purge_after)
+         VALUES ('gone', 'deleted', now() - interval '31 days', now() - interval '1 day')
+         RETURNING id`,
+      );
+      await sql.query(
+        `INSERT INTO linked_safes (org_id, chain_id, address) VALUES ($1, $2, $3), ($1, $2, $4)`,
+        [gone, CHAIN, SAFE, OTHER],
+      );
+      for (const address of [SAFE, OTHER]) {
+        await sql.transaction((em) =>
+          seedSnapshotIfAbsent(
+            em,
+            CHAIN,
+            address,
+            toSnapshot(safeState() as Safe),
+          ),
+        );
+      }
+      const purged = await new PurgeProcessor(
+        new OrgTransaction(sql),
+        systemClock,
+        logger as never,
+      ).purgeDue();
+
+      expect(purged).toEqual([gone]);
+      // SAFE is still linked by orgs A and B
+      expect(
+        await sql.query(`SELECT address FROM linked_safe_snapshots`),
+      ).toEqual([{ address: SAFE }]);
+    });
+
+    async function seedStale(): Promise<void> {
+      await sql.transaction((em) =>
+        seedSnapshotIfAbsent(em, CHAIN, SAFE, toSnapshot(safeState() as Safe)),
+      );
+    }
   });
 
   describe('reconcile (final gate F1)', () => {

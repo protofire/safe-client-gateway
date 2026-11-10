@@ -15,6 +15,9 @@ import { lockOrgs, recheckPermission } from '@/modules/org/orgs/org-lock';
 import type { Actor } from '@/modules/org/orgs/parse';
 import { PermissionResolver } from '@/modules/org/permissions/permission.resolver';
 import {
+  deleteUnlinkedSnapshots,
+  lockSafe,
+  overwriteSnapshot,
   seedSnapshotIfAbsent,
   toSnapshot,
 } from '@/modules/org/events/safe-snapshot';
@@ -131,19 +134,39 @@ export class LinkedSafesService {
         label: input.label ?? null,
       };
     }, orgId);
-    await this.seedSnapshot(input.chainId, address);
+    await this.seedSnapshot(orgId, input.chainId, address);
     return row;
   }
 
-  /** So the first on-chain change after linking has something to diff against. */
-  private async seedSnapshot(chainId: string, address: Address): Promise<void> {
+  /**
+   * So the first on-chain change after linking has something to diff
+   * against. Item 8: if no other org links the Safe, nobody diffed against
+   * an existing row, so it may predate a gap: overwrite it with the state
+   * read under the per-Safe lock. Otherwise keep the other orgs' diff base.
+   */
+  private async seedSnapshot(
+    orgId: string,
+    chainId: string,
+    address: Address,
+  ): Promise<void> {
     try {
-      const snapshot = toSnapshot(
-        await this.safes.getSafe({ chainId, address }),
-      );
-      await this.tx.runInOrgTx((em) =>
-        seedSnapshotIfAbsent(em, chainId, address, snapshot),
-      );
+      await this.tx.runInOrgTx(async (em) => {
+        await lockSafe(em, chainId, address);
+        const snapshot = toSnapshot(
+          await this.safes.getSafe({ chainId, address }),
+        );
+        const [{ others }]: Array<{ others: number }> = await em.query(
+          `SELECT count(*)::int AS others FROM linked_safes
+           WHERE chain_id = $1 AND address = $2 AND org_id <> $3`,
+          [chainId, address, orgId],
+        );
+        await (others === 0 ? overwriteSnapshot : seedSnapshotIfAbsent)(
+          em,
+          chainId,
+          address,
+          snapshot,
+        );
+      });
     } catch {
       this.logger.warn({ type: 'org_snapshot_seed_failed', chainId, address });
     }
@@ -177,6 +200,9 @@ export class LinkedSafesService {
       );
       if (rows.length === 0) throw new NotFoundException();
       const [row] = rows;
+      await deleteUnlinkedSnapshots(em, [
+        { chainId: row.chain_id, address: row.address },
+      ]);
       await this.activity.record(em, {
         orgId,
         actorUserId: actor.userId,

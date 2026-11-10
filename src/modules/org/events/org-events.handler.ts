@@ -10,6 +10,7 @@ import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import { TransactionEventType } from '@/modules/hooks/routes/entities/event-type.entity';
 import type { Event } from '@/modules/hooks/routes/entities/event.entity';
 import {
+  lockSafe,
   overwriteSnapshot,
   seedSnapshotIfAbsent,
   toSnapshot,
@@ -25,21 +26,6 @@ const sameSet = (a: Array<string>, b: Array<string>): boolean =>
   a.length === b.length && a.every((x) => b.some((y) => lower(x) === lower(y)));
 const minus = (a: Array<string>, b: Array<string>): Array<string> =>
   a.filter((x) => !b.some((y) => lower(x) === lower(y)));
-
-/**
- * One Safe at a time across events and reconcile runs; held to commit.
- * Bounded wait: lock_timeout.
- */
-async function lockSafe(
-  em: EntityManager,
-  chainId: string,
-  address: string,
-): Promise<void> {
-  await em.query(`SET LOCAL lock_timeout = '10s'`);
-  await em.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
-    `${chainId}:${lower(address)}`,
-  ]);
-}
 
 async function readSnapshot(
   em: EntityManager,
