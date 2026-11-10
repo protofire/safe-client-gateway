@@ -400,4 +400,16 @@ describe('org activity log', () => {
       expect(events[0].actor_user_id).toBe(admin.userId);
     });
   });
+
+  it('limits CSV exports to 20 per hour per user (item 7)', async () => {
+    const u = await signIn();
+    const org = await createOrg([[u.userId, 'admin']]);
+    const csvOf = (who: { cookie: string }, o: string): request.Test =>
+      http().get(`/v1/orgs/${o}/activity.csv`).set('Cookie', who.cookie);
+    for (let i = 0; i < 20; i++) await csvOf(u, org).expect(200);
+    const res = await csvOf(u, org).expect(429);
+    expect(res.body.statusCode).toBe(429);
+    // per user: another member is not affected
+    await csvOf(admin, orgId).expect(200);
+  });
 });

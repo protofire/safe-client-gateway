@@ -51,6 +51,9 @@ import { INVITATION_ROLE_KEY } from '@/modules/org/permissions/role-keys';
 export const MAX_MEMBERS_PER_ORG = 100;
 const INVITE_TTL_MS = 7 * 24 * 3600 * 1000;
 const INVITES_PER_HOUR = 30;
+// per inviting user across all their orgs (up to 10): 2 orgs' worth, so one
+// account cannot turn 10 x 30 into a mail cannon (item 7)
+const INVITES_PER_USER_PER_HOUR = 60;
 
 export type InviteTarget = { wallet: string } | { email: string };
 
@@ -113,7 +116,7 @@ export class InvitationsService {
     target: InviteTarget,
     by: Actor,
   ): Promise<MemberView & { emailSent?: boolean }> {
-    await this.limitInvites(orgId);
+    await this.limitInvites(orgId, by.userId);
     const now = this.clock.now();
     const token = generateToken();
     const email = 'email' in target ? normalizeEmail(target.email) : null;
@@ -230,7 +233,7 @@ export class InvitationsService {
     memberId: string,
     by: Actor,
   ): Promise<{ expiresAt: string; emailSent?: boolean }> {
-    await this.limitInvites(orgId);
+    await this.limitInvites(orgId, by.userId);
     const now = this.clock.now();
     const token = generateToken();
     const result = await this.tx.runInOrgTx(async (em) => {
@@ -462,14 +465,19 @@ export class InvitationsService {
     return name;
   }
 
-  private async limitInvites(orgId: string): Promise<void> {
-    if (
-      !(await this.rateLimiter.hit(
-        `invitations:org:${orgId}`,
-        INVITES_PER_HOUR,
-        3600,
-      ))
-    ) {
+  /** Both counters count every attempt: the user's first, then the org's. */
+  private async limitInvites(orgId: string, userId: string): Promise<void> {
+    const user = await this.rateLimiter.hit(
+      `invitations:user:${userId}`,
+      INVITES_PER_USER_PER_HOUR,
+      3600,
+    );
+    const org = await this.rateLimiter.hit(
+      `invitations:org:${orgId}`,
+      INVITES_PER_HOUR,
+      3600,
+    );
+    if (!user || !org) {
       throw new HttpException(
         { statusCode: 429, message: 'Too many invitations' },
         HttpStatus.TOO_MANY_REQUESTS,

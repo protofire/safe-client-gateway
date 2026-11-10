@@ -20,7 +20,8 @@ import { CsvService } from '@/modules/csv-export/csv-utils/csv.service';
 import { ACTIVITY_EVENT_TYPES } from '@/modules/org/activity/activity-event-types';
 import { ActivityLog } from '@/modules/org/activity/activity-log.service';
 import { OrgSession } from '@/modules/org/auth/decorators';
-import { csvCast } from '@/modules/org/common/csv';
+import { csvCast, limitExports } from '@/modules/org/common/csv';
+import { RateLimiter } from '@/modules/org/common/rate-limiter';
 import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
 import { parse } from '@/modules/org/orgs/parse';
 import { ORG_DATA_SOURCE } from '@/modules/org/db/org-data-source';
@@ -81,6 +82,7 @@ export class ActivityController {
     private readonly encryption: FieldEncryptionService,
     private readonly log: ActivityLog,
     private readonly csv: CsvService,
+    private readonly rateLimiter: RateLimiter,
     @Inject(LoggingService) private readonly logger: ILoggingService,
   ) {}
 
@@ -119,6 +121,7 @@ export class ActivityController {
   ): Promise<void> {
     const filter = parse(FilterSchema, query);
     const orgId = req.params.orgId;
+    await limitExports(this.rateLimiter, session.userId);
     await this.dataSource.transaction((em) =>
       this.log.record(em, {
         orgId,

@@ -809,6 +809,33 @@ describe('members and invitations (org)', () => {
       },
     );
 
+    it('limits invitations to 60 per hour per inviting user across orgs, besides 30 per org (item 7)', async () => {
+      const admin = await t.user({ wallet: true });
+      const orgs = [
+        await t.createOrg(admin, 'A'),
+        await t.createOrg(admin, 'B'),
+        await t.createOrg(admin, 'C'),
+      ];
+      const invite = (orgId: string): ReturnType<OrgTestApp['post']> =>
+        t
+          .post(`/v1/orgs/${orgId}/members/invite`)
+          .set('Cookie', admin.cookie)
+          .send({ email: email() });
+      for (let i = 0; i < 30; i++) await invite(orgs[0]).expect(201);
+      await invite(orgs[0]).expect(429); // per org
+      for (let i = 0; i < 29; i++) await invite(orgs[1]).expect(201);
+      // 61st attempt of this user: per user, although org C is untouched
+      await invite(orgs[2]).expect(429);
+      // another admin of org C is not limited by it
+      const other = await t.user({ wallet: true });
+      await t.addMember(orgs[2], other, 'admin');
+      await t
+        .post(`/v1/orgs/${orgs[2]}/members/invite`)
+        .set('Cookie', other.cookie)
+        .send({ email: email() })
+        .expect(201);
+    });
+
     describe('security notification mails (item 2)', () => {
       it('mails the remaining admins and the removed admin when an admin is removed', async () => {
         const aEmail = email();

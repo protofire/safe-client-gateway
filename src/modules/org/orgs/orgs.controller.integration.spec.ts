@@ -89,6 +89,18 @@ describe('organizations (org)', () => {
     expect(res.body.code).toBe('org_limit');
   });
 
+  it('limits org creation attempts to 20 per hour per user (item 7)', async () => {
+    const owner = await t.user({ wallet: true });
+    const create = (): ReturnType<OrgTestApp['post']> =>
+      t.post('/v1/orgs').set('Cookie', owner.cookie).send({ name: 'Acme' });
+    // 10 created, 10 refused by the org limit: all count as attempts
+    for (let i = 0; i < 10; i++) await create().expect(201);
+    for (let i = 0; i < 10; i++) await create().expect(409);
+    await create().expect(429);
+    const other = await t.user({ wallet: true });
+    await t.createOrg(other);
+  });
+
   it('keeps the 10-org limit under concurrent creates', async () => {
     const owner = await t.user();
     for (let i = 0; i < 8; i++) await t.createOrg(owner, `org ${i}`);

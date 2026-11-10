@@ -684,4 +684,14 @@ describe('linked Safes and overview', () => {
         .expect(404);
     });
   });
+
+  it('limits the overview to 30 per minute per user (item 7)', async () => {
+    const u = await signIn();
+    const org = await createOrg([[u, 'admin']]);
+    const overviewOf = (who: User, o: string): request.Test =>
+      http().get(`/v1/orgs/${o}/overview`).set('Cookie', who.cookie);
+    for (let i = 0; i < 30; i++) await overviewOf(u, org).expect(200);
+    await overviewOf(u, org).expect(429);
+    await overviewOf(admin, orgA).expect(200);
+  });
 });

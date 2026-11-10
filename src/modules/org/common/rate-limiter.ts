@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { HttpException, HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { isIPv4, isIPv6 } from 'node:net';
 import {
   ORG_REDIS,
@@ -72,6 +72,20 @@ export class RateLimiter {
       .expire(k, windowSeconds, 'NX')
       .exec();
     return Number(count) <= limit;
+  }
+
+  /** `hit`, answering 429 once the limit is exceeded. */
+  async enforce(
+    key: string,
+    limit: number,
+    windowSeconds: number,
+  ): Promise<void> {
+    if (!(await this.hit(key, limit, windowSeconds))) {
+      throw new HttpException(
+        { statusCode: 429, message: 'Too many requests' },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
   }
 
   /** Takes back one attempt of `hit`, e.g. a success that should not count. */

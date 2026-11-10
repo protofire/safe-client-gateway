@@ -31,7 +31,8 @@ import {
 import { ContactRequestsService } from '@/modules/org/address-book/contact-requests.service';
 import { ContactsService } from '@/modules/org/address-book/contacts.service';
 import { OrgSession, RequireStrongAuth } from '@/modules/org/auth/decorators';
-import { csvCast } from '@/modules/org/common/csv';
+import { csvCast, limitExports } from '@/modules/org/common/csv';
+import { RateLimiter } from '@/modules/org/common/rate-limiter';
 import { actor, parse } from '@/modules/org/orgs/parse';
 import { RequirePermission } from '@/modules/org/permissions/require-permission.decorator';
 
@@ -49,6 +50,7 @@ export class ContactsController {
     private readonly contacts: ContactsService,
     private readonly requests: ContactRequestsService,
     private readonly csv: CsvService,
+    private readonly rateLimiter: RateLimiter,
   ) {}
 
   @Get('contacts')
@@ -68,6 +70,7 @@ export class ContactsController {
     @Param('orgId') orgId: string,
     @OrgSession() session: OrgSession,
   ): Promise<void> {
+    await limitExports(this.rateLimiter, session.userId);
     await this.contacts.recordExport(orgId, actor(req, session.userId));
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="contacts.csv"');

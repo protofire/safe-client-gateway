@@ -2,6 +2,7 @@ import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import type { EntityManager } from 'typeorm';
 import { ActivityLog } from '@/modules/org/activity/activity-log.service';
 import { Clock, type IClock } from '@/modules/org/common/clock';
+import { RateLimiter } from '@/modules/org/common/rate-limiter';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import { SecurityNotifier } from '@/modules/org/mail/security-notifier';
 import {
@@ -16,6 +17,9 @@ import { PERMISSIONS } from '@/modules/org/permissions/permissions';
 
 export const MAX_ORGS_PER_USER = 10;
 export const PURGE_AFTER_DAYS = 30;
+// attempts, failed ones included: 2x the org limit, so create/delete churn
+// stays bounded (item 7)
+const ORG_CREATES_PER_USER_PER_HOUR = 20;
 const DAY_MS = 24 * 3600 * 1000;
 
 export type OrgListItem = {
@@ -66,10 +70,16 @@ export class OrgsService {
     private readonly activity: ActivityLog,
     private readonly resolver: PermissionResolver,
     private readonly notifier: SecurityNotifier,
+    private readonly rateLimiter: RateLimiter,
     @Inject(Clock) private readonly clock: IClock,
   ) {}
 
   async create(name: string, by: Actor): Promise<OrgView> {
+    await this.rateLimiter.enforce(
+      `orgs:create:user:${by.userId}`,
+      ORG_CREATES_PER_USER_PER_HOUR,
+      3600,
+    );
     return this.tx.runInOrgTx(async (em) => {
       await assertOrgLimit(em, by.userId);
       const [org]: Array<OrgView> = await em.query(

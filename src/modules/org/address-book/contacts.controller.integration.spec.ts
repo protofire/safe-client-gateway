@@ -839,4 +839,13 @@ describe('org address book', () => {
       );
     });
   });
+
+  it('limits CSV exports to 20 per hour per user (item 7)', async () => {
+    const u = await signIn();
+    const org = await createOrg([[u.userId, 'admin']]);
+    for (let i = 0; i < 20; i++)
+      await get(`${org}/contacts.csv`, u).expect(200);
+    await get(`${org}/contacts.csv`, u).expect(429);
+    await get(`${orgA}/contacts.csv`, admin).expect(200);
+  });
 });

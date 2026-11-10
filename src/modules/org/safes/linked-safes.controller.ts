@@ -14,6 +14,7 @@ import type { Request } from 'express';
 import { isAddress } from 'viem';
 import { z } from 'zod';
 import { OrgSession, RequireStrongAuth } from '@/modules/org/auth/decorators';
+import { RateLimiter } from '@/modules/org/common/rate-limiter';
 import { actor, parse } from '@/modules/org/orgs/parse';
 import { RequirePermission } from '@/modules/org/permissions/require-permission.decorator';
 import {
@@ -31,6 +32,8 @@ const LinkSchema = z.object({
   address: z.string().refine((v) => isAddress(v, { strict: false })),
   label: z.string().trim().min(1).max(64).optional(),
 });
+// each overview fans out to the tx-service for up to 50 Safes (item 7)
+const OVERVIEWS_PER_USER_PER_MINUTE = 30;
 const OverviewQuerySchema = z.object({
   fiat: z
     .string()
@@ -43,6 +46,7 @@ export class LinkedSafesController {
   constructor(
     private readonly linked: LinkedSafesService,
     private readonly overview: OverviewService,
+    private readonly rateLimiter: RateLimiter,
   ) {}
 
   @Post('safes')
@@ -91,12 +95,17 @@ export class LinkedSafesController {
 
   @Get('overview')
   @RequirePermission('safes.view')
-  getOverview(
+  async getOverview(
     @Req() req: Request,
     @OrgSession() session: OrgSession,
     @Query() query: unknown,
   ): Promise<Overview> {
     const { fiat } = parse(OverviewQuerySchema, query);
+    await this.rateLimiter.enforce(
+      `overview:user:${session.userId}`,
+      OVERVIEWS_PER_USER_PER_MINUTE,
+      60,
+    );
     return this.overview.build(req.params.orgId, session.userId, fiat);
   }
 }
