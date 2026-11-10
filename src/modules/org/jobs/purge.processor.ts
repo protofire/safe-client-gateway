@@ -14,12 +14,18 @@ import { deleteUnlinkedSnapshots } from '@/modules/org/events/safe-snapshot';
 
 const HOUR_MS = 3600 * 1000;
 const BOOT_DELAY_MS = 60 * 1000;
-const PROCESSED_EVENTS_TTL_MS = 30 * 24 * HOUR_MS;
+const DAY_MS = 24 * HOUR_MS;
+const PROCESSED_EVENTS_TTL_MS = 30 * DAY_MS;
+const DEAD_SESSIONS_TTL_MS = 30 * DAY_MS;
+// logs are kept indefinitely (spec); only the IP is personal data to expire
+const LOG_IP_TTL_MS = 90 * DAY_MS;
 const BATCH = 20;
 
 /**
  * Hourly purge of organizations deleted more than 30 days ago (amendment
- * A10), and of `processed_events` dedup keys older than 30 days. Every row of
+ * A10), of `processed_events` dedup keys older than 30 days, of sessions
+ * expired or revoked more than 30 days ago, and of IPs in the activity and
+ * security logs older than 90 days (the rows stay). Every row of
  * an org references it ON DELETE CASCADE, so deleting the organization
  * deletes everything scoped to it. Also runs once shortly after boot, so
  * frequent restarts cannot starve it.
@@ -61,6 +67,8 @@ export class PurgeProcessor implements OnApplicationBootstrap, OnModuleDestroy {
         'processed_events purge',
         (): Promise<unknown> => this.purgeProcessedEvents(),
       ],
+      ['sessions purge', (): Promise<unknown> => this.purgeDeadSessions()],
+      ['log IP purge', (): Promise<unknown> => this.clearOldLogIps()],
     ] as const) {
       try {
         await job();
@@ -85,6 +93,42 @@ export class PurgeProcessor implements OnApplicationBootstrap, OnModuleDestroy {
         [before],
       );
       return deleted;
+    });
+  }
+
+  /** Sessions whose expiry or revocation is more than 30 days old. */
+  async purgeDeadSessions(): Promise<number> {
+    const before = new Date(this.clock.now().getTime() - DEAD_SESSIONS_TTL_MS);
+    return this.tx.runInOrgTx(async (em) => {
+      await em.query(`SET LOCAL statement_timeout = 0`);
+      const [, deleted]: [unknown, number] = await em.query(
+        `DELETE FROM sessions
+         WHERE LEAST(expires_at, idle_expires_at) < $1 OR revoked_at < $1`,
+        [before],
+      );
+      return deleted;
+    });
+  }
+
+  /**
+   * Nulls IPs older than 90 days in both logs; returns how many rows changed.
+   * shortcut: scans the logs hourly without a created_at index; add a partial
+   * index (WHERE ip_encrypted IS NOT NULL) if the logs grow to millions of rows.
+   */
+  async clearOldLogIps(): Promise<number> {
+    const before = new Date(this.clock.now().getTime() - LOG_IP_TTL_MS);
+    return this.tx.runInOrgTx(async (em) => {
+      await em.query(`SET LOCAL statement_timeout = 0`);
+      let changed = 0;
+      for (const table of ['activity_events', 'user_security_events']) {
+        const [, n]: [unknown, number] = await em.query(
+          `UPDATE ${table} SET ip_encrypted = NULL
+           WHERE created_at < $1 AND ip_encrypted IS NOT NULL`,
+          [before],
+        );
+        changed += n;
+      }
+      return changed;
     });
   }
 

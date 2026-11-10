@@ -367,6 +367,68 @@ describe('organizations (org)', () => {
       expect(await exists()).toBe(false);
     });
 
+    it('deletes sessions expired or revoked over 30 days ago and clears IPs older than 90 days, keeping the rows (item 10)', async () => {
+      const u = await t.user({ wallet: true });
+      const orgId = await t.createOrg(u);
+      const session = (
+        label: string,
+        expires: string,
+        idle: string,
+        revoked: string | null,
+      ): Promise<unknown> =>
+        t.sql.query(
+          `INSERT INTO sessions (user_id, token_hash, expires_at, idle_expires_at, revoked_at)
+           VALUES ($1, $2, now() + $3::interval, now() + $4::interval, now() + $5::interval)`,
+          [u.userId, `purge-${label}-${Math.random()}`, expires, idle, revoked],
+        );
+      await session('expired-31d', '-31 days', '-31 days', null);
+      await session('idle-31d', '-25 days', '-31 days', null);
+      await session('revoked-31d', '1 day', '1 day', '-31 days');
+      await session('expired-29d', '-29 days', '-29 days', null);
+      await session('revoked-29d', '1 day', '1 day', '-29 days');
+      const live: Array<{ token_hash: string }> = await t.sql.query(
+        `SELECT token_hash FROM sessions WHERE user_id = $1`,
+        [u.userId],
+      );
+      for (const [table, extra] of [
+        ['activity_events', { org_id: orgId }],
+        ['user_security_events', { user_id: u.userId }],
+      ] as const) {
+        const [col, val] = Object.entries(extra)[0];
+        await t.sql.query(
+          `INSERT INTO ${table} (${col}, type, ip_encrypted, user_agent, created_at)
+           VALUES ($1, 'security.step_up', 'old-ip', 'ua', now() - interval '91 days'),
+                  ($1, 'security.step_up', 'recent-ip', 'ua', now() - interval '89 days')`,
+          [val],
+        );
+      }
+
+      await t.app.get(PurgeProcessor).run();
+
+      const left: Array<{ token_hash: string }> = await t.sql.query(
+        `SELECT token_hash FROM sessions WHERE user_id = $1`,
+        [u.userId],
+      );
+      expect(left.map((r) => r.token_hash).toSorted()).toEqual(
+        [
+          ...live
+            .map((r) => r.token_hash)
+            .filter((h) => !/purge-(expired|idle|revoked)-31d/.test(h)),
+        ].toSorted(),
+      );
+      for (const table of ['activity_events', 'user_security_events']) {
+        const rows = await t.sql.query(
+          `SELECT ip_encrypted AS ip, user_agent AS ua FROM ${table}
+           WHERE ip_encrypted IN ('old-ip', 'recent-ip') OR (ip_encrypted IS NULL AND user_agent = 'ua')
+           ORDER BY created_at`,
+        );
+        expect(rows).toEqual([
+          { ip: null, ua: 'ua' },
+          { ip: 'recent-ip', ua: 'ua' },
+        ]);
+      }
+    });
+
     it('refuses restore once purge_after passed, also racing the purge', async () => {
       const { orgId, admin } = await deletedOrg();
       // moved in the DB, not with the Clock: the admin's session must stay fresh
