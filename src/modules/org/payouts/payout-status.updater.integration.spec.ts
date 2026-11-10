@@ -327,9 +327,58 @@ describe('PayoutStatusUpdater', () => {
     const hash = p.chain.execute(twin);
     p.chain.indexTransfers(SAFE_A, hash, r.items);
     await p.updater.run();
+    // the executed tx is recorded; the reported one is kept in the warning
     expect(await p.runRow(orgA, r.runId)).toMatchObject({
       status: 'executed',
       executed_tx_hash: hash,
+      safe_tx_hash: twin.safeTxHash,
+      review: {
+        reason: 'executed_other_hash',
+        reportedSafeTxHash: r.tx.safeTxHash,
+      },
+    });
+  });
+
+  it('settles needs_review partial_overlap, not executed, when H is reported and H2 with the same calls and a gas refund executes', async () => {
+    const r = await proposed();
+    const twin = p.chain.propose(SAFE_A, 5, r.calls, {
+      gasPrice: '1',
+      executor: STRANGER,
+    });
+    const hash = p.chain.execute(twin);
+    p.chain.indexTransfers(SAFE_A, hash, r.items);
+    await p.updater.run();
+    expect(await p.runRow(orgA, r.runId)).toMatchObject({
+      status: 'needs_review',
+      executed_tx_hash: hash,
+      safe_tx_hash: twin.safeTxHash,
+      review: {
+        reason: 'partial_overlap',
+        reportedSafeTxHash: r.tx.safeTxHash,
+      },
+      pinned_nonce: null,
+    });
+  });
+
+  it('keeps the underlying outcome in a stray review: copy queued, owners rejected at N', async () => {
+    const r = await proposed();
+    const copy = p.chain.propose(SAFE_A, 6, r.calls, { trusted: false });
+    p.chain.execute(
+      p.chain.propose(SAFE_A, 5, [
+        { to: SAFE_A, value: 0n, data: '0x', operation: 0 },
+      ]),
+    );
+    await p.updater.run();
+    expect(await p.runRow(orgA, r.runId)).toMatchObject({
+      status: 'needs_review',
+      review: {
+        reason: 'stray_proposal',
+        nonce: '6',
+        safeTxHash: copy.safeTxHash,
+        outcome: 'rejected',
+        strayExecuted: false,
+      },
+      pinned_nonce: null,
     });
   });
 
@@ -770,7 +819,12 @@ describe('PayoutStatusUpdater', () => {
     await p.updater.run();
     expect(await p.runRow(orgA, c.runId)).toMatchObject({
       status: 'needs_review',
-      review: { reason: 'stray_proposal', nonce: '4' },
+      review: {
+        reason: 'stray_proposal',
+        nonce: '4',
+        outcome: 'executed',
+        strayExecuted: true,
+      },
     });
   });
 

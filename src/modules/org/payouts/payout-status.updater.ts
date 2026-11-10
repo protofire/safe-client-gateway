@@ -608,7 +608,7 @@ export class PayoutStatusUpdater
           deadline !== null && now >= deadline
             ? {
                 status: 'needs_review',
-                review: { reason: 'stray_proposal' },
+                review: { reason: 'stray_proposal', outcome: outcome.status },
                 ...(executedTxHash && { executedTxHash }),
               }
             : {
@@ -616,15 +616,28 @@ export class PayoutStatusUpdater
                 ...(executedTxHash && { executedTxHash }),
               };
       } else if (stray) {
+        const review = strayReview(stray).review!;
+        // the reviewer needs what happened at N and whether the copy already paid
         outcome = {
-          ...strayReview(stray),
+          status: 'needs_review',
+          review: {
+            ...review,
+            outcome: outcome.status,
+            strayExecuted: stray.isExecuted,
+          },
           ...(executedTxHash && { executedTxHash }),
         };
       }
     }
     if (outcome.status === 'verifying')
       return this.markVerifying(em, run, outcome, now, executed);
-    await this.finish(em, run, outcome, executed, items.length);
+    // the run's own calls executed (maybe under another hash than the reported one)
+    const ownTx =
+      executed !== null &&
+      run.calls !== null &&
+      lower(executed.safe) === lower(run.safe_address) &&
+      callsMismatch(executed, fromStoredCalls(run.calls), ev.callOnly) === null;
+    await this.finish(em, run, outcome, ownTx ? executed : null, items.length);
   }
 
   /**
@@ -719,12 +732,17 @@ export class PayoutStatusUpdater
     return attempts.some((a) => a.status === 'open') ? 'proposing' : 'draft';
   }
 
-  /** A final outcome: pin cleared, open attempt released (`nonce_used`), watch row gone, `payout_run.settled`. */
+  /**
+   * A final outcome: pin cleared, open attempt released (`nonce_used`), watch
+   * row gone, `payout_run.settled`. `ownTx`: the executed tx at N carrying the
+   * run's calls; its safeTxHash is recorded, and a reported hash that differs
+   * is kept in `review.reportedSafeTxHash`.
+   */
   private async finish(
     em: EntityManager,
     run: PayoutRunRow,
     settlement: Settlement,
-    executed: MultisigTransaction | null,
+    ownTx: MultisigTransaction | null,
     itemCount: number,
   ): Promise<void> {
     let outcome = settlement;
@@ -744,24 +762,30 @@ export class PayoutStatusUpdater
       await this.unwatch(em, run);
       return;
     }
-    const ownTx = outcome.status === 'executed' || outcome.status === 'failed';
-    let safeTxHash =
-      run.safe_tx_hash ??
-      (ownTx && executed ? lower(executed.safeTxHash) : null);
-    if (safeTxHash !== null && run.safe_tx_hash === null) {
+    let safeTxHash = ownTx ? lower(ownTx.safeTxHash) : run.safe_tx_hash;
+    if (safeTxHash !== null && safeTxHash !== run.safe_tx_hash) {
       const taken: Array<unknown> = await em.query(
         `SELECT 1 FROM payout_runs WHERE org_id = $1 AND safe_tx_hash = $2 AND id <> $3`,
         [run.org_id, safeTxHash, run.id],
       );
       if (taken.length > 0) {
         // another run of the org records this tx: both cannot own one payment
-        safeTxHash = null;
+        safeTxHash = run.safe_tx_hash;
         outcome = {
           status: 'needs_review',
           review: { reason: 'partial_overlap' },
           ...(outcome.executedTxHash && {
             executedTxHash: outcome.executedTxHash,
           }),
+        };
+      } else if (run.safe_tx_hash !== null) {
+        // H reported, H' executed: the record follows the chain, the warning keeps H
+        outcome = {
+          ...outcome,
+          review: {
+            ...(outcome.review ?? { reason: 'executed_other_hash' }),
+            reportedSafeTxHash: run.safe_tx_hash,
+          },
         };
       }
     }

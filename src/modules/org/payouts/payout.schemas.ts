@@ -66,11 +66,18 @@ export type PayoutReview = {
     | 'partial_overlap'
     | 'undecodable'
     | 'indirect_unproven'
-    | 'stray_proposal';
+    | 'stray_proposal'
+    /** a warning, status kept: the run's calls executed under another hash than the reported one */
+    | 'executed_other_hash';
   lines?: Array<number>;
   /** `stray_proposal`: the queued copy of the run owners must reject. */
   nonce?: string;
   safeTxHash?: string;
+  /** `stray_proposal` once settled: the outcome at the run's nonce and whether the copy executed too. */
+  outcome?: 'executed' | 'failed' | 'replaced' | 'rejected' | 'needs_review';
+  strayExecuted?: boolean;
+  /** The reported hash when another safeTxHash with the run's calls executed (`safeTxHash` of the run is the executed one). */
+  reportedSafeTxHash?: string;
 };
 
 export type PayoutRunListItem = {
