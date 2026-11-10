@@ -159,6 +159,8 @@ export interface ISafeRepository {
     value?: string;
     nonce?: string;
     nonceGte?: number;
+    /** Default true; false also lists unsigned (delegate) proposals. */
+    trusted?: boolean;
     limit?: number;
     offset?: number;
   }): Promise<Page<MultisigTransaction>>;

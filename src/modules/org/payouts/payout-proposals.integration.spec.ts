@@ -276,6 +276,38 @@ describe('payout proposals API', () => {
       });
     });
 
+    it('answers 409 stray_proposal for an untrusted (delegate-proposed) copy of the run calls', async () => {
+      const b = await built();
+      const { run } = await p.detail(orgA, b.runId, member);
+      const stray = p.chain.propose(SAFE_A, 5, toCalls(run.calls!), {
+        trusted: false,
+      });
+      const res = await p
+        .claim(orgA, b.runId, member, { expectedVersion: b.version, nonce: 6 })
+        .expect(409);
+      expect(res.body).toMatchObject({
+        code: 'stray_proposal',
+        safeTxHash: stray.safeTxHash,
+      });
+    });
+
+    it('fails closed with 503 when the queued read hits its page cap', async () => {
+      const b = await built();
+      p.chain.txPageSize = 1;
+      for (let i = 0; i < 6; i++)
+        p.chain.propose(SAFE_A, 5 + i, [
+          toCall({
+            recipient: CAROL,
+            token: 'native',
+            amountRaw: BigInt(i + 1),
+          }),
+        ]);
+      const res = await p
+        .claim(orgA, b.runId, member, { expectedVersion: b.version, nonce: 11 })
+        .expect(503);
+      expect(res.body.code).toBe('tx_service_unavailable');
+    });
+
     it('answers 409 proposal_open to a second claim from another tab', async () => {
       const c = await claimed();
       const res = await p
@@ -438,6 +470,81 @@ describe('payout proposals API', () => {
         })
         .expect(422);
       expect(res2.body).toMatchObject({ code: 'tx_mismatch', field: 'nonce' });
+    });
+
+    it('refuses a report with stray_proposal while the run calls signed at another nonce are still queued', async () => {
+      const c = await claimed();
+      const wrong = p.chain.propose(SAFE_A, 6, c.calls);
+      const first = await p
+        .report(orgA, c.runId, member, {
+          attemptId: c.attemptId,
+          expectedVersion: c.version,
+          safeTxHash: wrong.safeTxHash,
+        })
+        .expect(422);
+      expect(first.body.code).toBe('tx_wrong_nonce');
+      const right = p.chain.propose(SAFE_A, 5, c.calls);
+      const second = await p
+        .report(orgA, c.runId, member, {
+          attemptId: c.attemptId,
+          expectedVersion: c.version,
+          safeTxHash: right.safeTxHash,
+        })
+        .expect(409);
+      expect(second.body).toMatchObject({
+        code: 'stray_proposal',
+        nonce: '6',
+        safeTxHash: wrong.safeTxHash,
+      });
+      // the owners rejected M: it is gone from the queue
+      p.chain.txs = p.chain.txs.filter((t) => t !== wrong);
+      await p
+        .report(orgA, c.runId, member, {
+          attemptId: c.attemptId,
+          expectedVersion: c.version,
+          safeTxHash: right.safeTxHash,
+        })
+        .expect(200);
+    });
+
+    it('answers 409 proposal_closed without any tx-service read to a released, already reported attempt reporting a tx at another nonce', async () => {
+      const pr = await proposed();
+      await p.release(orgA, pr.runId, pr.attemptId, member).expect(200);
+      const wrong = p.chain.propose(SAFE_A, 6, pr.calls);
+      p.chain.repo.getMultiSigTransaction.mockClear();
+      p.chain.repo.getMultisigTransactions.mockClear();
+      const res = await p
+        .report(orgA, pr.runId, member, {
+          attemptId: pr.attemptId,
+          safeTxHash: wrong.safeTxHash,
+        })
+        .expect(409);
+      expect(res.body.code).toBe('proposal_closed');
+      expect(p.chain.repo.getMultiSigTransaction).not.toHaveBeenCalled();
+      expect(p.chain.repo.getMultisigTransactions).not.toHaveBeenCalled();
+    });
+
+    it('answers 409 retry_later to a report on a verifying run', async () => {
+      const c = await claimed();
+      p.chain.execute(
+        p.chain.propose(SAFE_A, 5, [
+          toCall({ recipient: CAROL, token: 'native', amountRaw: 1n }),
+        ]),
+        { ago: 60_000 },
+      );
+      await p.updater.run();
+      expect(await p.runRow(orgA, c.runId)).toMatchObject({
+        status: 'verifying',
+      });
+      const tx = p.chain.propose(SAFE_A, 5, c.calls);
+      const res = await p
+        .report(orgA, c.runId, member, {
+          attemptId: c.attemptId,
+          expectedVersion: c.version,
+          safeTxHash: tx.safeTxHash,
+        })
+        .expect(409);
+      expect(res.body.code).toBe('retry_later');
     });
 
     it('answers 503 tx_not_indexed to a hash the tx-service does not know yet and keeps the attempt open', async () => {

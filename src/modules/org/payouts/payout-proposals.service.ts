@@ -145,19 +145,11 @@ export class PayoutProposalsService {
       }
       nonces = await this.nonces(before.chain_id, safeAddress);
     }
-    // the run's calls queued at another nonce could execute besides the pinned one
-    let queued: Array<MultisigTransaction>;
-    let callOnly: ReadonlySet<string>;
-    try {
-      [queued, callOnly] = await Promise.all([
-        this.updater.readQueued(before.chain_id, safeAddress, {
-          nonceGte: nonces.currentNonce,
-        }),
-        this.updater.callOnly(before.chain_id),
-      ]);
-    } catch {
-      throw unavailable();
-    }
+    const { queued, callOnly } = await this.queueView(
+      before.chain_id,
+      safeAddress,
+      nonces.currentNonce,
+    );
 
     return this.tx.runInOrgTx(async (em) => {
       const run = await lockRun(em, orgId, runId);
@@ -191,25 +183,7 @@ export class PayoutProposalsService {
       ) {
         throw conflict('retry_later', `Nonce ${expected} was used on-chain`);
       }
-      const attemptCalls: Array<{ calls: Array<StoredCall> }> = await em.query(
-        `SELECT calls FROM payout_proposal_attempts WHERE org_id = $1 AND run_id = $2`,
-        [orgId, run.id],
-      );
-      const known = [run.calls!, ...attemptCalls.map((a) => a.calls)].map(
-        fromStoredCalls,
-      );
-      const stray = queued.find(
-        (t) =>
-          BigInt(t.nonce) !== BigInt(expected) &&
-          known.some((calls) => callsMismatch(t, calls, callOnly) === null),
-      );
-      if (stray) {
-        throw conflictWith('stray_proposal', {
-          message: `This payout is already queued at nonce ${stray.nonce}; reject that transaction in the Safe queue before proposing it at ${expected}`,
-          nonce: String(stray.nonce),
-          safeTxHash: stray.safeTxHash,
-        });
-      }
+      await assertNoStray(em, run, expected, queued, callOnly);
       // the stored evaluation is the one the run is proposed with
       const evaluation = await this.runs.evaluateCalls(
         em,
@@ -270,11 +244,12 @@ export class PayoutProposalsService {
     if (before.safe_tx_hash === body.safeTxHash)
       return this.runs.get(orgId, runId, actor.userId);
     // eligibility before any external read; re-checked under the lock
-    if (
-      before.pinned_nonce === null ||
-      (before.status !== 'proposing' && before.status !== 'draft')
-    )
-      throw proposalClosed();
+    const early = await this.tx.runInOrgTx(
+      (em) => this.lockAttempt(em, before, body.attemptId),
+      orgId,
+    );
+    assertReportable(before, early);
+    const N = BigInt(before.pinned_nonce!);
 
     let tx: MultisigTransaction;
     try {
@@ -298,21 +273,20 @@ export class PayoutProposalsService {
       }
       throw unavailable();
     }
-    let callOnly: ReadonlySet<string>;
-    try {
-      callOnly = await this.updater.callOnly(before.chain_id);
-    } catch {
-      throw unavailable();
-    }
+    const nonces = await this.nonces(
+      before.chain_id,
+      getAddress(before.safe_address),
+    );
+    const { queued, callOnly } = await this.queueView(
+      before.chain_id,
+      getAddress(before.safe_address),
+      nonces.currentNonce,
+    );
     // executed already (1-of-1, retried report): settle under the same lock if the evidence can be read
     let evidence: NonceEvidence | null = null;
     if (tx.isExecuted) {
       evidence = await this.updater
-        .readEvidence(
-          before.chain_id,
-          before.safe_address,
-          BigInt(before.pinned_nonce),
-        )
+        .readEvidence(before.chain_id, before.safe_address, N)
         .catch(() => null);
     }
 
@@ -321,15 +295,8 @@ export class PayoutProposalsService {
       await lockSafe(em, run.chain_id, run.safe_address);
       if (run.safe_tx_hash === body.safeTxHash) return;
       const attempt = await this.lockAttempt(em, run, body.attemptId);
-      const normal = run.status === 'proposing' && attempt.status === 'open';
-      const late =
-        run.status === 'draft' &&
-        attempt.status === 'released' &&
-        attempt.safe_tx_hash === null &&
-        run.pinned_nonce === attempt.nonce &&
-        run.calls !== null;
-      if (!normal && !late) throw proposalClosed();
-      if (normal && body.expectedVersion !== run.version)
+      const late = assertReportable(run, attempt) === 'late';
+      if (!late && body.expectedVersion !== run.version)
         throw versionConflict();
       const [taken]: Array<unknown> = await em.query(
         `SELECT 1 FROM payout_runs WHERE org_id = $1 AND safe_tx_hash = $2 AND id <> $3`,
@@ -378,6 +345,7 @@ export class PayoutProposalsService {
         if (late) throw proposalClosed();
         throw mismatch(result.code, result.field);
       }
+      await assertNoStray(em, run, run.pinned_nonce!, queued, callOnly);
       const proposed = await this.updater.markProposed(
         em,
         run,
@@ -495,6 +463,33 @@ export class PayoutProposalsService {
     return this.tx.runInOrgTx((em) => lockRun(em, orgId, runId), orgId);
   }
 
+  /**
+   * Every queued tx (signed or not) from the Safe's current nonce on, for the
+   * stray check. Fails closed when it cannot be read whole.
+   */
+  private async queueView(
+    chainId: string,
+    safeAddress: Address,
+    currentNonce: number,
+  ): Promise<{
+    queued: Array<MultisigTransaction>;
+    callOnly: ReadonlySet<string>;
+  }> {
+    try {
+      const [view, callOnly] = await Promise.all([
+        this.updater.readQueued(chainId, safeAddress, {
+          nonceGte: currentNonce,
+          trusted: false,
+        }),
+        this.updater.callOnly(chainId),
+      ]);
+      if (view.complete) return { queued: view.txs, callOnly };
+    } catch {
+      // mapped below
+    }
+    throw unavailable();
+  }
+
   /** Fails closed: a Safe the tx-service does not know (counterfactual) cannot be claimed. */
   private async nonces(
     chainId: string,
@@ -560,6 +555,67 @@ function conflictWith(
   body: { message: string } & Record<string, unknown>,
 ): ConflictException {
   return new ConflictException({ statusCode: 409, code, ...body });
+}
+
+/**
+ * Which report path the attempt is on: `normal` (open attempt of a proposing
+ * run) or `late` (a released, never reported attempt of a draft still pinned
+ * at its nonce, with calls). Anything else is closed.
+ */
+function assertReportable(
+  run: PayoutRunRow,
+  attempt: AttemptRow,
+): 'normal' | 'late' {
+  if (run.status === 'verifying') {
+    throw conflict(
+      'retry_later',
+      'The nonce of this run was used on-chain; it is settled once the transaction is confirmed',
+    );
+  }
+  if (run.status === 'proposing' && attempt.status === 'open') return 'normal';
+  if (
+    run.status === 'draft' &&
+    attempt.status === 'released' &&
+    attempt.safe_tx_hash === null &&
+    run.pinned_nonce !== null &&
+    run.pinned_nonce === attempt.nonce &&
+    run.calls !== null
+  )
+    return 'late';
+  throw proposalClosed();
+}
+
+/**
+ * 409 `stray_proposal` while a queued tx at another nonce than `nonce` carries
+ * the run's current calls or any attempt's calls: it could execute besides it.
+ */
+async function assertNoStray(
+  em: EntityManager,
+  run: PayoutRunRow,
+  nonce: string,
+  queued: ReadonlyArray<MultisigTransaction>,
+  callOnly: ReadonlySet<string>,
+): Promise<void> {
+  const attempts: Array<{ calls: Array<StoredCall> }> = await em.query(
+    `SELECT calls FROM payout_proposal_attempts WHERE org_id = $1 AND run_id = $2`,
+    [run.org_id, run.id],
+  );
+  const known = [
+    ...(run.calls ? [run.calls] : []),
+    ...attempts.map((a) => a.calls),
+  ].map(fromStoredCalls);
+  const stray = queued.find(
+    (t) =>
+      BigInt(t.nonce) !== BigInt(nonce) &&
+      known.some((calls) => callsMismatch(t, calls, callOnly) === null),
+  );
+  if (stray) {
+    throw conflictWith('stray_proposal', {
+      message: `This payout is also queued at nonce ${stray.nonce}; reject that transaction in the Safe queue before proposing it at ${nonce}`,
+      nonce: String(stray.nonce),
+      safeTxHash: stray.safeTxHash,
+    });
+  }
 }
 
 function assertClaimable(run: PayoutRunRow, expectedVersion: number): void {

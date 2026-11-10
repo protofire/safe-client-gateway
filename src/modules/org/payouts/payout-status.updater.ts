@@ -237,7 +237,8 @@ export class PayoutStatusUpdater
       nonce,
       currentNonce: BigInt(currentNonce),
       executed,
-      queued: queued.filter((t) => BigInt(t.nonce) === nonce),
+      // adoption on a capped read just sees fewer candidates
+      queued: queued.txs.filter((t) => BigInt(t.nonce) === nonce),
       readAt,
       transfers,
       callOnly,
@@ -245,13 +246,17 @@ export class PayoutStatusUpdater
     };
   }
 
-  /** Trusted queued txs of the Safe matching `filter`, paged up to a cap (a capped read just sees fewer). */
+  /**
+   * Queued txs of the Safe matching `filter` (trusted only unless `trusted: false`),
+   * paged up to a cap; `complete` is false when the cap cut the list short.
+   */
   async readQueued(
     chainId: string,
     safeAddress: Address,
-    filter: { nonce?: string; nonceGte?: number },
-  ): Promise<Array<MultisigTransaction>> {
+    filter: { nonce?: string; nonceGte?: number; trusted?: boolean },
+  ): Promise<{ txs: Array<MultisigTransaction>; complete: boolean }> {
     const out: Array<MultisigTransaction> = [];
+    let complete = false;
     for (let page = 0; page < MAX_QUEUED_PAGES; page++) {
       const { results, next } = await this.safes.getMultisigTransactions({
         chainId,
@@ -262,11 +267,17 @@ export class PayoutStatusUpdater
         offset: out.length,
       });
       out.push(...results);
-      if (next === null || results.length === 0) break;
+      if (next === null || results.length === 0) {
+        complete = true;
+        break;
+      }
     }
-    return out.filter(
-      (t) => !t.isExecuted && lower(t.safe) === lower(safeAddress),
-    );
+    return {
+      txs: out.filter(
+        (t) => !t.isExecuted && lower(t.safe) === lower(safeAddress),
+      ),
+      complete,
+    };
   }
 
   async callOnly(chainId: string): Promise<ReadonlySet<string>> {

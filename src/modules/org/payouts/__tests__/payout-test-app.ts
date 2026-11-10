@@ -103,6 +103,7 @@ export class FakeChain {
         nonce?: string;
         nonceGte?: number;
         executed?: boolean;
+        trusted?: boolean;
         limit?: number;
         offset?: number;
       }) => {
@@ -112,7 +113,9 @@ export class FakeChain {
               t.safe.toLowerCase() === args.safeAddress.toLowerCase() &&
               (args.nonce === undefined || String(t.nonce) === args.nonce) &&
               (args.nonceGte === undefined || t.nonce >= args.nonceGte) &&
-              (args.executed === undefined || t.isExecuted === args.executed),
+              (args.executed === undefined || t.isExecuted === args.executed) &&
+              // the gateway repository reads trusted txs unless told otherwise
+              (args.trusted === false || t.trusted),
           )
           .sort((a, b) => b.nonce - a.nonce);
         const size = Math.min(args.limit ?? 20, this.txPageSize);
@@ -189,6 +192,7 @@ export class FakeChain {
         .with('gasToken', zeroAddress)
         .with('refundReceiver', zeroAddress)
         .with('safeTxGas', 0)
+        .with('trusted', true)
         .with('isExecuted', false)
         .with('isSuccessful', null)
         .with('executionDate', null)
