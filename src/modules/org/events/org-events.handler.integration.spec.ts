@@ -293,6 +293,34 @@ describe('OrgEventsHandler', () => {
     );
   });
 
+  it('hands executed txs of every Safe, linked or not, to the payout status updater', async () => {
+    const payouts = { onExecuted: jest.fn().mockResolvedValue(undefined) };
+    const withPayouts = new OrgEventsHandler(
+      safeRepo as never,
+      balancesRepo as never,
+      new OrgTransaction(sql),
+      new ActivityLog({} as FieldEncryptionService),
+      logger as never,
+      undefined,
+      payouts as never,
+    );
+    await seed();
+    safeRepo.getSafe.mockResolvedValue(safeState());
+    const hash = (n: number): string => `0x${String(n).padStart(64, '0')}`;
+    await withPayouts.handle({
+      ...executed({ safeTxHash: hash(1) }),
+      type: TransactionEventType.PENDING_MULTISIG_TRANSACTION,
+    } as Event);
+    await withPayouts.handle(executed({ safeTxHash: hash(2) }));
+    await withPayouts.handle(executed({ safeTxHash: hash(3), address: OTHER }));
+    await withPayouts.handle(executed({ safeTxHash: hash(4), failed: 'true' }));
+    expect(payouts.onExecuted.mock.calls).toEqual([
+      [CHAIN, SAFE, hash(2)],
+      [CHAIN, OTHER, hash(3)],
+      [CHAIN, SAFE, hash(4)],
+    ]);
+  });
+
   it('does not touch another Safe', async () => {
     await seed();
     await handler.handle(executed({ address: OTHER }));

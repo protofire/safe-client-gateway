@@ -491,6 +491,7 @@ export class SafeRepository implements ISafeRepository {
     value?: string;
     nonce?: string;
     nonceGte?: number;
+    trusted?: boolean;
     limit?: number;
     offset?: number;
   }): Promise<Page<MultisigTransaction>> {
@@ -500,7 +501,7 @@ export class SafeRepository implements ISafeRepository {
     const page = await transactionService.getMultisigTransactions({
       ...args,
       ordering: '-nonce',
-      trusted: true,
+      trusted: args.trusted ?? true,
     });
     return MultisigTransactionPageSchema.parse(page);
   }
@@ -520,6 +521,8 @@ export class SafeRepository implements ISafeRepository {
     chainId: string;
     safeAddress: Address;
     limit?: number | undefined;
+    offset?: number;
+    transactionHash?: string;
   }): Promise<Page<Transfer>> {
     const transactionService = await this.transactionApiManager.getApi(
       args.chainId,

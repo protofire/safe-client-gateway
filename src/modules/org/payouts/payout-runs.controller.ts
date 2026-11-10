@@ -5,22 +5,38 @@ import {
   Delete,
   Get,
   HttpCode,
+  Inject,
   NotFoundException,
   Param,
   Patch,
   Post,
   Query,
   Req,
+  Res,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
+import { Readable } from 'stream';
 import { z } from 'zod';
+import { ILoggingService, LoggingService } from '@/logging/logging.interface';
+import { CsvService } from '@/modules/csv-export/csv-utils/csv.service';
 import { OrgSession } from '@/modules/org/auth/decorators';
-import { CSV_UPLOAD_LIMITS } from '@/modules/org/common/csv';
+import {
+  CSV_UPLOAD_LIMITS,
+  csvCast,
+  limitExports,
+} from '@/modules/org/common/csv';
+import { RateLimiter } from '@/modules/org/common/rate-limiter';
 import { actor, parse } from '@/modules/org/orgs/parse';
 import { RequirePermission } from '@/modules/org/permissions/require-permission.decorator';
+import {
+  ClaimProposalSchema,
+  PayoutProposalsService,
+  ReportProposalSchema,
+  type ClaimResult,
+} from '@/modules/org/payouts/payout-proposals.service';
 import { PayoutRunsService } from '@/modules/org/payouts/payout-runs.service';
 import {
   BuildPayoutRunSchema,
@@ -40,7 +56,13 @@ function uuid(raw: string): string {
 /** Payout run drafts. Preparing a run has no on-chain effect: no step-up. */
 @Controller({ path: 'orgs/:orgId', version: '1' })
 export class PayoutRunsController {
-  constructor(private readonly runs: PayoutRunsService) {}
+  constructor(
+    private readonly runs: PayoutRunsService,
+    private readonly proposals: PayoutProposalsService,
+    private readonly csv: CsvService,
+    private readonly rateLimiter: RateLimiter,
+    @Inject(LoggingService) private readonly logger: ILoggingService,
+  ) {}
 
   @Get('payout-runs')
   @RequirePermission('payouts.view')
@@ -143,5 +165,107 @@ export class PayoutRunsController {
       parse(BuildPayoutRunSchema, body).expectedVersion,
       actor(req, session.userId),
     );
+  }
+
+  /** Claim before the signing flow opens; the UI signs at the returned nonce. */
+  @Post('payout-runs/:runId/proposal-attempts')
+  @RequirePermission('payouts.prepare')
+  claim(
+    @Req() req: Request,
+    @Param('orgId') orgId: string,
+    @Param('runId') runId: string,
+    @OrgSession() session: OrgSession,
+    @Body() body: unknown,
+  ): Promise<ClaimResult> {
+    return this.proposals.claim(
+      orgId,
+      uuid(runId),
+      parse(ClaimProposalSchema, body),
+      actor(req, session.userId),
+    );
+  }
+
+  @Post('payout-runs/:runId/proposed')
+  @HttpCode(200)
+  @RequirePermission('payouts.prepare')
+  report(
+    @Req() req: Request,
+    @Param('orgId') orgId: string,
+    @Param('runId') runId: string,
+    @OrgSession() session: OrgSession,
+    @Body() body: unknown,
+  ): Promise<PayoutRunDetail> {
+    return this.proposals.report(
+      orgId,
+      uuid(runId),
+      parse(ReportProposalSchema, body),
+      actor(req, session.userId),
+    );
+  }
+
+  /** The claimer, or anyone with payouts.manage (checked in the service); no step-up. */
+  @Post('payout-runs/:runId/proposal-attempts/:attemptId/release')
+  @HttpCode(200)
+  @RequirePermission('payouts.prepare')
+  release(
+    @Req() req: Request,
+    @Param('orgId') orgId: string,
+    @Param('runId') runId: string,
+    @Param('attemptId') attemptId: string,
+    @OrgSession() session: OrgSession,
+  ): Promise<PayoutRunDetail> {
+    return this.proposals.release(
+      orgId,
+      uuid(runId),
+      uuid(attemptId),
+      actor(req, session.userId),
+    );
+  }
+
+  @Get('payout-runs/:runId/export.csv')
+  @RequirePermission('exports.read')
+  async exportCsv(
+    @Req() req: Request,
+    @Res() res: Response,
+    @Param('orgId') orgId: string,
+    @Param('runId') runId: string,
+    @OrgSession() session: OrgSession,
+  ): Promise<void> {
+    await limitExports(this.rateLimiter, session.userId);
+    // read before streaming: pipeline destroys the response on any error, so
+    // a failure here must surface as an ordinary error response
+    const rows = await this.proposals.exportRun(
+      orgId,
+      uuid(runId),
+      actor(req, session.userId),
+    );
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="payout-run.csv"',
+    );
+    try {
+      await this.csv.toCsv(Readable.from(rows), res, {
+        header: true,
+        cast: csvCast,
+        columns: [
+          'line',
+          'name',
+          'recipient',
+          'token',
+          'symbol',
+          'amount',
+          'status',
+          'safeTxHash',
+          'executedTxHash',
+        ].map((k) => ({ key: k, header: k })),
+      });
+    } catch (error) {
+      // headers are already sent: log and cut the connection so the client sees a truncated download
+      this.logger.error(
+        `payout run CSV export failed mid-stream: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      res.destroy();
+    }
   }
 }

@@ -470,6 +470,8 @@ export class TransactionApi implements ITransactionApi {
     limit?: number;
     offset?: number;
     to?: Address;
+    /** Only the transfers of this transaction (tx-service `transaction_hash`). */
+    transactionHash?: string;
   }): Promise<Raw<Page<Transfer>>> {
     try {
       const cacheDir = CacheRouter.getTransfersCacheDir({
@@ -488,6 +490,7 @@ export class TransactionApi implements ITransactionApi {
             limit: args.limit,
             offset: args.offset,
             to: args.to,
+            transaction_hash: args.transactionHash,
           },
         },
         expireTimeSeconds: this.defaultExpirationTimeInSeconds,

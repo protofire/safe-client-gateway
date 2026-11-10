@@ -158,6 +158,9 @@ export interface ISafeRepository {
     to?: string;
     value?: string;
     nonce?: string;
+    nonceGte?: number;
+    /** Default true; false also lists unsigned (delegate) proposals. */
+    trusted?: boolean;
     limit?: number;
     offset?: number;
   }): Promise<Page<MultisigTransaction>>;
@@ -174,6 +177,8 @@ export interface ISafeRepository {
     chainId: string;
     safeAddress: Address;
     limit?: number;
+    offset?: number;
+    transactionHash?: string;
   }): Promise<Page<Transfer>>;
 
   getSafesByOwner(args: {
