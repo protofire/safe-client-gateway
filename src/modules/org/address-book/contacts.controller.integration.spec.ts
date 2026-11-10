@@ -14,6 +14,7 @@ import { createSiweMessage } from 'viem/siwe';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import { CacheModule } from '@/datasources/cache/cache.module';
 import { LoggingService } from '@/logging/logging.interface';
+import { ContactsService } from '@/modules/org/address-book/contacts.service';
 import { ActivityModule } from '@/modules/org/activity/activity.module';
 import { AddressBookModule } from '@/modules/org/address-book/address-book.module';
 import { OrgKeyPrefix } from '@/modules/org/auth/nonce.store';
@@ -847,5 +848,37 @@ describe('org address book', () => {
       await get(`${org}/contacts.csv`, u).expect(200);
     await get(`${org}/contacts.csv`, u).expect(429);
     await get(`${orgA}/contacts.csv`, admin).expect(200);
+  });
+
+  it('cuts the connection and logs when the export fails mid-stream (item 13)', async () => {
+    const contacts = app.get(ContactsService);
+    const fake = Array.from({ length: 500 }, (_, i) => ({
+      id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      name: `n${i}`,
+      address: ADDR,
+      chainIds: ['1'],
+      tags: [],
+      version: 1,
+      createdAt: '',
+      updatedAt: '',
+    }));
+    const spy = jest
+      .spyOn(contacts, 'page')
+      .mockResolvedValueOnce(fake)
+      .mockRejectedValueOnce(new Error('db gone'));
+    logger.error.mockClear();
+    try {
+      const outcome = await get(`${orgA}/contacts.csv`, admin).then(
+        (r) => r.status,
+        (e: Error) => e.message,
+      );
+      // never a clean 200 with a complete body, never a JSON error after the CSV headers
+      expect(outcome).not.toBe(200);
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining('contacts CSV export failed mid-stream'),
+      );
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

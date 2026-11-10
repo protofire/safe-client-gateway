@@ -5,6 +5,7 @@ import {
   Delete,
   Get,
   HttpCode,
+  Inject,
   NotFoundException,
   Param,
   Patch,
@@ -19,6 +20,10 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import type { Request, Response } from 'express';
 import { Readable } from 'stream';
 import { z } from 'zod';
+import {
+  type ILoggingService,
+  LoggingService,
+} from '@/logging/logging.interface';
 import { CsvService } from '@/modules/csv-export/csv-utils/csv.service';
 import {
   type Contact,
@@ -51,6 +56,7 @@ export class ContactsController {
     private readonly requests: ContactRequestsService,
     private readonly csv: CsvService,
     private readonly rateLimiter: RateLimiter,
+    @Inject(LoggingService) private readonly logger: ILoggingService,
   ) {}
 
   @Get('contacts')
@@ -74,15 +80,23 @@ export class ContactsController {
     await this.contacts.recordExport(orgId, actor(req, session.userId));
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="contacts.csv"');
-    // Same shape as the Safe export (one row per chain), plus tags
-    await this.csv.toCsv(Readable.from(this.csvRows(orgId)), res, {
-      header: true,
-      cast: csvCast,
-      columns: ['address', 'name', 'chainId', 'tags'].map((k) => ({
-        key: k,
-        header: k,
-      })),
-    });
+    try {
+      // Same shape as the Safe export (one row per chain), plus tags
+      await this.csv.toCsv(Readable.from(this.csvRows(orgId)), res, {
+        header: true,
+        cast: csvCast,
+        columns: ['address', 'name', 'chainId', 'tags'].map((k) => ({
+          key: k,
+          header: k,
+        })),
+      });
+    } catch (error) {
+      // headers are already sent: log and cut the connection so the client sees a truncated download
+      this.logger.error(
+        `contacts CSV export failed mid-stream: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      res.destroy();
+    }
   }
 
   private async *csvRows(
