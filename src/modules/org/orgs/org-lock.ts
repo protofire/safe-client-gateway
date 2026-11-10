@@ -67,22 +67,37 @@ export function lastAdminConflict(): ConflictException {
   });
 }
 
-/**
- * The trigger's check_violation → 409 `last_admin`; lock deadlocks and lock
- * timeouts → 409 `retry` (nothing was decided, the client may try again).
- * Anything else is rethrown.
- */
-export function mapLastAdmin(error: unknown): never {
-  const e = error as {
-    code?: string;
-    constraint?: string;
-    driverError?: { code?: string; constraint?: string };
+type PgError = {
+  code?: string;
+  constraint?: string;
+  driverError?: { code?: string; constraint?: string };
+};
+
+/** TypeORM's QueryFailedError carries the Postgres fields on driverError. */
+function pgFields(error: unknown): { code?: string; constraint?: string } {
+  const e = error as PgError;
+  return {
+    code: e?.code ?? e?.driverError?.code,
+    constraint: e?.constraint ?? e?.driverError?.constraint,
   };
-  const code = e.code ?? e.driverError?.code;
-  const constraint = e.constraint ?? e.driverError?.constraint;
+}
+
+/** The trigger's check_violation → 409 `last_admin`; anything else is rethrown. */
+export function mapLastAdmin(error: unknown): never {
+  const { code, constraint } = pgFields(error);
   if (code === CHECK_VIOLATION && constraint === KEEP_ONE_ADMIN) {
     throw lastAdminConflict();
   }
+  throw error;
+}
+
+/**
+ * Lock deadlocks and lock timeouts → 409 `retry` (nothing was decided, the
+ * client may try again); anything else is rethrown. Applied once to every
+ * org transaction (OrgTransaction), so every lockOrgs path answers alike.
+ */
+export function mapLockError(error: unknown): never {
+  const { code } = pgFields(error);
   if (code === DEADLOCK || code === LOCK_NOT_AVAILABLE) {
     throw conflict('retry', 'Concurrent change; try again');
   }

@@ -140,6 +140,27 @@ describe('organizations (org)', () => {
     expect(statuses.toSorted()).toEqual([201, 201, 409]);
   });
 
+  it('answers 409 retry when the org lock times out (55P03) on a non-member path (round 2 item 9)', async () => {
+    const owner = await t.user({ wallet: true });
+    const orgId = await t.createOrg(owner, 'Old');
+    const lock = await t.holdOrgLock(orgId);
+    try {
+      // the pool's lock_timeout (5 s) expires while the rename waits
+      const res = await t
+        .patch(`/v1/orgs/${orgId}`)
+        .set('Cookie', owner.cookie)
+        .send({ name: 'New' })
+        .expect(409);
+      expect(res.body).toEqual({
+        statusCode: 409,
+        message: expect.any(String),
+        code: 'retry',
+      });
+    } finally {
+      await lock.release();
+    }
+  });
+
   it('renames with org.update and logs from/to; members get 403', async () => {
     const owner = await t.user({ wallet: true });
     const member = await t.user({ wallet: true });

@@ -1,5 +1,5 @@
 import { ConflictException } from '@nestjs/common';
-import { mapLastAdmin } from '@/modules/org/orgs/org-lock';
+import { mapLastAdmin, mapLockError } from '@/modules/org/orgs/org-lock';
 
 function conflictBody(fn: () => never): unknown {
   try {
@@ -11,21 +11,36 @@ function conflictBody(fn: () => never): unknown {
   throw new Error('did not throw');
 }
 
-describe('mapLastAdmin (item 12)', () => {
+describe('mapLockError (item 12, round 2 item 9)', () => {
   it.each(['40P01', '55P03'])(
-    'maps %s (deadlock, lock timeout) to 409 retry, not last_admin',
+    'maps %s (deadlock, lock timeout) to 409 retry',
     (code) => {
-      expect(conflictBody(() => mapLastAdmin({ code }))).toEqual({
+      expect(conflictBody(() => mapLockError({ code }))).toEqual({
         statusCode: 409,
         message: expect.any(String),
         code: 'retry',
       });
       // TypeORM QueryFailedError carries it on driverError
       expect(
-        conflictBody(() => mapLastAdmin({ driverError: { code } })),
+        conflictBody(() => mapLockError({ driverError: { code } })),
       ).toMatchObject({ code: 'retry' });
     },
   );
+
+  it('rethrows anything else unchanged, the last-admin trigger included', () => {
+    const trigger = { code: '23514', constraint: 'members_keep_one_admin' };
+    expect(() => mapLockError(trigger)).toThrow(
+      expect.objectContaining(trigger) as unknown as Error,
+    );
+  });
+});
+
+describe('mapLastAdmin (item 12)', () => {
+  it.each(['40P01', '55P03'])('rethrows %s unchanged', (code) => {
+    expect(() => mapLastAdmin({ code })).toThrow(
+      expect.objectContaining({ code }) as unknown as Error,
+    );
+  });
 
   it("maps only the trigger's check_violation to last_admin", () => {
     expect(
