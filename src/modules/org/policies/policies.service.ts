@@ -7,9 +7,8 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import type { EntityManager } from 'typeorm';
-import { getAddress } from 'viem';
+import type { Address } from 'viem';
 import { z } from 'zod';
-import { DataSourceError } from '@/domain/errors/data-source.error';
 import { ITransactionApiManager } from '@/domain/interfaces/transaction-api.manager.interface';
 import { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
 import { ActivityLog } from '@/modules/org/activity/activity-log.service';
@@ -18,6 +17,7 @@ import {
   formatAmount,
   parseAmountStrict,
 } from '@/modules/org/common/amounts';
+import { tokenMeta, type TokenMeta } from '@/modules/org/common/token-meta';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import {
   conflict,
@@ -81,13 +81,6 @@ function sameAmount(maxAmount: string, cap: StoredCap): boolean {
     return false;
   }
 }
-
-// only what a cap needs from the raw tx-service token; decimals may be absent upstream
-const RawTokenSchema = z.object({
-  type: z.string(),
-  symbol: z.string(),
-  decimals: z.number().int().nullish(),
-});
 
 type Resolved = { scope: PolicyScope; rules: Array<PolicyRule> };
 
@@ -401,36 +394,32 @@ export class PoliciesService {
 
   private async tokenMeta(
     chainId: string,
-    token: string,
+    token: Address | 'native',
   ): Promise<
     | { decimals: number; symbol: string }
     | { field: 'chainId' | 'token'; reason: string }
   > {
+    let meta: TokenMeta;
     try {
-      if (token === 'native') {
-        const { nativeCurrency } = await this.chains.getChain(chainId);
-        return {
-          decimals: nativeCurrency.decimals,
-          symbol: nativeCurrency.symbol,
-        };
-      }
-      const api = await this.transactionApis.getApi(chainId);
-      const t = RawTokenSchema.parse(await api.getToken(getAddress(token)));
-      if (t.type !== 'ERC20') {
-        return { field: 'token', reason: 'Not an ERC20 token' };
-      }
-      // the gateway token schema turns absent decimals into 0: a cap must not guess
-      if (t.decimals === null || t.decimals === undefined) {
-        return { field: 'token', reason: 'Token decimals unknown' };
-      }
-      return { decimals: t.decimals, symbol: t.symbol };
-    } catch (error) {
-      if (error instanceof DataSourceError && error.code === 404) {
+      meta = await tokenMeta(
+        { chains: this.chains, transactionApis: this.transactionApis },
+        chainId,
+        token,
+      );
+    } catch {
+      throw new BadGatewayException('Could not read token details');
+    }
+    switch (meta) {
+      case 'unknown':
         return token === 'native'
           ? { field: 'chainId', reason: 'Unknown chain' }
           : { field: 'token', reason: 'Unknown token on this chain' };
-      }
-      throw new BadGatewayException('Could not read token details');
+      case 'not_erc20':
+        return { field: 'token', reason: 'Not an ERC20 token' };
+      case 'decimals_unknown':
+        return { field: 'token', reason: 'Token decimals unknown' };
+      default:
+        return meta;
     }
   }
 
