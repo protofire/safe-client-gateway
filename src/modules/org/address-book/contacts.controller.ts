@@ -36,12 +36,11 @@ import {
 import { ContactRequestsService } from '@/modules/org/address-book/contact-requests.service';
 import { ContactsService } from '@/modules/org/address-book/contacts.service';
 import { OrgSession, RequireStrongAuth } from '@/modules/org/auth/decorators';
-import { csvCast, limitExports } from '@/modules/org/common/csv';
+import { csvCast, limitExports, MAX_CSV_BYTES } from '@/modules/org/common/csv';
 import { RateLimiter } from '@/modules/org/common/rate-limiter';
 import { actor, parse } from '@/modules/org/orgs/parse';
 import { RequirePermission } from '@/modules/org/permissions/require-permission.decorator';
 
-const MAX_CSV_BYTES = 1024 * 1024;
 const EXPORT_PAGE = 500;
 
 function uuid(raw: string): string {
