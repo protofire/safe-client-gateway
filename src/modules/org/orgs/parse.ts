@@ -17,3 +17,11 @@ export type Actor = { userId: string; ip?: string; userAgent?: string };
 export function actor(req: Request, userId: string): Actor {
   return { userId, ip: req.ip, userAgent: req.get('user-agent') };
 }
+
+/** For auth flows; req.ip honours the configured proxy hop count (configureOrgApp). */
+export function client(req: Request): { ip: string; userAgent: string | null } {
+  return {
+    ip: req.ip ?? 'unknown',
+    userAgent: req.header('user-agent') ?? null,
+  };
+}

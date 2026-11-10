@@ -23,10 +23,8 @@ describe('FieldEncryptionService', () => {
     const blob = service(v1).encrypt('old');
     const s = service(rotated);
     expect(s.decrypt(blob)).toBe('old');
-    expect(s.needsRotation(blob)).toBe(true);
     const fresh = s.encrypt('new');
     expect(fresh.startsWith('v2:')).toBe(true);
-    expect(s.needsRotation(fresh)).toBe(false);
   });
 
   it('fails on tampered ciphertext', () => {

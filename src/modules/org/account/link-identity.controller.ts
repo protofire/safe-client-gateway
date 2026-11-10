@@ -24,6 +24,7 @@ import {
   SiweBodySchema,
   type SiweBody,
 } from '@/modules/org/auth/siwe-auth.controller';
+import { client } from '@/modules/org/orgs/parse';
 import { ValidationPipe } from '@/validation/pipes/validation.pipe';
 
 /**
@@ -82,12 +83,4 @@ export class LinkIdentityController {
   ): Promise<void> {
     await this.account.removeIdentity(session, identityId, client(req));
   }
-}
-
-// req.ip honours the configured proxy hop count (configureOrgApp)
-function client(req: Request): { ip: string; userAgent: string | null } {
-  return {
-    ip: req.ip ?? 'unknown',
-    userAgent: req.header('user-agent') ?? null,
-  };
 }

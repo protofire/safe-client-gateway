@@ -11,6 +11,7 @@ import {
   SESSION_COOKIE,
   setSessionCookie,
 } from '@/modules/org/auth/session.guard';
+import { client } from '@/modules/org/orgs/parse';
 import { ValidationPipe } from '@/validation/pipes/validation.pipe';
 
 export const OIDC_TX_COOKIE = 'org_oidc_tx';
@@ -56,7 +57,7 @@ export class OidcController {
       await this.oidc.start({
         connection: query.connection,
         returnTo: query.returnTo,
-        ip: clientIp(req),
+        ip: client(req).ip,
       }),
     );
   }
@@ -75,15 +76,10 @@ export class OidcController {
       state: query.state,
       tx: req.cookies?.[OIDC_TX_COOKIE],
       sessionToken: req.cookies?.[SESSION_COOKIE],
-      ip: clientIp(req),
+      ip: client(req).ip,
       userAgent: req.header('user-agent') ?? null,
     });
     if (token) setSessionCookie(res, token, this.oidc.sessionMaxAgeSeconds);
     res.redirect(302, redirectUrl);
   }
-}
-
-// req.ip honours the configured proxy hop count (configureOrgApp)
-function clientIp(req: Request): string {
-  return req.ip ?? 'unknown';
 }

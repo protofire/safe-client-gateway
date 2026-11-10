@@ -16,6 +16,7 @@ import {
   SESSION_COOKIE_OPTIONS,
   setSessionCookie,
 } from '@/modules/org/auth/session.guard';
+import { client } from '@/modules/org/orgs/parse';
 import { ValidationPipe } from '@/validation/pipes/validation.pipe';
 
 export const SiweBodySchema = z.object({
@@ -31,7 +32,7 @@ export class SiweAuthController {
   @Public()
   @Get('nonce')
   nonce(@Req() req: Request): Promise<{ nonce: string }> {
-    return this.auth.createNonce(clientIp(req));
+    return this.auth.createNonce(client(req).ip);
   }
 
   @Public()
@@ -44,7 +45,7 @@ export class SiweAuthController {
   ): Promise<{ user: { id: string } }> {
     const { userId, token } = await this.auth.signInWithSiwe({
       ...body,
-      ip: clientIp(req),
+      ip: client(req).ip,
       userAgent: req.header('user-agent') ?? null,
     });
     setSessionCookie(res, token, this.auth.sessionMaxAgeSeconds);
@@ -61,7 +62,7 @@ export class SiweAuthController {
   ): Promise<{ ok: true }> {
     const token = await this.auth.stepUpWithSiwe(session, {
       ...body,
-      ip: clientIp(req),
+      ip: client(req).ip,
     });
     setSessionCookie(res, token, this.auth.sessionMaxAgeSeconds);
     return { ok: true };
@@ -84,9 +85,4 @@ export class SiweAuthController {
   me(@OrgSession() session: OrgSession): Promise<MeDto> {
     return this.auth.me(session);
   }
-}
-
-// req.ip honours the configured proxy hop count (configureOrgApp)
-function clientIp(req: Request): string {
-  return req.ip ?? 'unknown';
 }

@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { OrgSession, RequireStrongAuth } from '@/modules/org/auth/decorators';
 import { setSessionCookie } from '@/modules/org/auth/session.guard';
 import { FactorsService } from '@/modules/org/auth/totp/factors.service';
+import { client } from '@/modules/org/orgs/parse';
 import { ValidationPipe } from '@/validation/pipes/validation.pipe';
 
 const CodeSchema = z.object({ code: z.string().min(1).max(16) });
@@ -80,12 +81,4 @@ export class TotpController {
   ): Promise<void> {
     await this.factors.remove(session, client(req));
   }
-}
-
-// req.ip honours the configured proxy hop count (configureOrgApp)
-function client(req: Request): { ip: string; userAgent: string | null } {
-  return {
-    ip: req.ip ?? 'unknown',
-    userAgent: req.header('user-agent') ?? null,
-  };
 }

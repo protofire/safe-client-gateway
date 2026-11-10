@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -15,6 +14,7 @@ import type { Request } from 'express';
 import { isAddress } from 'viem';
 import { z } from 'zod';
 import { OrgSession, RequireStrongAuth } from '@/modules/org/auth/decorators';
+import { actor, parse } from '@/modules/org/orgs/parse';
 import { RequirePermission } from '@/modules/org/permissions/require-permission.decorator';
 import {
   LinkedSafesService,
@@ -38,13 +38,6 @@ const OverviewQuerySchema = z.object({
     .default('USD'),
 });
 
-// ZodErrorFilter answers 502 (gateway upstream semantics); bad input is a 400
-function parse<T extends z.ZodType>(schema: T, input: unknown): z.infer<T> {
-  const parsed = schema.safeParse(input);
-  if (!parsed.success) throw new BadRequestException(parsed.error.message);
-  return parsed.data;
-}
-
 @Controller({ path: 'orgs/:orgId', version: '1' })
 export class LinkedSafesController {
   constructor(
@@ -61,11 +54,11 @@ export class LinkedSafesController {
     @Body() body: unknown,
   ): Promise<LinkedSafeRow> {
     const input = parse(LinkSchema, body);
-    return this.linked.link(req.params.orgId, input, {
-      userId: session.userId,
-      ip: req.ip,
-      userAgent: req.get('user-agent'),
-    });
+    return this.linked.link(
+      req.params.orgId,
+      input,
+      actor(req, session.userId),
+    );
   }
 
   @Delete('safes/:linkedSafeId')
@@ -80,11 +73,11 @@ export class LinkedSafesController {
     // a malformed id cannot belong to any org
     if (!z.uuid().safeParse(linkedSafeId).success)
       throw new NotFoundException();
-    await this.linked.unlink(req.params.orgId, linkedSafeId, {
-      userId: session.userId,
-      ip: req.ip,
-      userAgent: req.get('user-agent'),
-    });
+    await this.linked.unlink(
+      req.params.orgId,
+      linkedSafeId,
+      actor(req, session.userId),
+    );
   }
 
   @Get('safes')

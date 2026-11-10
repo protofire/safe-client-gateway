@@ -38,8 +38,6 @@ import { SafesModule } from '@/modules/org/safes/safes.module';
 import { GlobalErrorFilter } from '@/routes/common/filters/global-error.filter';
 import { ZodErrorFilter } from '@/routes/common/filters/zod-error.filter';
 
-export const ORG_CACHE_KEY_PREFIX = ORG_KEY_PREFIX;
-
 /**
  * The single source of global guard order: Nest runs APP_GUARDs in
  * registration order (pinned by org-guards.integration.spec.ts). CSRF first,
@@ -65,7 +63,7 @@ export class OrgAppModule implements NestModule {
       imports: [
         // Required by TransactionVerifierHelper in the reused Safe repositories
         BlocklistModule,
-        CacheModule.register(ORG_CACHE_KEY_PREFIX),
+        CacheModule.register(ORG_KEY_PREFIX),
         CircuitBreakerModule,
         ClsModule.forRoot({
           global: true,

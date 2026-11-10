@@ -11,7 +11,8 @@ import { ILoggingService, LoggingService } from '@/logging/logging.interface';
 import { DataSourceError } from '@/domain/errors/data-source.error';
 import { ActivityLog } from '@/modules/org/activity/activity-log.service';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
-import { recheckPermission } from '@/modules/org/orgs/org-lock';
+import { lockOrgs, recheckPermission } from '@/modules/org/orgs/org-lock';
+import type { Actor } from '@/modules/org/orgs/parse';
 import { PermissionResolver } from '@/modules/org/permissions/permission.resolver';
 import {
   seedSnapshotIfAbsent,
@@ -37,8 +38,6 @@ export type LinkedSafeView = LinkedSafeRow & {
   iAmSigner: boolean;
   error?: 'unavailable';
 };
-
-type Actor = { userId: string; ip?: string; userAgent?: string };
 
 @Injectable()
 export class LinkedSafesService {
@@ -77,10 +76,7 @@ export class LinkedSafesService {
     }
 
     const row = await this.tx.runInOrgTx(async (em) => {
-      await em.query(
-        `SELECT 1 FROM organizations WHERE id = $1 FOR NO KEY UPDATE`,
-        [orgId],
-      );
+      await lockOrgs(em, [orgId]);
       await recheckPermission(
         this.resolver,
         em,
@@ -159,10 +155,7 @@ export class LinkedSafesService {
     actor: Actor,
   ): Promise<void> {
     await this.tx.runInOrgTx(async (em) => {
-      await em.query(
-        `SELECT 1 FROM organizations WHERE id = $1 FOR NO KEY UPDATE`,
-        [orgId],
-      );
+      await lockOrgs(em, [orgId]);
       await recheckPermission(
         this.resolver,
         em,

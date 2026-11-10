@@ -52,10 +52,6 @@ export class FieldEncryptionService {
     ]).toString('utf8');
   }
 
-  needsRotation(blob: string): boolean {
-    return blob.split(':')[0] !== this.current;
-  }
-
   private key(version: string): Buffer {
     const key = this.keys.get(version);
     if (!key) throw new Error(`Unknown encryption key version: ${version}`);

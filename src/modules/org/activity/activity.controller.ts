@@ -22,6 +22,7 @@ import { ActivityLog } from '@/modules/org/activity/activity-log.service';
 import { OrgSession } from '@/modules/org/auth/decorators';
 import { csvCast } from '@/modules/org/common/csv';
 import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
+import { parse } from '@/modules/org/orgs/parse';
 import { ORG_DATA_SOURCE } from '@/modules/org/db/org-data-source';
 import { RequirePermission } from '@/modules/org/permissions/require-permission.decorator';
 
@@ -57,16 +58,6 @@ type Row = {
   created_at: string;
 };
 
-// ZodErrorFilter answers 502 (gateway upstream semantics); bad input is a 400
-function parseQuery<T extends z.ZodType>(
-  schema: T,
-  query: unknown,
-): z.infer<T> {
-  const parsed = schema.safeParse(query);
-  if (!parsed.success) throw new BadRequestException(parsed.error.message);
-  return parsed.data;
-}
-
 function encodeCursor(row: Row): string {
   return Buffer.from(JSON.stringify([row.created_at, row.id])).toString(
     'base64url',
@@ -100,7 +91,7 @@ export class ActivityController {
     @OrgSession() session: OrgSession,
     @Query() query: unknown,
   ): Promise<{ items: Array<unknown>; nextCursor: string | null }> {
-    const { cursor, limit, ...filter } = parseQuery(ListQuerySchema, query);
+    const { cursor, limit, ...filter } = parse(ListQuerySchema, query);
     const orgId = req.params.orgId;
     const rows = await this.page(
       orgId,
@@ -126,7 +117,7 @@ export class ActivityController {
     @OrgSession() session: OrgSession,
     @Query() query: unknown,
   ): Promise<void> {
-    const filter = parseQuery(FilterSchema, query);
+    const filter = parse(FilterSchema, query);
     const orgId = req.params.orgId;
     await this.dataSource.transaction((em) =>
       this.log.record(em, {

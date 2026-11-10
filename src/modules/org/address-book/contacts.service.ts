@@ -16,7 +16,7 @@ import {
 } from '@/modules/org/address-book/contacts.schemas';
 import { parseSafeAddressBookCsv } from '@/modules/org/address-book/safe-csv.parser';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
-import { recheckPermission } from '@/modules/org/orgs/org-lock';
+import { lockOrgs, recheckPermission } from '@/modules/org/orgs/org-lock';
 import { PermissionResolver } from '@/modules/org/permissions/permission.resolver';
 import type { Permission } from '@/modules/org/permissions/permissions';
 
@@ -251,10 +251,7 @@ export class ContactsService {
     userId: string,
     permission: Permission,
   ): Promise<void> {
-    await em.query(
-      `SELECT 1 FROM organizations WHERE id = $1 FOR NO KEY UPDATE`,
-      [orgId],
-    );
+    await lockOrgs(em, [orgId]);
     // the guard checked before the lock wait; a concurrent demotion may have happened since
     await recheckPermission(this.resolver, em, orgId, userId, permission);
   }

@@ -21,7 +21,6 @@ import { Readable } from 'stream';
 import { z } from 'zod';
 import { CsvService } from '@/modules/csv-export/csv-utils/csv.service';
 import {
-  type Actor,
   type Contact,
   ContactPatchSchema,
   ContactSchema,
@@ -33,17 +32,11 @@ import { ContactRequestsService } from '@/modules/org/address-book/contact-reque
 import { ContactsService } from '@/modules/org/address-book/contacts.service';
 import { OrgSession, RequireStrongAuth } from '@/modules/org/auth/decorators';
 import { csvCast } from '@/modules/org/common/csv';
+import { actor, parse } from '@/modules/org/orgs/parse';
 import { RequirePermission } from '@/modules/org/permissions/require-permission.decorator';
 
 const MAX_CSV_BYTES = 1024 * 1024;
 const EXPORT_PAGE = 500;
-
-// ZodErrorFilter answers 502 (gateway upstream semantics); bad input is a 400
-function parse<T extends z.ZodType>(schema: T, input: unknown): z.infer<T> {
-  const parsed = schema.safeParse(input);
-  if (!parsed.success) throw new BadRequestException(parsed.error.message);
-  return parsed.data;
-}
 
 function uuid(raw: string): string {
   if (!z.uuid().safeParse(raw).success) throw new NotFoundException();
@@ -57,10 +50,6 @@ export class ContactsController {
     private readonly requests: ContactRequestsService,
     private readonly csv: CsvService,
   ) {}
-
-  private actor(req: Request, s: OrgSession): Actor {
-    return { userId: s.userId, ip: req.ip, userAgent: req.get('user-agent') };
-  }
 
   @Get('contacts')
   @RequirePermission('addressbook.view')
@@ -79,7 +68,7 @@ export class ContactsController {
     @Param('orgId') orgId: string,
     @OrgSession() session: OrgSession,
   ): Promise<void> {
-    await this.contacts.recordExport(orgId, this.actor(req, session));
+    await this.contacts.recordExport(orgId, actor(req, session.userId));
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="contacts.csv"');
     // Same shape as the Safe export (one row per chain), plus tags
@@ -126,7 +115,7 @@ export class ContactsController {
     return this.contacts.create(
       orgId,
       parse(ContactSchema, body),
-      this.actor(req, session),
+      actor(req, session.userId),
     );
   }
 
@@ -147,7 +136,7 @@ export class ContactsController {
     return this.contacts.import(
       orgId,
       file.buffer.toString('utf8'),
-      this.actor(req, session),
+      actor(req, session.userId),
     );
   }
 
@@ -165,7 +154,7 @@ export class ContactsController {
       orgId,
       uuid(contactId),
       parse(ContactPatchSchema, body),
-      this.actor(req, session),
+      actor(req, session.userId),
     );
   }
 
@@ -182,7 +171,7 @@ export class ContactsController {
     return this.contacts.remove(
       orgId,
       uuid(contactId),
-      this.actor(req, session),
+      actor(req, session.userId),
     );
   }
 
@@ -206,7 +195,7 @@ export class ContactsController {
     return this.requests.create(
       orgId,
       parse(CreateRequestSchema, body),
-      this.actor(req, session),
+      actor(req, session.userId),
     );
   }
 
@@ -223,7 +212,7 @@ export class ContactsController {
     return this.requests.approve(
       orgId,
       uuid(requestId),
-      this.actor(req, session),
+      actor(req, session.userId),
     );
   }
 
@@ -240,7 +229,7 @@ export class ContactsController {
     return this.requests.reject(
       orgId,
       uuid(requestId),
-      this.actor(req, session),
+      actor(req, session.userId),
     );
   }
 }
