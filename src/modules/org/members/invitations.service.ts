@@ -358,7 +358,20 @@ export class InvitationsService {
         ]);
         return { orgId: invitation.orgId };
       }
-      if (action === 'accept') await assertOrgLimit(em, by.userId);
+      if (action === 'accept') {
+        await assertOrgLimit(em, by.userId);
+        // invitations always grant member, also ones stored with another
+        // role before that rule (legacy admin invitations)
+        const role = await systemRole(em, INVITATION_ROLE_KEY);
+        await em.query(
+          `DELETE FROM role_bindings WHERE member_id = $1 AND scope = 'org'`,
+          [invitation.memberId],
+        );
+        await em.query(
+          `INSERT INTO role_bindings (member_id, role_id) VALUES ($1, $2)`,
+          [invitation.memberId, role.id],
+        );
+      }
       // upsert: the invited row becomes the caller's only row in this org
       if (other)
         await em.query(`DELETE FROM members WHERE id = $1`, [other.id]);
@@ -465,19 +478,24 @@ export class InvitationsService {
     return name;
   }
 
-  /** Both counters count every attempt: the user's first, then the org's. */
+  /**
+   * Every attempt counts: the user's counter first; a user over their limit
+   * is refused before the org's counter is charged, so one admin cannot use
+   * up the org's budget for the others.
+   */
   private async limitInvites(orgId: string, userId: string): Promise<void> {
-    const user = await this.rateLimiter.hit(
-      `invitations:user:${userId}`,
-      INVITES_PER_USER_PER_HOUR,
-      3600,
-    );
-    const org = await this.rateLimiter.hit(
-      `invitations:org:${orgId}`,
-      INVITES_PER_HOUR,
-      3600,
-    );
-    if (!user || !org) {
+    const allowed =
+      (await this.rateLimiter.hit(
+        `invitations:user:${userId}`,
+        INVITES_PER_USER_PER_HOUR,
+        3600,
+      )) &&
+      (await this.rateLimiter.hit(
+        `invitations:org:${orgId}`,
+        INVITES_PER_HOUR,
+        3600,
+      ));
+    if (!allowed) {
       throw new HttpException(
         { statusCode: 429, message: 'Too many invitations' },
         HttpStatus.TOO_MANY_REQUESTS,

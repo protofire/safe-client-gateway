@@ -4,7 +4,9 @@ import type { OrgSession } from '@/modules/org/auth/decorators';
 import { SecurityEvents } from '@/modules/org/auth/security-events';
 import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
 import { Clock, type IClock } from '@/modules/org/common/clock';
+import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
+import { revokeInvitationsBy } from '@/modules/org/members/members.service';
 import { conflict, lockOrgs, mapLastAdmin } from '@/modules/org/orgs/org-lock';
 
 /**
@@ -20,6 +22,7 @@ export class AccountService {
     @Inject(Clock) private readonly clock: IClock,
     private readonly sessions: SessionsRepository,
     private readonly securityEvents: SecurityEvents,
+    private readonly encryption: FieldEncryptionService,
   ) {}
 
   /**
@@ -103,6 +106,15 @@ export class AccountService {
         for (const { orgId } of memberships.filter(
           (m) => m.status === 'active',
         )) {
+          // like leaving: the user's pending invitations go with them
+          await revokeInvitationsBy(
+            em,
+            { encryption: this.encryption, activity: this.activity },
+            orgId,
+            userId,
+            'inviter_left',
+            { userId },
+          );
           await this.activity.record(em, {
             orgId,
             actorUserId: userId,

@@ -769,8 +769,8 @@ describe('members and invitations (org)', () => {
       expect(await t.adminCount(orgId)).toBe(1);
     });
 
-    it.each(['removed', 'demoted'] as const)(
-      'deletes the pending invitations of an admin who is %s (item 11)',
+    it.each(['removed', 'demoted', 'left', 'account_deleted'] as const)(
+      'deletes the pending invitations of an admin who is %s (item 11, round 2 item 3)',
       async (how) => {
         const a = await t.user({ wallet: true });
         const b = await t.user({ wallet: true });
@@ -784,12 +784,19 @@ describe('members and invitations (org)', () => {
             .del(`/v1/orgs/${orgId}/members/${bId}`)
             .set('Cookie', a.cookie)
             .expect(204);
-        } else {
+        } else if (how === 'demoted') {
           await t
             .patch(`/v1/orgs/${orgId}/members/${bId}/role`)
             .set('Cookie', a.cookie)
             .send({ role: 'member' })
             .expect(204);
+        } else if (how === 'left') {
+          await t
+            .post(`/v1/orgs/${orgId}/members/leave`)
+            .set('Cookie', b.cookie)
+            .expect(204);
+        } else {
+          await t.del('/v1/orgs/account').set('Cookie', b.cookie).expect(204);
         }
 
         const pending: Array<{ id: string }> = await t.sql.query(
@@ -804,7 +811,12 @@ describe('members and invitations (org)', () => {
         );
         expect(revoked.payload).toEqual({
           target: expect.stringContaining('***'),
-          reason: how === 'removed' ? 'inviter_removed' : 'inviter_demoted',
+          reason: {
+            removed: 'inviter_removed',
+            demoted: 'inviter_demoted',
+            left: 'inviter_left',
+            account_deleted: 'inviter_left',
+          }[how],
         });
       },
     );
@@ -826,14 +838,18 @@ describe('members and invitations (org)', () => {
       for (let i = 0; i < 29; i++) await invite(orgs[1]).expect(201);
       // 61st attempt of this user: per user, although org C is untouched
       await invite(orgs[2]).expect(429);
-      // another admin of org C is not limited by it
+      // refused per user before org C's counter is charged (round 2 item 11)
+      for (let i = 0; i < 4; i++) await invite(orgs[2]).expect(429);
+      // so another admin of org C still has all 30 of the org's invitations
       const other = await t.user({ wallet: true });
       await t.addMember(orgs[2], other, 'admin');
-      await t
-        .post(`/v1/orgs/${orgs[2]}/members/invite`)
-        .set('Cookie', other.cookie)
-        .send({ email: email() })
-        .expect(201);
+      const inviteAsOther = (): ReturnType<OrgTestApp['post']> =>
+        t
+          .post(`/v1/orgs/${orgs[2]}/members/invite`)
+          .set('Cookie', other.cookie)
+          .send({ email: email() });
+      for (let i = 0; i < 30; i++) await inviteAsOther().expect(201);
+      await inviteAsOther().expect(429);
     });
 
     describe('security notification mails (item 2)', () => {
@@ -933,6 +949,156 @@ describe('members and invitations (org)', () => {
         expect(await memberIdOf(orgId, a)).toEqual(expect.any(String));
         expect(await t.adminCount(orgId)).toBe(1);
       });
+    });
+  });
+  describe('review fixes round 2 (2026-11-10)', () => {
+    const roleOf = async (memberId: string): Promise<string> => {
+      const [{ key }] = await t.sql.query(
+        `SELECT r.key FROM role_bindings rb JOIN roles r ON r.id = rb.role_id
+         WHERE rb.member_id = $1 AND rb.scope = 'org'`,
+        [memberId],
+      );
+      return key;
+    };
+
+    it.each(['wallet', 'email'] as const)(
+      'grants member at acceptance even when a legacy %s invitation is bound to admin (item 2)',
+      async (kind) => {
+        const admin = await t.user({ wallet: true });
+        const orgId = await t.createOrg(admin);
+        const to = email();
+        const invitee = await t.user(
+          kind === 'wallet' ? { wallet: true } : { email: to },
+        );
+        let memberId: string;
+        let token: string | undefined;
+        if (kind === 'wallet') {
+          const res = await t
+            .post(`/v1/orgs/${orgId}/members/invite`)
+            .set('Cookie', admin.cookie)
+            .send({ wallet: invitee.wallet })
+            .expect(201);
+          memberId = res.body.id;
+        } else {
+          ({ memberId, token } = await inviteEmail(orgId, admin, to));
+        }
+        // an invitation stored before invitations were member-only
+        await t.sql.query(
+          `UPDATE role_bindings SET role_id = (SELECT id FROM roles WHERE org_id IS NULL AND key = 'admin')
+           WHERE member_id = $1`,
+          [memberId],
+        );
+
+        if (token) await accept(invitee, token).expect(200);
+        else {
+          await t
+            .post(`/v1/orgs/${orgId}/members/accept`)
+            .set('Cookie', invitee.cookie)
+            .expect(200);
+        }
+
+        expect(await roleOf(memberId)).toBe('member');
+        expect(await t.adminCount(orgId)).toBe(1);
+      },
+    );
+
+    it('answers 409 not_active to a role change of an invited or declined member (item 2)', async () => {
+      const admin = await t.user({ wallet: true });
+      const orgId = await t.createOrg(admin);
+      const invited = await t.user({ wallet: true });
+      const decliner = await t.user({ wallet: true });
+      const ids: Array<string> = [];
+      for (const u of [invited, decliner]) {
+        const res = await t
+          .post(`/v1/orgs/${orgId}/members/invite`)
+          .set('Cookie', admin.cookie)
+          .send({ wallet: u.wallet })
+          .expect(201);
+        ids.push(res.body.id as string);
+      }
+      await t
+        .post(`/v1/orgs/${orgId}/members/decline`)
+        .set('Cookie', decliner.cookie)
+        .expect(200);
+
+      for (const id of ids) {
+        const res = await t
+          .patch(`/v1/orgs/${orgId}/members/${id}/role`)
+          .set('Cookie', admin.cookie)
+          .send({ role: 'admin' })
+          .expect(409);
+        expect(res.body).toEqual({
+          statusCode: 409,
+          message: expect.any(String),
+          code: 'not_active',
+        });
+        expect(await roleOf(id)).toBe('member');
+      }
+      expect(await t.adminCount(orgId)).toBe(1);
+    });
+
+    it('limits role changes to 20 per hour per acting user (item 5)', async () => {
+      const admin = await t.user({ wallet: true });
+      const orgId = await t.createOrg(admin);
+      const m = await t.user({ wallet: true });
+      const mId = await t.addMember(orgId, m, 'member');
+      const change = (role: string): ReturnType<OrgTestApp['patch']> =>
+        t
+          .patch(`/v1/orgs/${orgId}/members/${mId}/role`)
+          .set('Cookie', admin.cookie)
+          .send({ role });
+      for (let i = 0; i < 20; i++) {
+        await change(i % 2 ? 'member' : 'admin').expect(204);
+      }
+      await change('admin').expect(429);
+      expect(await roleOf(mId)).toBe('member');
+    });
+
+    it("mails the active admins of every org of the target once, and the target, when an admin resets the target's 2FA, in parallel (items 4, 5)", async () => {
+      const [aEmail, cEmail, targetEmail, otherEmail] = [
+        email(),
+        email(),
+        email(),
+        email(),
+      ];
+      const a = await t.user({ email: aEmail, totp: true });
+      const c = await t.user({ email: cEmail, totp: true });
+      const target = await t.user({ email: targetEmail, totp: true });
+      const outsider = await t.user({ email: otherEmail, totp: true });
+      const orgA = await t.createOrg(a, 'A');
+      const orgB = await t.createOrg(a, 'B');
+      await t.createOrg(outsider, 'Unrelated');
+      await t.addMember(orgB, c, 'admin');
+      const memberId = await t.addMember(orgA, target, 'member');
+      await t.addMember(orgB, target, 'member');
+      let inFlight = 0;
+      let maxInFlight = 0;
+      const sentTo: Array<string> = [];
+      t.mailPost.mockImplementation(
+        async (args: { data: { to: Array<string> } }) => {
+          sentTo.push(args.data.to[0]);
+          maxInFlight = Math.max(maxInFlight, ++inFlight);
+          await new Promise((r) => setTimeout(r, 50));
+          inFlight--;
+          return { status: 200, data: {} };
+        },
+      );
+      try {
+        await t
+          .post(`/v1/orgs/${orgA}/members/${memberId}/factors/reset`)
+          .set('Cookie', a.cookie)
+          .expect(204);
+      } finally {
+        t.mailPost.mockReset();
+        t.mailPost.mockResolvedValue({ status: 200, data: {} });
+      }
+
+      // A admins both orgs: one mail; the outsider's org is unrelated
+      expect(sentTo.toSorted()).toEqual(
+        [aEmail, cEmail, targetEmail].toSorted(),
+      );
+      // sent concurrently (Promise.allSettled), not one after another
+      expect(maxInFlight).toBe(3);
     });
   });
 });

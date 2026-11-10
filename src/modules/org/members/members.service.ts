@@ -10,6 +10,7 @@ import { ActivityLog } from '@/modules/org/activity/activity-log.service';
 import { SecurityEvents } from '@/modules/org/auth/security-events';
 import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
 import { Clock, type IClock } from '@/modules/org/common/clock';
+import { RateLimiter } from '@/modules/org/common/rate-limiter';
 import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import {
@@ -19,6 +20,7 @@ import {
 import { maskEmail, maskIdentity } from '@/modules/org/members/identity-mask';
 import { memberRows, type MemberRow } from '@/modules/org/members/member-rows';
 import {
+  conflict,
   lockOrgs,
   mapLastAdmin,
   recheckPermission,
@@ -43,6 +45,9 @@ export type MemberView = {
 
 // Who sees member emails in full (A16): the same holders as for IPs in the activity log
 const SEES_EMAILS: Permission = 'members.remove';
+// Role changes can mail every admin (security notices): per acting user, all
+// attempts, generous for real admin work but no mail cannon
+const ROLE_CHANGES_PER_USER_PER_HOUR = 20;
 
 export function toMemberView(
   row: MemberRow,
@@ -91,6 +96,43 @@ export function assertCanGrant(
   }
 }
 
+/**
+ * Item 11: an inviter who loses the right to invite (removed, demoted, left,
+ * account deleted) takes their pending invitations in `orgId` along.
+ * Deleting the invited member row cascades to its invitation and role binding.
+ */
+export async function revokeInvitationsBy(
+  em: EntityManager,
+  deps: { encryption: FieldEncryptionService; activity: ActivityLog },
+  orgId: string,
+  inviterUserId: string | null,
+  reason: 'inviter_removed' | 'inviter_demoted' | 'inviter_left',
+  by: Actor,
+): Promise<void> {
+  if (!inviterUserId) return;
+  const pending: Array<{ id: string }> = await em.query(
+    `SELECT DISTINCT m.id FROM members m
+     JOIN invitations i ON i.member_id = m.id
+     WHERE m.org_id = $1 AND m.status = 'invited' AND i.invited_by = $2
+       AND i.accepted_at IS NULL AND i.declined_at IS NULL`,
+    [orgId, inviterUserId],
+  );
+  for (const { id } of pending) {
+    const [row] = await memberRows(em, deps.encryption, orgId, id);
+    await em.query(`DELETE FROM members WHERE id = $1`, [id]);
+    await deps.activity.record(em, {
+      orgId,
+      actorUserId: by.userId,
+      type: 'member.invite_revoked',
+      targetType: 'membership',
+      targetId: id,
+      payload: { target: maskIdentity(row.identity), reason },
+      ip: by.ip,
+      userAgent: by.userAgent,
+    });
+  }
+}
+
 @Injectable()
 export class MembersService {
   constructor(
@@ -101,6 +143,7 @@ export class MembersService {
     private readonly sessions: SessionsRepository,
     private readonly securityEvents: SecurityEvents,
     private readonly notifier: SecurityNotifier,
+    private readonly rateLimiter: RateLimiter,
     @Inject(Clock) private readonly clock: IClock,
   ) {}
 
@@ -120,6 +163,11 @@ export class MembersService {
     roleKey: SystemRoleKey,
     by: Actor,
   ): Promise<void> {
+    await this.rateLimiter.enforce(
+      `members:role:user:${by.userId}`,
+      ROLE_CHANGES_PER_USER_PER_HOUR,
+      3600,
+    );
     const demoted = await this.underOrgLock(
       orgId,
       by.userId,
@@ -128,6 +176,10 @@ export class MembersService {
         const role = await systemRole(em, roleKey);
         assertCanGrant(role, caller.permissions);
         const member = await this.member(em, orgId, memberId);
+        // an invitation's role is fixed (member) until it is accepted
+        if (member.status !== 'active') {
+          throw conflict('not_active', 'Only active members change role');
+        }
         if (member.role === role.key) return null;
         await em.query(
           `DELETE FROM role_bindings WHERE member_id = $1 AND scope = 'org'`,
@@ -248,7 +300,7 @@ export class MembersService {
     memberId: string,
     by: Actor & { sessionId: string },
   ): Promise<void> {
-    const target = await this.tx.runInOrgTx(async (em) => {
+    const { target, orgIds } = await this.tx.runInOrgTx(async (em) => {
       const member = await this.member(em, orgId, memberId);
       if (member.status !== 'active' || !member.userId) {
         throw new NotFoundException();
@@ -296,7 +348,12 @@ export class MembersService {
         ip: by.ip,
         userAgent: by.userAgent,
       });
-      return member;
+      // the reset is global: every org of the target hears about it
+      const orgs: Array<{ orgId: string }> = await em.query(
+        `SELECT org_id AS "orgId" FROM members WHERE user_id = $1 AND status = 'active'`,
+        [member.userId],
+      );
+      return { target: member, orgIds: orgs.map((o) => o.orgId) };
     }, orgId);
     await this.securityEvents.record(target.userId!, 'security.totp_removed', {
       resetBy: by.userId,
@@ -305,43 +362,25 @@ export class MembersService {
       orgId,
       { kind: 'factors_reset', target: maskIdentity(target.identity) },
       [target.userId!],
+      orgIds,
     );
   }
 
-  /**
-   * Item 11: an inviter who loses the right to invite (removed, demoted,
-   * left) takes their pending invitations along. Deleting the invited
-   * member row cascades to its invitation and role binding.
-   */
-  private async revokeInvitationsBy(
+  private revokeInvitationsBy(
     em: EntityManager,
     orgId: string,
     inviter: MemberRow,
     reason: 'inviter_removed' | 'inviter_demoted' | 'inviter_left',
     by: Actor,
   ): Promise<void> {
-    if (!inviter.userId) return;
-    const pending: Array<{ id: string }> = await em.query(
-      `SELECT DISTINCT m.id FROM members m
-       JOIN invitations i ON i.member_id = m.id
-       WHERE m.org_id = $1 AND m.status = 'invited' AND i.invited_by = $2
-         AND i.accepted_at IS NULL AND i.declined_at IS NULL`,
-      [orgId, inviter.userId],
+    return revokeInvitationsBy(
+      em,
+      { encryption: this.encryption, activity: this.activity },
+      orgId,
+      inviter.userId,
+      reason,
+      by,
     );
-    for (const { id } of pending) {
-      const [row] = await memberRows(em, this.encryption, orgId, id);
-      await em.query(`DELETE FROM members WHERE id = $1`, [id]);
-      await this.activity.record(em, {
-        orgId,
-        actorUserId: by.userId,
-        type: 'member.invite_revoked',
-        targetType: 'membership',
-        targetId: id,
-        payload: { target: maskIdentity(row.identity), reason },
-        ip: by.ip,
-        userAgent: by.userAgent,
-      });
-    }
   }
 
   private async member(

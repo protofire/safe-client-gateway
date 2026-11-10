@@ -26,31 +26,44 @@ export class SecurityNotifier {
     @Inject(LoggingService) private readonly logger: ILoggingService,
   ) {}
 
+  /**
+   * `adminOrgIds`: whose admins hear about it (default: `orgId`'s); each
+   * recipient gets one mail. Wallet-only admins have no address and get no
+   * mail (known gap). Mails go out concurrently: latency is the slowest
+   * send, not the sum.
+   */
   async notify(
     orgId: string,
     notice: Omit<SecurityNotice, 'orgName'>,
     affectedUserIds: Array<string> = [],
+    adminOrgIds: Array<string> = [orgId],
   ): Promise<void> {
     let recipients: Array<string>;
     let orgName: string;
     try {
-      ({ recipients, orgName } = await this.recipients(orgId, affectedUserIds));
+      ({ recipients, orgName } = await this.recipients(
+        orgId,
+        affectedUserIds,
+        adminOrgIds,
+      ));
     } catch (error) {
       this.fail(notice.kind, error);
       return;
     }
-    for (const to of recipients) {
-      try {
-        await this.mail.sendSecurityNotice(to, { ...notice, orgName });
-      } catch (error) {
-        this.fail(notice.kind, error);
-      }
+    const results = await Promise.allSettled(
+      recipients.map((to) =>
+        this.mail.sendSecurityNotice(to, { ...notice, orgName }),
+      ),
+    );
+    for (const r of results) {
+      if (r.status === 'rejected') this.fail(notice.kind, r.reason);
     }
   }
 
   private async recipients(
     orgId: string,
     affectedUserIds: Array<string>,
+    adminOrgIds: Array<string>,
   ): Promise<{ recipients: Array<string>; orgName: string }> {
     return this.tx.runInOrgTx(async (em) => {
       // first email identity per user; admins of an active user only
@@ -58,14 +71,14 @@ export class SecurityNotifier {
         `SELECT DISTINCT ON (i.user_id) i.email_encrypted AS email
          FROM identities i
          WHERE i.kind = 'oidc' AND i.email_encrypted IS NOT NULL
-           AND (i.user_id = ANY($2::uuid[]) OR i.user_id IN (
+           AND (i.user_id = ANY($1::uuid[]) OR i.user_id IN (
              SELECT m.user_id FROM members m
              JOIN users u ON u.id = m.user_id AND u.status = 'active'
              JOIN role_bindings rb ON rb.member_id = m.id AND rb.scope = 'org'
              JOIN roles r ON r.id = rb.role_id AND (r.org_id IS NULL OR r.org_id = m.org_id)
-             WHERE m.org_id = $1 AND m.status = 'active' AND $3 = ANY(r.permissions)))
+             WHERE m.org_id = ANY($3::uuid[]) AND m.status = 'active' AND $2 = ANY(r.permissions)))
          ORDER BY i.user_id, i.created_at, i.id`,
-        [orgId, affectedUserIds, ADMIN_PERMISSION],
+        [affectedUserIds, ADMIN_PERMISSION, adminOrgIds],
       );
       const [org]: Array<{ name: string }> = await em.query(
         `SELECT name FROM organizations WHERE id = $1`,
