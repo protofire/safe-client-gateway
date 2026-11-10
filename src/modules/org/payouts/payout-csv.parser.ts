@@ -31,7 +31,7 @@ function isStrictAddress(value: string): boolean {
  * Parses a payout CSV (`address,amount,token[,name]`, header case-insensitive,
  * extra columns ignored). Only the shape is checked here; amounts are parsed
  * against token decimals by the caller (`parseAmountStrict`). Token symbols
- * are never looked up: the token column is `native`, empty, or an address.
+ * are never looked up: the token column is `native` or an address.
  */
 export function parsePayoutCsv(text: string): {
   rows: Array<PayoutCsvRow>;
@@ -79,6 +79,11 @@ export function parsePayoutCsv(text: string): {
       errors.push({ line, reason: 'too_many_cells' });
       continue;
     }
+    // no padding: a missing trailing cell is never read as an empty (default) value
+    if (c.length < head.cells.length) {
+      errors.push({ line, reason: 'wrong_cell_count' });
+      continue;
+    }
     const cell = (i: number): string => (i < 0 ? '' : (c[i] ?? ''));
     cells.push({
       line,
@@ -120,10 +125,9 @@ export function checkPayoutRows(input: ReadonlyArray<PayoutRowCells>): {
     const amount = cells.amount.trim();
     const rawToken = cells.token.trim();
     const name = (cells.name ?? '').trim();
+    // native must be named: an empty cell may be a column shifted by an unquoted `1,000`
     const token =
-      rawToken === '' || rawToken.toLowerCase() === 'native'
-        ? 'native'
-        : rawToken.toLowerCase();
+      rawToken.toLowerCase() === 'native' ? 'native' : rawToken.toLowerCase();
     let reason: string | null = null;
     if (!isStrictAddress(address) || address.toLowerCase() === zeroAddress) {
       reason = 'invalid_address';
