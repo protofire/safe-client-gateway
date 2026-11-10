@@ -14,6 +14,10 @@ import { ILoggingService, LoggingService } from '@/logging/logging.interface';
 import { EventSchema } from '@/modules/hooks/routes/entities/schemas/event.schema';
 import { OrgEventsHandler } from '@/modules/org/events/org-events.handler';
 
+// org pool max is 20 and shared with the API; each in-flight event can hold
+// a connection across its node read (per-Safe lock), so 3 at a time (item 9)
+export const ORG_EVENTS_PREFETCH = 3;
+
 export type Disposition =
   | { action: 'ack' }
   | { action: 'retry'; attempt: number };
@@ -59,7 +63,7 @@ export class OrgEventsConsumer implements OnModuleInit, OnApplicationShutdown {
       setup: async (ch: Channel) => {
         await ch.assertExchange(exchange, 'fanout', { durable: true });
         await ch.assertQueue(queue, { durable: true });
-        await ch.prefetch(10);
+        await ch.prefetch(ORG_EVENTS_PREFETCH);
         await ch.bindQueue(queue, exchange, '');
       },
     });

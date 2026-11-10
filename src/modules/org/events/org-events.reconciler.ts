@@ -14,7 +14,9 @@ import { mapLimit } from '@/modules/org/safes/map-limit';
 
 const HOUR_MS = 3600 * 1000;
 const BOOT_DELAY_MS = 60 * 1000;
-const CONCURRENCY = 5;
+// org pool max is 20 and shared with the API; each Safe holds a connection
+// across its node read (per-Safe lock), so stay at 2 (item 9)
+export const RECONCILE_CONCURRENCY = 2;
 // two-int4 advisory key space: never collides with the per-Safe bigint locks
 const RUN_LOCK = [0x6f7267, 1] as const;
 
@@ -70,18 +72,22 @@ export class OrgEventsReconciler
           await runner.query(
             `SELECT DISTINCT chain_id AS "chainId", address FROM linked_safes`,
           );
-        await mapLimit(safes, CONCURRENCY, async ({ chainId, address }) => {
-          try {
-            await this.handler.reconcile(chainId, address);
-          } catch (error) {
-            this.logger.warn({
-              type: 'org_reconcile_safe_failed',
-              chainId,
-              address,
-              error: message(error),
-            });
-          }
-        });
+        await mapLimit(
+          safes,
+          RECONCILE_CONCURRENCY,
+          async ({ chainId, address }) => {
+            try {
+              await this.handler.reconcile(chainId, address);
+            } catch (error) {
+              this.logger.warn({
+                type: 'org_reconcile_safe_failed',
+                chainId,
+                address,
+                error: message(error),
+              });
+            }
+          },
+        );
         return safes.length;
       } finally {
         await runner.query(`SELECT pg_advisory_unlock($1, $2)`, [...RUN_LOCK]);

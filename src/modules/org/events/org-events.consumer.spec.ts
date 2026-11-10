@@ -1,3 +1,6 @@
+import { ORG_PG_POOL } from '@/modules/org/db/org-database.module';
+import { ORG_EVENTS_PREFETCH } from '@/modules/org/events/org-events.consumer';
+import { RECONCILE_CONCURRENCY } from '@/modules/org/events/org-events.reconciler';
 import type { ConsumeMessage } from 'amqplib';
 import { OrgEventsConsumer } from '@/modules/org/events/org-events.consumer';
 
@@ -80,5 +83,17 @@ describe('OrgEventsConsumer.processMessage', () => {
     };
     await expect(internals.dispatch(msg(valid))).resolves.toBeUndefined();
     expect(logger.warn).toHaveBeenCalled();
+  });
+});
+
+describe('org pool budget (item 9)', () => {
+  it('keeps event handling and reconcile within a quarter of the shared org pool', () => {
+    // each in-flight event or reconciled Safe can hold one connection
+    // (per-Safe lock held across the node read); the API shares the pool
+    expect(ORG_EVENTS_PREFETCH).toBe(3);
+    expect(RECONCILE_CONCURRENCY).toBe(2);
+    expect(ORG_EVENTS_PREFETCH + RECONCILE_CONCURRENCY).toBeLessThanOrEqual(
+      ORG_PG_POOL.max / 4,
+    );
   });
 });
