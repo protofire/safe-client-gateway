@@ -1,4 +1,14 @@
-import type { DataSource } from 'typeorm';
+import {
+  DataSource,
+  type EntityManager,
+  type MigrationInterface,
+} from 'typeorm';
+import { OrgCore1794182400000 } from '../../../../migrations/org/0001-org-core';
+import { AddressBook1794268800000 } from '../../../../migrations/org/0002-address-book';
+import { InvitationTargetEmail1794355200000 } from '../../../../migrations/org/0003-invitation-target-email';
+import { AdminTriggerActiveUsers1794441600000 } from '../../../../migrations/org/0004-admin-trigger-active-users';
+import { DropSessionIp1794528000000 } from '../../../../migrations/org/0005-drop-session-ip';
+import { PoliciesPayouts1794614400000 } from '../../../../migrations/org/0006-policies-payouts';
 import {
   createOrgTestDb,
   type OrgTestDb,
@@ -319,6 +329,294 @@ describe('org schema (through the app login)', () => {
         await qr.release();
       }
     });
+  });
+
+  describe('policies and payouts (0006)', () => {
+    const SAFE = '0x0000000000000000000000000000000000000a11';
+    const RECIPIENT = '0x0000000000000000000000000000000000000b0b';
+    const FK = /violates foreign key constraint/;
+    const CHECK = /violates check constraint/;
+    type Seeded = {
+      orgId: string;
+      linkedSafeId: string;
+      policyId: string;
+      runId: string;
+    };
+    let a: Seeded;
+    let b: Seeded;
+
+    function insertRun(
+      em: EntityManager,
+      orgId: string,
+      status: string,
+      pinnedNonce: number | null,
+    ): Promise<Array<{ id: string }>> {
+      return em.query(
+        `INSERT INTO payout_runs (org_id, chain_id, safe_address, name, status, pinned_nonce)
+         VALUES ($1, '1', $2, 'run', $3, $4) RETURNING id`,
+        [orgId, SAFE, status, pinnedNonce],
+      );
+    }
+
+    function insertItem(
+      em: EntityManager,
+      orgId: string,
+      runId: string,
+      amountRaw = '1000000',
+    ): Promise<unknown> {
+      return em.query(
+        `INSERT INTO payout_items (org_id, run_id, line_no, recipient, token, amount, amount_raw, decimals, symbol)
+         VALUES ($1, $2, 2, $3, 'native', '1', $4, 6, 'ETH')`,
+        [orgId, runId, RECIPIENT, amountRaw],
+      );
+    }
+
+    /** One row in each of the six org-data tables plus a watch row. */
+    async function seedPayoutOrg(): Promise<Seeded> {
+      const { orgId } = await seedOrg(1);
+      return tx.runInOrgTx(async (em) => {
+        const [{ id: linkedSafeId }] = await em.query(
+          `INSERT INTO linked_safes (org_id, chain_id, address) VALUES ($1, '1', $2) RETURNING id`,
+          [orgId, SAFE],
+        );
+        const [{ id: policyId }] = await em.query(
+          `INSERT INTO policies (org_id, name) VALUES ($1, 'p') RETURNING id`,
+          [orgId],
+        );
+        await em.query(
+          `INSERT INTO policy_versions (org_id, policy_id, version, scope, rules, config_hash)
+           VALUES ($1, $2, 1, '{}', '[]', 'h')`,
+          [orgId, policyId],
+        );
+        await em.query(
+          `INSERT INTO policy_findings (org_id, linked_safe_id, chain_id, safe_address, safe_tx_hash, nonce, evaluation_hash, violations)
+           VALUES ($1, $2, '1', $3, '0x01', 7, 'e', '[]')`,
+          [orgId, linkedSafeId, SAFE],
+        );
+        const [{ id: runId }] = await insertRun(em, orgId, 'proposing', 7);
+        await insertItem(em, orgId, runId);
+        await em.query(
+          `INSERT INTO payout_proposal_attempts (org_id, run_id, run_version, nonce, calls)
+           VALUES ($1, $2, 1, 7, '[]')`,
+          [orgId, runId],
+        );
+        await em.query(
+          `INSERT INTO payout_watch (run_id, org_id, chain_id, safe_address) VALUES ($1, $2, '1', $3)`,
+          [runId, orgId, SAFE],
+        );
+        return { orgId, linkedSafeId, policyId, runId };
+      }, orgId);
+    }
+
+    beforeAll(async () => {
+      [a, b] = [await seedPayoutOrg(), await seedPayoutOrg()];
+    });
+
+    it('returns no policy, version, finding, run, item or attempt rows of org B when app.org_id is org A', async () => {
+      const tables = [
+        'policies',
+        'policy_versions',
+        'policy_findings',
+        'payout_runs',
+        'payout_items',
+        'payout_proposal_attempts',
+      ];
+
+      for (const table of tables) {
+        const rows: Array<{ org_id: string }> = await tx.runInOrgTx(
+          (em) => em.query(`SELECT org_id FROM ${table}`),
+          a.orgId,
+        );
+        expect({ table, rows }).toEqual({ table, rows: [{ org_id: a.orgId }] });
+      }
+      // no app.org_id: nothing at all
+      for (const table of tables) {
+        await expect(app.query(`SELECT 1 FROM ${table}`)).resolves.toEqual([]);
+      }
+    });
+
+    it('rejects inserting a payout item for org B while app.org_id is org A', async () => {
+      await expect(
+        tx.runInOrgTx((em) => insertItem(em, b.orgId, b.runId), a.orgId),
+      ).rejects.toThrow(/row-level security/);
+    });
+
+    it('rejects a payout item, policy version and finding of org A that points at a parent of org B', async () => {
+      await expect(
+        tx.runInOrgTx((em) => insertItem(em, a.orgId, b.runId), a.orgId),
+      ).rejects.toThrow(FK);
+      await expect(
+        tx.runInOrgTx(
+          (em) =>
+            em.query(
+              `INSERT INTO policy_versions (org_id, policy_id, version, scope, rules, config_hash)
+               VALUES ($1, $2, 2, '{}', '[]', 'h')`,
+              [a.orgId, b.policyId],
+            ),
+          a.orgId,
+        ),
+      ).rejects.toThrow(FK);
+      await expect(
+        tx.runInOrgTx(
+          (em) =>
+            em.query(
+              `INSERT INTO policy_findings (org_id, linked_safe_id, chain_id, safe_address, safe_tx_hash, nonce, evaluation_hash, violations)
+               VALUES ($1, $2, '1', $3, '0x02', 8, 'e', '[]')`,
+              [a.orgId, b.linkedSafeId, SAFE],
+            ),
+          a.orgId,
+        ),
+      ).rejects.toThrow(FK);
+    });
+
+    it('rejects a second open proposal attempt for one run', async () => {
+      await expect(
+        tx.runInOrgTx(
+          (em) =>
+            em.query(
+              `INSERT INTO payout_proposal_attempts (org_id, run_id, run_version, nonce, calls)
+               VALUES ($1, $2, 1, 7, '[]')`,
+              [a.orgId, a.runId],
+            ),
+          a.orgId,
+        ),
+      ).rejects.toThrow(/duplicate key/);
+    });
+
+    it('rejects a proposing run without a pinned nonce and an executed run with one', async () => {
+      await expect(
+        tx.runInOrgTx(
+          (em) => insertRun(em, a.orgId, 'proposing', null),
+          a.orgId,
+        ),
+      ).rejects.toThrow(CHECK);
+      await expect(
+        tx.runInOrgTx((em) => insertRun(em, a.orgId, 'executed', 7), a.orgId),
+      ).rejects.toThrow(CHECK);
+      // a draft may hold a pin (it survives release)
+      await expect(
+        tx.runInOrgTx((em) => insertRun(em, a.orgId, 'draft', 7), a.orgId),
+      ).resolves.toHaveLength(1);
+    });
+
+    it('rejects a watch row whose run belongs to another org', async () => {
+      const [{ id: runId }] = await tx.runInOrgTx(
+        (em) => insertRun(em, b.orgId, 'draft', 9),
+        b.orgId,
+      );
+
+      await expect(
+        app.query(
+          `INSERT INTO payout_watch (run_id, org_id, chain_id, safe_address) VALUES ($1, $2, '1', $3)`,
+          [runId, a.orgId, SAFE],
+        ),
+      ).rejects.toThrow(FK);
+    });
+
+    it('rejects a payout item with amount_raw 0', async () => {
+      await expect(
+        tx.runInOrgTx((em) => insertItem(em, a.orgId, a.runId, '0'), a.orgId),
+      ).rejects.toThrow(CHECK);
+    });
+  });
+
+  it('applies 0006 on a database migrated to 0005 and down() keeps permissions granted after it', async () => {
+    const before = [
+      OrgCore1794182400000,
+      AddressBook1794268800000,
+      InvitationTargetEmail1794355200000,
+      AdminTriggerActiveUsers1794441600000,
+      DropSessionIp1794528000000,
+    ];
+    const fresh = await createOrgTestDb();
+    const migrator = (
+      migrations: Array<new () => MigrationInterface>,
+    ): DataSource => new DataSource({ ...fresh.owner().options, migrations });
+    const permissions = async (
+      ds: DataSource,
+    ): Promise<Record<string, Array<string>>> => {
+      const rows: Array<{ key: string; permissions: Array<string> }> =
+        await ds.query(
+          `SELECT key, permissions FROM roles WHERE org_id IS NULL`,
+        );
+      return Object.fromEntries(rows.map((r) => [r.key, r.permissions]));
+    };
+    let ds = migrator(before);
+    try {
+      await ds.initialize();
+      await ds.runMigrations();
+      const at0005 = await permissions(ds);
+      // existing org data the new linked_safes key must accept
+      await ds.transaction(async (em) => {
+        const [{ id: orgId }] = await em.query(
+          `INSERT INTO organizations (name) VALUES ('org') RETURNING id`,
+        );
+        const [{ id: userId }] = await em.query(
+          `INSERT INTO users DEFAULT VALUES RETURNING id`,
+        );
+        const [{ id: memberId }] = await em.query(
+          `INSERT INTO members (org_id, user_id, status) VALUES ($1, $2, 'active') RETURNING id`,
+          [orgId, userId],
+        );
+        await em.query(
+          `INSERT INTO role_bindings (member_id, role_id)
+           SELECT $1, id FROM roles WHERE org_id IS NULL AND key = 'admin'`,
+          [memberId],
+        );
+        await em.query(
+          `INSERT INTO linked_safes (org_id, chain_id, address) VALUES ($1, '1', '0x0000000000000000000000000000000000000a11')`,
+          [orgId],
+        );
+      });
+      await ds.destroy();
+
+      ds = migrator([...before, PoliciesPayouts1794614400000]);
+      await ds.initialize();
+      expect((await ds.runMigrations()).map((m) => m.name)).toEqual([
+        'PoliciesPayouts1794614400000',
+      ]);
+      const at0006 = await permissions(ds);
+      expect(at0006.admin).toEqual([
+        ...at0005.admin,
+        'policies.view',
+        'policies.write',
+        'payouts.view',
+        'payouts.prepare',
+        'payouts.manage',
+      ]);
+      expect(at0006.member).toEqual([
+        ...at0005.member,
+        'policies.view',
+        'payouts.view',
+        'payouts.prepare',
+      ]);
+
+      // granted after 0006; down() must not drop it
+      await ds.query(
+        `UPDATE roles SET permissions = permissions || '{later.grant}'::text[] WHERE org_id IS NULL`,
+      );
+      await ds.undoLastMigration();
+
+      expect(await permissions(ds)).toEqual({
+        admin: [...at0005.admin, 'later.grant'],
+        member: [...at0005.member, 'later.grant'],
+      });
+      const [left] = await ds.query(
+        `SELECT to_regclass('policies') AS policies, to_regclass('payout_runs') AS runs,
+           to_regclass('payout_watch') AS watch, to_regclass('policy_scan_state') AS scan,
+           (SELECT count(*)::int FROM pg_constraint WHERE conname = 'linked_safes_org_id_id_key') AS key`,
+      );
+      expect(left).toEqual({
+        policies: null,
+        runs: null,
+        watch: null,
+        scan: null,
+        key: 0,
+      });
+    } finally {
+      if (ds.isInitialized) await ds.destroy();
+      await fresh.drop();
+    }
   });
 
   it('rejects a second wallet identity with the same address in different case', async () => {

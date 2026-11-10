@@ -30,6 +30,9 @@ const MEMBER_PERMISSIONS = [
   'addressbook.request',
   'activity.view',
   'exports.read',
+  'policies.view',
+  'payouts.view',
+  'payouts.prepare',
 ];
 
 @Controller('v1/orgs/:orgId')
@@ -247,7 +250,7 @@ describe('permissions (through the app login)', () => {
       expect(effective?.permissions).toEqual([]);
     });
 
-    it('gives member exactly the member permission set', async () => {
+    it('gives member policies.view, payouts.view, payouts.prepare and not policies.write or payouts.manage', async () => {
       const org = await seedOrg();
 
       const effective = await resolver.effective(org.orgId, org.member);
@@ -255,13 +258,16 @@ describe('permissions (through the app login)', () => {
       expect(effective?.permissions.toSorted()).toEqual(
         MEMBER_PERMISSIONS.toSorted(),
       );
+      expect(effective?.permissions).not.toContain('policies.write');
+      expect(effective?.permissions).not.toContain('payouts.manage');
     });
 
-    it('gives admin the full permission set', async () => {
+    it('gives admin all 22 permissions', async () => {
       const org = await seedOrg();
 
       const effective = await resolver.effective(org.orgId, org.admin);
 
+      expect(PERMISSIONS).toHaveLength(22);
       expect(effective?.permissions.toSorted()).toEqual(
         [...PERMISSIONS].toSorted(),
       );

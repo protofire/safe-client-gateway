@@ -1,6 +1,6 @@
 /**
  * Every permission the org API checks. Roles grant them as data (`roles.permissions`,
- * seeded by migrations/org/0001-org-core.ts); code checks permissions, never role keys.
+ * seeded by migrations/org/0001-org-core.ts and 0006); code checks permissions, never role keys.
  */
 export const PERMISSIONS = [
   'org.view',
@@ -20,6 +20,11 @@ export const PERMISSIONS = [
   'addressbook.review',
   'activity.view',
   'exports.read',
+  'policies.view',
+  'policies.write',
+  'payouts.view',
+  'payouts.prepare',
+  'payouts.manage',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];

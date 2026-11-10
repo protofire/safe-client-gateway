@@ -30,6 +30,18 @@ export const ACTIVITY_EVENT_TYPES = [
   'onchain.threshold_changed',
   'onchain.module_changed',
   'onchain.guard_changed',
+  'policy.created',
+  'policy.updated',
+  'policy.deleted',
+  'policy.violation_found',
+  'payout_run.created',
+  'payout_run.updated',
+  'payout_run.deleted',
+  'payout_run.proposal_claimed',
+  'payout_run.proposal_released',
+  'payout_run.proposed',
+  'payout_run.verification_delayed',
+  'payout_run.settled',
 ] as const;
 
 export type ActivityEventType = (typeof ACTIVITY_EVENT_TYPES)[number];
