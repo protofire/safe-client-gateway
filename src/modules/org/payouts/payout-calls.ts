@@ -1,13 +1,6 @@
 import { encodeFunctionData, erc20Abi, size } from 'viem';
-import type { Address, Hex } from 'viem';
-
-// Local copy: B2's `SafeCall` in common/multisend.ts replaces it at merge
-export type SafeCall = {
-  to: Address;
-  value: bigint;
-  data: Hex;
-  operation: 0 | 1;
-};
+import type { Address } from 'viem';
+import type { SafeCall } from '@/modules/org/common/multisend';
 
 export type PayoutCallInput = {
   recipient: Address;
