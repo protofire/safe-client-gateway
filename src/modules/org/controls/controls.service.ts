@@ -3,7 +3,10 @@ import { getAddress, isAddressEqual, zeroAddress, type Address } from 'viem';
 import { IDelegatesV2Repository } from '@/modules/delegate/domain/v2/delegates.v2.repository.interface';
 import { Clock, type IClock } from '@/modules/org/common/clock';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
-import { PolicyContextService } from '@/modules/org/policies/policy-context.service';
+import {
+  inScope,
+  PolicyContextService,
+} from '@/modules/org/policies/policy-context.service';
 import {
   CONCURRENCY,
   DEFAULT_SAFE_TIMEOUT_MS,
@@ -144,15 +147,13 @@ export class ControlsService {
         scans.map((s) => [`${s.chain_id}:${s.address.toLowerCase()}`, s]),
       );
 
+      const active = await this.context.orgPolicies(em, orgId);
       const out: Array<DbPart> = [];
       for (const r of rows) {
         const address = getAddress(r.address);
-        const policies = (
-          await this.context.activePolicies(em, orgId, {
-            chainId: r.chain_id,
-            address,
-          })
-        ).map((p) => ({ id: p.id, name: p.name, version: p.version }));
+        const policies = active
+          .filter((p) => inScope(p.scope, { chainId: r.chain_id, address }))
+          .map((p) => ({ id: p.id, name: p.name, version: p.version }));
         const scan = scanOf.get(`${r.chain_id}:${address.toLowerCase()}`);
         const lastSuccess = scan?.last_success_at ?? null;
         out.push({

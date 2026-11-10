@@ -495,6 +495,22 @@ describe('Controls and org-wide transactions CSV', () => {
       });
     });
 
+    it('reads the org policies once per request, however many Safes are linked', async () => {
+      await link(orgA, SAFE_A, CHAIN);
+      await link(orgA, SAFE_B, CHAIN);
+      await link(orgA, addr(0xc3), CHAIN_2);
+      await addPolicy(orgA, 'P', CAP_RULES, [CHAIN]);
+      const read = jest.spyOn(PolicyContextService.prototype, 'orgPolicies');
+      const res = await controls().expect(200);
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(
+        (res.body as Array<{ policyStatus: string }>).map(
+          (s) => s.policyStatus,
+        ),
+      ).toEqual(['checked_in_app_only', 'checked_in_app_only', 'no_policies']);
+      read.mockRestore();
+    });
+
     it('reports scanStatus: fresh, stale and never scanned', async () => {
       await link(orgA, SAFE_A, CHAIN);
       await addPolicy(orgA, 'P', CAP_RULES);
@@ -725,6 +741,27 @@ describe('Controls and org-wide transactions CSV', () => {
       await link(orgA, SAFE_A);
       await csv(query).expect(400);
       expect(exportApi.export).not.toHaveBeenCalled();
+    });
+
+    it('does not spend the export budget on invalid ranges', async () => {
+      const u = await signIn();
+      const org = await createOrg([u]);
+      for (let i = 0; i < 20; i++) await csv('', org, u).expect(400);
+      await csv(q, org, u).expect(200);
+    });
+
+    it('marks a Safe that fails after some pages as partial', async () => {
+      await link(orgA, SAFE_A, CHAIN, 'Ops');
+      exportApi.export.mockImplementation(
+        ({ offset, ...rest }: { limit: number; offset: number }) =>
+          offset === 0
+            ? exportOf(150, (n) => exportRow(SAFE_A, n))({ offset, ...rest })
+            : Promise.reject(new Error('page 2 failed')),
+      );
+      const rows = lines((await csv().expect(200)).body as string);
+      expect(rows).toHaveLength(1 + 100 + 1);
+      expect(rows[101]).toBe(`${CHAIN},Ops,,${SAFE_A},,,,,,,,,,,,,partial`);
+      expect(rows.some((r) => r.endsWith(',unavailable'))).toBe(false);
     });
 
     it('accepts 365 days', async () => {

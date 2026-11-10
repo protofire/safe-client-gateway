@@ -151,6 +151,7 @@ export class OrgTransactionsExportService {
     let count = 0;
     for (const safe of safes) {
       const base = { chainId: safe.chainId, safeLabel: safe.label };
+      const before = count;
       try {
         const api = await this.exportApiManager.getApi(safe.chainId);
         for (let offset = 0; ; offset += PAGE_SIZE) {
@@ -180,7 +181,12 @@ export class OrgTransactionsExportService {
           yield { ...base, status: 'truncated' };
           return;
         }
-        yield { ...base, safe: safe.address, status: 'unavailable' };
+        // rows already written for this Safe: the data is incomplete, not absent
+        yield {
+          ...base,
+          safe: safe.address,
+          status: count - 1 > before ? 'partial' : 'unavailable',
+        };
       }
     }
   }
