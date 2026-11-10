@@ -20,6 +20,9 @@ export const PURGE_AFTER_DAYS = 30;
 // attempts, failed ones included: 2x the org limit, so create/delete churn
 // stays bounded (item 7)
 const ORG_CREATES_PER_USER_PER_HOUR = 20;
+// delete and restore together, all attempts: each delete mails every admin;
+// real use is a handful, 10 stops a delete/restore loop from spamming them
+const ORG_DELETES_RESTORES_PER_USER_PER_HOUR = 10;
 const DAY_MS = 24 * 3600 * 1000;
 
 export type OrgListItem = {
@@ -213,6 +216,7 @@ export class OrgsService {
 
   /** Soft delete: hidden from members, restorable until `purge_after`. */
   async delete(orgId: string, by: Actor): Promise<OrgView> {
+    await this.limitDeleteRestore(by.userId);
     const now = this.clock.now();
     const deleted = await this.tx.runInOrgTx(async (em) => {
       await lockOrgs(em, [orgId]);
@@ -249,6 +253,7 @@ export class OrgsService {
    * this waits and then finds it gone) and restores only before `purge_after`.
    */
   async restore(orgId: string, by: Actor): Promise<OrgView> {
+    await this.limitDeleteRestore(by.userId);
     const now = this.clock.now();
     try {
       return await this.tx.runInOrgTx(async (em) => {
@@ -298,6 +303,14 @@ export class OrgsService {
       // restoring an org whose admins all left meanwhile: the trigger refuses
       return mapLastAdmin(error);
     }
+  }
+
+  private limitDeleteRestore(userId: string): Promise<void> {
+    return this.rateLimiter.enforce(
+      `orgs:delete-restore:user:${userId}`,
+      ORG_DELETES_RESTORES_PER_USER_PER_HOUR,
+      3600,
+    );
   }
 }
 

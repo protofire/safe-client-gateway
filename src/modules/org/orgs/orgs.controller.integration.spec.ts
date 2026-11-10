@@ -101,6 +101,27 @@ describe('organizations (org)', () => {
     await t.createOrg(other);
   });
 
+  it('limits org delete and restore attempts to 10 per hour per user, as they mail every admin (round 2 item 5)', async () => {
+    const owner = await t.user({ wallet: true });
+    const orgId = await t.createOrg(owner);
+    for (let i = 0; i < 5; i++) {
+      await t.del(`/v1/orgs/${orgId}`).set('Cookie', owner.cookie).expect(200);
+      await t
+        .post(`/v1/orgs/${orgId}/restore`)
+        .set('Cookie', owner.cookie)
+        .expect(200);
+    }
+    await t.del(`/v1/orgs/${orgId}`).set('Cookie', owner.cookie).expect(429);
+    const [{ status }] = await t.sql.query(
+      `SELECT status FROM organizations WHERE id = $1`,
+      [orgId],
+    );
+    expect(status).toBe('active');
+    const other = await t.user({ wallet: true });
+    const otherOrg = await t.createOrg(other);
+    await t.del(`/v1/orgs/${otherOrg}`).set('Cookie', other.cookie).expect(200);
+  });
+
   it('keeps the 10-org limit under concurrent creates', async () => {
     const owner = await t.user();
     for (let i = 0; i < 8; i++) await t.createOrg(owner, `org ${i}`);
