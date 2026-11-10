@@ -521,6 +521,34 @@ describe('settlementOutcome', () => {
       ).toEqual({ reason: 'partial_overlap' });
     });
 
+    it('returns partial_overlap when the refund receiver is any run recipient, whatever the token', () => {
+      // native refund to an ERC20 recipient; DAI refund to the native recipient; USDC refund to the DAI recipient
+      for (const o of [
+        { refundReceiver: BOB },
+        { gasToken: DAI, refundReceiver: ALICE },
+        { gasToken: USDC, refundReceiver: CAROL },
+      ])
+        expect(
+          settlementOutcome(
+            input({
+              executedAtNonce: runTx({ ...refund, ...o }),
+              transfers: [],
+            }),
+          ).review,
+        ).toEqual({ reason: 'partial_overlap' });
+    });
+
+    it('does not conclude when the refund receiver is unknown (zero refundReceiver, no executor)', () => {
+      const tx = runTx({ ...refund, executor: null });
+      expect(settlementOutcome(input({ executedAtNonce: tx }))).toEqual({
+        status: 'verifying',
+        executedTxHash: TX_HASH,
+      });
+      expect(
+        settlementOutcome(input({ executedAtNonce: tx, now: DEADLINE })).review,
+      ).toEqual({ reason: 'indirect_unproven' });
+    });
+
     it('still settles executed for equal successful calls with an unrelated refund', () => {
       expect(
         settlementOutcome(input({ executedAtNonce: runTx(refund) })).status,
@@ -598,6 +626,12 @@ describe('settlementOutcome', () => {
     ).toEqual({ status: 'pending' });
     expect(
       settlementOutcome(input({ executedAtNonce: runTx({ gasPrice: 'x' }) })),
+    ).toEqual({ status: 'pending' });
+  });
+
+  it('makes no decision while gasPrice is unknown (null)', () => {
+    expect(
+      settlementOutcome(input({ executedAtNonce: runTx({ gasPrice: null }) })),
     ).toEqual({ status: 'pending' });
   });
 });

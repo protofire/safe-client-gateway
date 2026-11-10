@@ -102,6 +102,7 @@ function runTargets(input: SettlementInput): {
   calls: Array<SafeCall>;
   erc20: Set<string>;
   native: Set<string>;
+  recipients: Set<string>;
 } {
   const calls = [...(input.run.calls ?? []), ...input.attemptCalls.flat()];
   const erc20 = new Set<string>();
@@ -115,7 +116,11 @@ function runTargets(input: SettlementInput): {
     const payment = decodePayment(call);
     if (payment) erc20.add(pairKey(payment.token, payment.recipient));
   }
-  return { calls, erc20, native };
+  const recipients = new Set([
+    ...native,
+    ...[...erc20].map((key) => key.split(':')[1]),
+  ]);
+  return { calls, erc20, native, recipients };
 }
 
 /** Lines of ERC20 items without their own transfer (multiset: duplicates need one each). */
@@ -154,8 +159,8 @@ export function settlementOutcome(input: SettlementInput): Settlement {
   if (tx === null || !tx.isExecuted || tx.isSuccessful === null)
     return { status: 'pending' };
   const value = toRaw(tx.value);
-  const gasPrice = tx.gasPrice === null ? 0n : toRaw(tx.gasPrice);
-  // unreadable tx-service numbers: no decision
+  // unknown or unreadable tx-service numbers: no decision
+  const gasPrice = tx.gasPrice === null ? null : toRaw(tx.gasPrice);
   if (value === null || gasPrice === null) return { status: 'pending' };
 
   const txHash = tx.transactionHash;
@@ -197,12 +202,10 @@ export function settlementOutcome(input: SettlementInput): Settlement {
     const receiver = isZeroAddress(tx.refundReceiver)
       ? tx.executor
       : tx.refundReceiver;
-    const paid =
-      receiver !== null &&
-      (isZeroAddress(tx.gasToken) || tx.gasToken === null
-        ? targets.native.has(lower(receiver))
-        : targets.erc20.has(pairKey(tx.gasToken, receiver)));
-    if (paid) return settle('needs_review', { reason: 'partial_overlap' });
+    if (receiver === null) return unproven();
+    // any run recipient, whatever the refund token: the money flow cannot be told apart
+    if (targets.recipients.has(lower(receiver)))
+      return settle('needs_review', { reason: 'partial_overlap' });
   }
 
   if (
