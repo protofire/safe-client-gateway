@@ -2,11 +2,9 @@ import {
   Body,
   Controller,
   Delete,
-  Get,
   HttpCode,
   Param,
   Post,
-  Query,
   Req,
   Res,
 } from '@nestjs/common';
@@ -16,7 +14,7 @@ import { AuthService } from '@/modules/org/auth/auth.service';
 import { OrgSession, RequireStrongAuth } from '@/modules/org/auth/decorators';
 import {
   AuthorizeQuerySchema,
-  redirectToIssuer,
+  setOidcTxCookie,
   type AuthorizeQuery,
 } from '@/modules/org/auth/oidc/oidc.controller';
 import { OidcService } from '@/modules/org/auth/oidc/oidc.service';
@@ -52,24 +50,28 @@ export class LinkIdentityController {
     return { ok: true };
   }
 
-  /** Same flow as sign-in; the shared callback attaches the identity to this session's user. */
-  @Get('link/oidc/authorize')
+  /**
+   * Same flow as sign-in; the shared callback attaches the identity to this
+   * session's user. POST (CsrfGuard), answering the URL for the browser to
+   * open, since it creates the state record and sets `org_oidc_tx`.
+   */
+  @Post('link/oidc/authorize')
+  @HttpCode(200)
   @RequireStrongAuth()
   async linkOidc(
     @OrgSession() session: OrgSession,
-    @Query(new ValidationPipe(AuthorizeQuerySchema)) query: AuthorizeQuery,
+    @Body(new ValidationPipe(AuthorizeQuerySchema)) body: AuthorizeQuery,
     @Req() req: Request,
-    @Res() res: Response,
-  ): Promise<void> {
-    redirectToIssuer(
-      res,
-      await this.oidc.start({
-        connection: query.connection,
-        returnTo: query.returnTo,
-        ip: client(req).ip,
-        sessionId: session.sessionId,
-      }),
-    );
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<{ redirectUrl: string }> {
+    const started = await this.oidc.start({
+      connection: body.connection,
+      returnTo: body.returnTo,
+      ip: client(req).ip,
+      sessionId: session.sessionId,
+    });
+    setOidcTxCookie(res, started.tx);
+    return { redirectUrl: started.redirectUrl };
   }
 
   /** 409 `last_identity` for the only identity. */

@@ -41,6 +41,8 @@ export class OidcClient {
     nonce: string;
     codeChallenge: string;
     connection: OidcConnection;
+    /** `login`: the IdP must re-authenticate, not reuse its own session. */
+    prompt?: 'login';
   }): string {
     const url = new URL('authorize', this.issuer);
     url.search = new URLSearchParams({
@@ -53,6 +55,7 @@ export class OidcClient {
       code_challenge: args.codeChallenge,
       code_challenge_method: 'S256',
       connection: args.connection,
+      ...(args.prompt ? { prompt: args.prompt } : {}),
     }).toString();
     return url.toString();
   }

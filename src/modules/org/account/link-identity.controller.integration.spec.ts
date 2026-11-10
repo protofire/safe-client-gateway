@@ -231,15 +231,18 @@ describe('identity linking (org)', () => {
 
     async function startLink(
       u: User,
-      query = 'connection=email&returnTo=%2Fsettings',
+      body: object = { connection: 'email', returnTo: '/settings' },
       email = 'linked@example.com',
     ): Promise<Started> {
       const res = await t
-        .http()
-        .get(`/v1/orgs/account/link/oidc/authorize?${query}`)
+        .post('/v1/orgs/account/link/oidc/authorize')
         .set('Cookie', u.cookie)
-        .expect(302);
-      const authorizeUrl = new URL(res.headers.location);
+        .send(body)
+        .expect(200);
+      expect(res.body).toEqual({ redirectUrl: expect.any(String) });
+      const authorizeUrl = new URL(res.body.redirectUrl as string);
+      // item 4: the IdP must re-authenticate, never reuse its own session
+      expect(authorizeUrl.searchParams.get('prompt')).toBe('login');
       authorizeUrl.searchParams.set('login_hint', email);
       const idp = await fetch(authorizeUrl, { redirect: 'manual' });
       const back = new URL(idp.headers.get('location')!);
@@ -257,6 +260,51 @@ describe('identity linking (org)', () => {
           `/v1/orgs/auth/oidc/callback?code=${encodeURIComponent(s.code)}&state=${encodeURIComponent(s.state)}`,
         )
         .set('Cookie', cookies.join('; '));
+
+    /** Item 5: callback failures redirect to the flow's returnTo with ?orgAuthError. */
+    async function failsWith(
+      test: request.Test,
+      code: string,
+      path = '/settings',
+    ): Promise<void> {
+      const res = await test.expect(302);
+      expect(res.headers.location).toBe(
+        `${APP_URL}${path}?orgAuthError=${code}`,
+      );
+    }
+
+    it('starts with POST only: GET is gone and POST needs the CSRF header (item 4)', async () => {
+      const u = await user({ wallet: true });
+      await t
+        .http()
+        .get('/v1/orgs/account/link/oidc/authorize?connection=email')
+        .set('Cookie', u.cookie)
+        .expect(404);
+      await t
+        .http()
+        .post('/v1/orgs/account/link/oidc/authorize')
+        .set('Cookie', u.cookie)
+        .send({ connection: 'email' })
+        .expect(403);
+      await t
+        .post('/v1/orgs/account/link/oidc/authorize')
+        .set('Cookie', u.cookie)
+        .send({ connection: 'github' })
+        .expect(422);
+      const res = await t
+        .post('/v1/orgs/account/link/oidc/authorize')
+        .set('Cookie', u.cookie)
+        .send({ connection: 'google-oauth2' })
+        .expect(200);
+      const cookie = [res.headers['set-cookie']]
+        .flat()
+        .find((c) => c.startsWith('org_oidc_tx='))!;
+      expect(cookie).toMatch(/; Path=\/v1\/orgs\/auth\/oidc;/);
+      expect(cookie).toMatch(/; HttpOnly/);
+      expect(
+        new URL(res.body.redirectUrl as string).searchParams.get('connection'),
+      ).toBe('google-oauth2');
+    });
 
     it('attaches the identity to the current user without creating a session', async () => {
       const u = await user({ wallet: true });
@@ -284,29 +332,39 @@ describe('identity linking (org)', () => {
       return (await t.sql.query(`SELECT count(*)::int AS n FROM users`))[0].n;
     }
 
-    it('answers 401 when another session of the same user completes the flow', async () => {
+    it('fails when another session of the same user completes the flow', async () => {
       const u = await user({ wallet: true });
       const other = await secondSession(u.userId);
       const s = await startLink(u);
-      await callback(s, [s.txCookie, other]).expect(401);
+      await failsWith(callback(s, [s.txCookie, other]), 'failed');
       expect(await identities(u)).toHaveLength(1);
     });
 
-    it('answers 401 when another browser completes the flow', async () => {
+    it('fails when another browser completes the flow', async () => {
       const u = await user({ wallet: true });
       const victim = await startLink(u);
       const attacker = await startLink(u, undefined, 'attacker@example.com');
-      await callback(victim, [attacker.txCookie, u.cookie]).expect(401);
-      await callback(victim, [u.cookie]).expect(401);
+      // not bound to this browser: the default page, not the flow's returnTo
+      await failsWith(
+        callback(victim, [attacker.txCookie, u.cookie]),
+        'failed',
+        '/organizations',
+      );
+      // the state was consumed by the first attempt
+      await failsWith(
+        callback(victim, [u.cookie]),
+        'expired',
+        '/organizations',
+      );
     });
 
-    it('answers 401 when the link flow is completed without a session', async () => {
+    it('fails when the link flow is completed without a session', async () => {
       const u = await user({ wallet: true });
       const s = await startLink(u);
-      await callback(s, [s.txCookie]).expect(401);
+      await failsWith(callback(s, [s.txCookie]), 'failed');
     });
 
-    it('answers 409 identity_taken when the identity belongs to another user', async () => {
+    it('redirects with identity_taken when the identity belongs to another user', async () => {
       // the mock derives the subject from the email: same email, same identity
       const email = 'taken@example.com';
       const owner = await user({ wallet: true });
@@ -314,16 +372,15 @@ describe('identity linking (org)', () => {
       await callback(s1, [s1.txCookie, owner.cookie]).expect(302);
       const u = await user({ wallet: true });
       const s2 = await startLink(u, undefined, email);
-      const res = await callback(s2, [s2.txCookie, u.cookie]).expect(409);
-      expect(res.body.code).toBe('identity_taken');
+      await failsWith(callback(s2, [s2.txCookie, u.cookie]), 'identity_taken');
     });
 
     it('answers 403 on authorize without fresh strong auth', async () => {
       const u = await user({ wallet: true, strong: false });
       const res = await t
-        .http()
-        .get('/v1/orgs/account/link/oidc/authorize?connection=email')
+        .post('/v1/orgs/account/link/oidc/authorize')
         .set('Cookie', u.cookie)
+        .send({ connection: 'email' })
         .expect(403);
       expect(res.body.code).toBe('step_up_required');
     });

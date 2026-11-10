@@ -29,16 +29,12 @@ export const AuthorizeQuerySchema = z.object({
 });
 export type AuthorizeQuery = { connection: OidcConnection; returnTo?: string };
 
-/** Sets the browser-binding cookie and redirects to the issuer. */
-export function redirectToIssuer(
-  res: Response,
-  started: { redirectUrl: string; tx: string },
-): void {
-  res.cookie(OIDC_TX_COOKIE, started.tx, {
+/** The browser-binding cookie the callback checks against the state record. */
+export function setOidcTxCookie(res: Response, tx: string): void {
+  res.cookie(OIDC_TX_COOKIE, tx, {
     ...OIDC_TX_COOKIE_OPTIONS,
     maxAge: OIDC_TX_TTL_SECONDS * 1000,
   });
-  res.redirect(302, started.redirectUrl);
 }
 
 @Controller({ path: 'orgs/auth/oidc', version: '1' })
@@ -52,16 +48,16 @@ export class OidcController {
     @Req() req: Request,
     @Res() res: Response,
   ): Promise<void> {
-    redirectToIssuer(
-      res,
-      await this.oidc.start({
-        connection: query.connection,
-        returnTo: query.returnTo,
-        ip: client(req).ip,
-      }),
-    );
+    const started = await this.oidc.start({
+      connection: query.connection,
+      returnTo: query.returnTo,
+      ip: client(req).ip,
+    });
+    setOidcTxCookie(res, started.tx);
+    res.redirect(302, started.redirectUrl);
   }
 
+  /** Always a 302: to returnTo on success, else with `?orgAuthError=<code>` (item 5). */
   @Public()
   @Get('callback')
   async callback(
@@ -72,6 +68,7 @@ export class OidcController {
     // cleared on every outcome; the error filter keeps headers already set
     res.clearCookie(OIDC_TX_COOKIE, OIDC_TX_COOKIE_OPTIONS);
     const { token, redirectUrl } = await this.oidc.complete({
+      error: query.error,
       code: query.code,
       state: query.state,
       tx: req.cookies?.[OIDC_TX_COOKIE],

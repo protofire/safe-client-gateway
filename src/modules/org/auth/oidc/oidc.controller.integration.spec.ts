@@ -87,6 +87,20 @@ describe('OIDC sign-in (org)', () => {
     return cookie ? req.set('Cookie', cookie) : req;
   }
 
+  /** Item 5: every callback failure is a 302 back to the app with ?orgAuthError. */
+  async function failsWith(
+    test: request.Test,
+    code: string,
+    path = '/organizations',
+  ): Promise<request.Response> {
+    const res = await test.expect(302);
+    expect(res.headers.location).toBe(`${APP_URL}${path}?orgAuthError=${code}`);
+    expect([res.headers['set-cookie']].flat().join()).not.toMatch(
+      /org_session=[^;]/,
+    );
+    return res;
+  }
+
   it('redirects to the issuer with PKCE S256, state, nonce, scope and connection, and sets org_oidc_tx', async () => {
     const res = await t
       .http()
@@ -171,7 +185,7 @@ describe('OIDC sign-in (org)', () => {
     });
   });
 
-  it('signs the same identity into the same user and never links another identity by email', async () => {
+  it('signs the same identity into the same user; another subject with the same verified email joins that user (item 6)', async () => {
     const a = await callback(...withCookie(await start())).expect(302);
     const b = await callback(...withCookie(await start())).expect(302);
     const idOf = async (res: request.Response): Promise<string> =>
@@ -183,42 +197,96 @@ describe('OIDC sign-in (org)', () => {
       ).body.user.id;
     expect(await idOf(b)).toBe(await idOf(a));
 
-    // same verified email, other subject (e.g. Google instead of passwordless)
+    // same verified email, other subject (Google instead of the email code)
     mock.setClaims({ sub: 'google-oauth2|other' });
     const c = await callback(...withCookie(await start())).expect(302);
-    expect(await idOf(c)).not.toBe(await idOf(a));
-  });
-
-  it('rejects a callback without the org_oidc_tx cookie with 401', async () => {
-    const s = await start();
-    const res = await callback(s).expect(401);
-    expect([res.headers['set-cookie']].flat().join()).not.toMatch(
-      /org_session=[^;]/,
+    expect(await idOf(c)).toBe(await idOf(a));
+    const identities = await t.sql.query(
+      `SELECT oidc_subject FROM identities WHERE user_id = $1 ORDER BY created_at`,
+      [await idOf(a)],
     );
+    expect(identities).toHaveLength(2);
+    expect(identities[1].oidc_subject).toBe('google-oauth2|other');
+    const [linked] = await t.sql.query(
+      `SELECT payload FROM user_security_events WHERE user_id = $1 AND type = 'security.identity_linked'`,
+      [await idOf(a)],
+    );
+    expect(linked.payload).toEqual({ kind: 'oidc', via: 'sign_in' });
+
+    // another email: a new user
+    mock.setClaims({});
+    const d = await callback(
+      ...withCookie(await start('connection=email', 'bob@example.com')),
+    ).expect(302);
+    expect(await idOf(d)).not.toBe(await idOf(a));
   });
 
-  it("rejects a callback replayed in another browser (another browser's cookie) with 401", async () => {
+  it('never attaches by an unverified email (item 6)', async () => {
+    const a = await callback(...withCookie(await start())).expect(302);
+    const before = await t.sql.query(`SELECT id FROM identities`);
+    mock.setClaims({ sub: 'google-oauth2|other', email_verified: false });
+    await failsWith(callback(...withCookie(await start())), 'failed');
+    expect(await t.sql.query(`SELECT id FROM identities`)).toEqual(before);
+    expect(cookieFrom(a, 'org_session')).toMatch(/^org_session=/);
+  });
+
+  it.each(['github|123', 'auth0|123', 'samlp|x', 'email', 'google-oauth2'])(
+    'rejects subject %s: only email| and google-oauth2| (item 5)',
+    async (sub) => {
+      const before = await t.sql.query(`SELECT id FROM identities`);
+      mock.setClaims({ sub });
+      await failsWith(
+        callback(...withCookie(await start())),
+        'unsupported_identity',
+      );
+      expect(await t.sql.query(`SELECT id FROM identities`)).toEqual(before);
+    },
+  );
+
+  it('redirects a cancelled sign-in back to its returnTo with cancelled (item 5)', async () => {
+    const s = await start('connection=email&returnTo=%2Forgs%2Fx');
+    await failsWith(
+      t
+        .http()
+        .get(
+          `/v1/orgs/auth/oidc/callback?error=access_denied&error_description=x&state=${encodeURIComponent(s.state)}`,
+        )
+        .set('Cookie', s.txCookie),
+      'cancelled',
+      '/orgs/x',
+    );
+    // the state was consumed
+    await failsWith(callback(s, s.txCookie), 'expired');
+  });
+
+  it('rejects a callback without the org_oidc_tx cookie', async () => {
+    const s = await start();
+    await failsWith(callback(s), 'failed');
+  });
+
+  it("rejects a callback replayed in another browser (another browser's cookie)", async () => {
     const victim = await start();
     const attacker = await start();
-    await callback(victim, attacker.txCookie).expect(401);
+    await failsWith(callback(victim, attacker.txCookie), 'failed');
   });
 
-  it('rejects an unknown state with 401', async () => {
+  it('rejects an unknown state as expired', async () => {
     const s = await start();
-    await callback({ code: s.code, state: 'not-a-state' }, s.txCookie).expect(
-      401,
+    await failsWith(
+      callback({ code: s.code, state: 'not-a-state' }, s.txCookie),
+      'expired',
     );
   });
 
-  it('rejects a reused state with 401', async () => {
+  it('rejects a reused state as expired', async () => {
     const s = await start();
     await callback(s, s.txCookie).expect(302);
-    await callback(s, s.txCookie).expect(401);
+    await failsWith(callback(s, s.txCookie), 'expired');
   });
 
   it('rejects an ID token with email_verified=false', async () => {
     mock.setClaims({ email_verified: false });
-    await callback(...withCookie(await start())).expect(401);
+    await failsWith(callback(...withCookie(await start())), 'failed');
   });
 
   it.each([
@@ -228,17 +296,14 @@ describe('OIDC sign-in (org)', () => {
     ['expired', { exp: Math.floor(Date.now() / 1000) - 60 }],
   ])('rejects an ID token with %s', async (_, claims) => {
     mock.setClaims(claims);
-    await callback(...withCookie(await start())).expect(401);
+    await failsWith(callback(...withCookie(await start())), 'failed');
   });
 
   it.each(['foreign-key', 'none', 'HS256-client-secret'] as const)(
     'rejects an ID token signed with %s (F9)',
     async (signing) => {
       mock.setSigning(signing);
-      const res = await callback(...withCookie(await start())).expect(401);
-      expect([res.headers['set-cookie']].flat().join()).not.toMatch(
-        /org_session=[^;]/,
-      );
+      await failsWith(callback(...withCookie(await start())), 'failed');
     },
   );
 
@@ -246,7 +311,7 @@ describe('OIDC sign-in (org)', () => {
     const s = await start();
     t.setOffset(11 * 60_000);
     // the mock's ID token lives 10 minutes; expiry is judged by the injected clock
-    await callback(s, s.txCookie).expect(401);
+    await failsWith(callback(s, s.txCookie), 'failed');
   });
 
   it.each([

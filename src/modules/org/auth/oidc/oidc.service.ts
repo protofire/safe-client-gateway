@@ -1,14 +1,12 @@
-import {
-  HttpException,
-  HttpStatus,
-  Inject,
-  Injectable,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { HttpException, HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { DataSource } from 'typeorm';
 import { IConfigurationService } from '@/config/configuration.service.interface';
+import {
+  type ILoggingService,
+  LoggingService,
+} from '@/logging/logging.interface';
 import {
   ORG_REDIS,
   OrgKeyPrefix,
@@ -37,6 +35,8 @@ const AUTHORIZE_PER_IP = 30;
 const CALLBACK_PER_IP = 10;
 const WINDOW_SECONDS = 60;
 const UNIQUE_VIOLATION = '23505';
+/** Auth0 subjects of the connections we offer: passwordless email and Google. */
+const SUPPORTED_SUBJECT = /^(?:email|google-oauth2)\|./;
 
 /** Redis state record, consumed once with GETDEL (amendment A6). */
 type OidcTx = {
@@ -78,6 +78,7 @@ export class OidcService {
     private readonly rateLimiter: RateLimiter,
     private readonly encryption: FieldEncryptionService,
     private readonly securityEvents: SecurityEvents,
+    @Inject(LoggingService) private readonly logger: ILoggingService,
   ) {
     this.statePrefix = `${keyPrefix}auth:oidc:state:`;
     this.postLoginRedirect = config.getOrThrow<string>(
@@ -134,17 +135,22 @@ export class OidcService {
       nonce,
       codeChallenge: createHash('sha256').update(verifier).digest('base64url'),
       connection: args.connection,
+      // linking (item 4): never attach whoever is signed in at the IdP already
+      ...(args.sessionId ? { prompt: 'login' as const } : {}),
     });
     return { redirectUrl, tx };
   }
 
   /**
-   * The state is consumed before any other check, so it is single-use even
-   * when the request is rejected. Every failure is a bare 401, except 409
-   * `identity_taken` in a linking flow. `token` is null after linking (the
-   * current session stays).
+   * Never throws: the browser is always sent back to the app (item 5), on
+   * failure with `?orgAuthError=<code>` added to the flow's returnTo (or the
+   * default when the state is unknown). The state is consumed before any
+   * other check, so it is single-use even when the request is rejected.
+   * `token` is null after linking (the current session stays) and on failure.
    */
   async complete(args: {
+    /** The IdP's `error` parameter (e.g. `access_denied` on cancel). */
+    error?: unknown;
     code: unknown;
     state: unknown;
     tx: unknown;
@@ -153,10 +159,26 @@ export class OidcService {
     ip: string;
     userAgent: string | null;
   }): Promise<{ token: string | null; redirectUrl: string }> {
+    let returnTo = DEFAULT_RETURN_TO;
+    try {
+      return await this.completeOrThrow(args, (r) => (returnTo = r));
+    } catch (error) {
+      const url = new URL(returnTo, this.postLoginRedirect);
+      url.searchParams.set('orgAuthError', this.errorCode(error));
+      return { token: null, redirectUrl: url.toString() };
+    }
+  }
+
+  private async completeOrThrow(
+    args: Parameters<OidcService['complete']>[0],
+    setReturnTo: (returnTo: string) => void,
+  ): Promise<{ token: string | null; redirectUrl: string }> {
     await this.limit(`oidc:callback:ip:${ipBucket(args.ip)}`, CALLBACK_PER_IP);
-    if (typeof args.state !== 'string' || args.state === '') throw failed();
+    if (typeof args.state !== 'string' || args.state === '') {
+      throw new CallbackError('expired');
+    }
     const raw = await this.redis.getDel(this.statePrefix + args.state);
-    if (raw === null) throw failed();
+    if (raw === null) throw new CallbackError('expired');
     const record = JSON.parse(raw) as OidcTx;
     if (
       typeof args.tx !== 'string' ||
@@ -165,8 +187,11 @@ export class OidcService {
         Buffer.from(record.txHash),
       )
     ) {
-      throw failed();
+      throw new CallbackError('failed');
     }
+    // known and bound to this browser: failures may go back to its returnTo
+    setReturnTo(record.returnTo);
+    if (args.error !== undefined) throw new CallbackError('cancelled');
     // A6: a linking flow must come back to the session that started it
     let linkUserId: string | undefined;
     if (record.sessionId !== undefined) {
@@ -174,10 +199,12 @@ export class OidcService {
         typeof args.sessionToken === 'string'
           ? await this.sessions.findActive(args.sessionToken, this.clock.now())
           : null;
-      if (session?.id !== record.sessionId) throw failed();
+      if (session?.id !== record.sessionId) throw new CallbackError('failed');
       linkUserId = session.userId;
     }
-    if (typeof args.code !== 'string' || args.code === '') throw failed();
+    if (typeof args.code !== 'string' || args.code === '') {
+      throw new CallbackError('failed');
+    }
 
     let identity: { subject: string; email: string };
     try {
@@ -187,7 +214,11 @@ export class OidcService {
         record.nonce,
       );
     } catch {
-      throw failed();
+      throw new CallbackError('failed');
+    }
+    // Item 5: only the connections we offer (Auth0 prefixes the subject)
+    if (!SUPPORTED_SUBJECT.test(identity.subject)) {
+      throw new CallbackError('unsupported_identity');
     }
 
     const redirectUrl = new URL(
@@ -199,10 +230,7 @@ export class OidcService {
       return { token: null, redirectUrl };
     }
 
-    const userId = await this.findOrCreateUser(
-      identity.subject,
-      identity.email,
-    );
+    const userId = await this.findOrCreateUser(identity, args);
     const { token } = await this.sessions.create({
       userId,
       amr: ['oidc'],
@@ -220,6 +248,19 @@ export class OidcService {
       args.userAgent,
     );
     return { token, redirectUrl };
+  }
+
+  private errorCode(error: unknown): OidcErrorCode {
+    if (error instanceof CallbackError) return error.code;
+    if (error instanceof HttpException) {
+      if (error.getStatus() === 429) return 'rate_limited';
+      const body = error.getResponse() as { code?: unknown };
+      if (body?.code === 'identity_taken') return 'identity_taken';
+    }
+    this.logger.error(
+      `OIDC callback failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return 'failed';
   }
 
   /** Attaches the IdP identity to the user; a new link ends their other sessions. */
@@ -259,16 +300,20 @@ export class OidcService {
   }
 
   /**
-   * Identity by (issuer, subject). A new subject is a new user even when its
-   * email matches another account: linking is explicit (Task 12).
+   * Identity by (issuer, subject). A new subject joins the one active user
+   * holding an identity of the same issuer with the same email (item 6: the
+   * same person via Google and the email code). Every stored OIDC identity
+   * and this one are `email_verified` (OidcClient), so an unverified address
+   * never gets here. No or several matches: a new user.
    */
   private async findOrCreateUser(
-    subject: string,
-    email: string,
+    identity: { subject: string; email: string },
+    client: { ip: string; userAgent: string | null },
   ): Promise<string> {
     const issuer = this.client.issuerId;
-    const emailEncrypted = this.encryption.encrypt(email);
-    const emailHash = hmacEmail(email, this.emailHashKey);
+    const { subject } = identity;
+    const emailEncrypted = this.encryption.encrypt(identity.email);
+    const emailHash = hmacEmail(identity.email, this.emailHashKey);
     const find = async (): Promise<
       { id: string; userId: string; status: string } | undefined
     > => {
@@ -285,7 +330,7 @@ export class OidcService {
       userId: string;
       status: string;
     }): Promise<string> => {
-      if (row.status !== 'active') throw failed();
+      if (row.status !== 'active') throw new CallbackError('failed');
       // the IdP may have changed the address since the last sign-in
       await this.db.query(
         `UPDATE identities SET email_encrypted = $2, email_hash = $3, updated_at = $4 WHERE id = $1`,
@@ -297,17 +342,38 @@ export class OidcService {
     const existing = await find();
     if (existing) return known(existing);
     try {
-      return await this.db.transaction(async (em) => {
-        const [{ id }] = await em.query(
-          `INSERT INTO users DEFAULT VALUES RETURNING id`,
+      const { userId, attached } = await this.db.transaction(async (em) => {
+        const owners: Array<{ userId: string }> = await em.query(
+          `SELECT DISTINCT i.user_id AS "userId" FROM identities i
+           JOIN users u ON u.id = i.user_id AND u.status = 'active'
+           WHERE i.kind = 'oidc' AND i.oidc_issuer = $1 AND i.email_hash = $2`,
+          [issuer, emailHash],
         );
+        let id: string;
+        if (owners.length === 1) {
+          id = owners[0].userId;
+        } else {
+          [{ id }] = await em.query(
+            `INSERT INTO users DEFAULT VALUES RETURNING id`,
+          );
+        }
         await em.query(
           `INSERT INTO identities (user_id, kind, oidc_issuer, oidc_subject, email_encrypted, email_hash)
            VALUES ($1, 'oidc', $2, $3, $4, $5)`,
           [id, issuer, subject, emailEncrypted, emailHash],
         );
-        return id as string;
+        return { userId: id, attached: owners.length === 1 };
       });
+      if (attached) {
+        await this.securityEvents.record(
+          userId,
+          'security.identity_linked',
+          { kind: 'oidc', via: 'sign_in' },
+          client.ip,
+          client.userAgent,
+        );
+      }
+      return userId;
     } catch (error) {
       // a concurrent first sign-in of the same identity won the unique index
       const winner =
@@ -329,6 +395,17 @@ export class OidcService {
   }
 }
 
-function failed(): UnauthorizedException {
-  return new UnauthorizedException('OIDC sign-in failed');
+export type OidcErrorCode =
+  | 'cancelled'
+  | 'expired'
+  | 'failed'
+  | 'identity_taken'
+  | 'rate_limited'
+  | 'unsupported_identity';
+
+/** An expected callback failure, answered with `?orgAuthError=<code>`. */
+class CallbackError extends Error {
+  constructor(readonly code: OidcErrorCode) {
+    super(`OIDC callback failed: ${code}`);
+  }
 }
