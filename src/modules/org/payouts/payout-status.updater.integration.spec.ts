@@ -718,6 +718,101 @@ describe('PayoutStatusUpdater', () => {
     });
   });
 
+  it('settles needs_review stray_proposal, not replaced, when N goes to an unrelated tx while a wrong-nonce copy is queued', async () => {
+    const c = await claimed();
+    const wrong = p.chain.propose(SAFE_A, 6, c.calls);
+    await p
+      .report(orgA, c.runId, member, {
+        attemptId: c.attemptId,
+        expectedVersion: c.version,
+        safeTxHash: wrong.safeTxHash,
+      })
+      .expect(422);
+    p.chain.execute(p.chain.propose(SAFE_A, 5, [native(STRANGER)]));
+    await p.updater.run();
+    expect(await p.runRow(orgA, c.runId)).toMatchObject({
+      status: 'needs_review',
+      review: {
+        reason: 'stray_proposal',
+        nonce: '6',
+        safeTxHash: wrong.safeTxHash,
+      },
+      pinned_nonce: null,
+    });
+  });
+
+  it('refuses the report and settles needs_review when a copy already executed at a nonce below N', async () => {
+    const c = await claimed();
+    // an earlier round of this run was claimed at 3
+    await p.asOrg(orgA, (em) =>
+      em.query(
+        `INSERT INTO payout_proposal_attempts (org_id, run_id, run_version, nonce, calls, status)
+         VALUES ($1, $2, 1, 3, (SELECT calls FROM payout_runs WHERE id = $2), 'released')`,
+        [orgA, c.runId],
+      ),
+    );
+    const copy = p.chain.propose(SAFE_A, 4, c.calls);
+    p.chain.execute(copy);
+    const atN = p.chain.propose(SAFE_A, 5, c.calls);
+    const res = await p
+      .report(orgA, c.runId, member, {
+        attemptId: c.attemptId,
+        expectedVersion: c.version,
+        safeTxHash: atN.safeTxHash,
+      })
+      .expect(409);
+    expect(res.body).toMatchObject({
+      code: 'stray_proposal',
+      nonce: '4',
+      safeTxHash: copy.safeTxHash,
+    });
+    p.chain.indexTransfers(SAFE_A, p.chain.execute(atN), c.items);
+    await p.updater.run();
+    expect(await p.runRow(orgA, c.runId)).toMatchObject({
+      status: 'needs_review',
+      review: { reason: 'stray_proposal', nonce: '4' },
+    });
+  });
+
+  it('settles needs_review when a copy executes at N+1 during the reorg margin', async () => {
+    const r = await proposed();
+    p.chain.indexTransfers(
+      SAFE_A,
+      p.chain.execute(r.tx, { ago: 60_000 }),
+      r.items,
+    );
+    await p.updater.run();
+    expect(await status(r.runId)).toBe('verifying');
+    const copy = p.chain.propose(SAFE_A, 6, r.calls, { trusted: false });
+    p.chain.execute(copy, { ago: 30_000 });
+    r.tx.executionDate = new Date(Date.now() - 3_600_000);
+    await p.updater.run();
+    expect(await p.runRow(orgA, r.runId)).toMatchObject({
+      status: 'needs_review',
+      review: {
+        reason: 'stray_proposal',
+        nonce: '6',
+        safeTxHash: copy.safeTxHash,
+      },
+    });
+  });
+
+  it('flags a proposed run needs_review on the periodic check when a copy is queued at a later nonce', async () => {
+    const r = await proposed();
+    const copy = p.chain.propose(SAFE_A, 6, r.calls, { trusted: false });
+    await p.updater.run();
+    expect(await p.runRow(orgA, r.runId)).toMatchObject({
+      status: 'needs_review',
+      review: {
+        reason: 'stray_proposal',
+        nonce: '6',
+        safeTxHash: copy.safeTxHash,
+      },
+      pinned_nonce: null,
+    });
+    expect(await p.watchRows()).toEqual([]);
+  });
+
   it('returns null from run while another replica holds the lock', async () => {
     const runner = p.t.sql.createQueryRunner();
     await runner.connect();

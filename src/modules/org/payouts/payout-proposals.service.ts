@@ -27,6 +27,7 @@ import { PayoutRunsService } from '@/modules/org/payouts/payout-runs.service';
 import {
   findStray,
   knownCalls,
+  lowestNonce,
   PayoutStatusUpdater,
   type NonceEvidence,
 } from '@/modules/org/payouts/payout-status.updater';
@@ -144,8 +145,8 @@ export class PayoutProposalsService {
       nonces = await this.nonces(before.chain_id, safeAddress);
     }
     const { queued, callOnly } = await this.queueView(
-      before.chain_id,
-      safeAddress,
+      orgId,
+      before,
       nonces.currentNonce,
     );
 
@@ -275,16 +276,16 @@ export class PayoutProposalsService {
       before.chain_id,
       getAddress(before.safe_address),
     );
-    const { queued, callOnly } = await this.queueView(
-      before.chain_id,
-      getAddress(before.safe_address),
+    const { queued, callOnly, lowest } = await this.queueView(
+      orgId,
+      before,
       nonces.currentNonce,
     );
     // executed already (1-of-1, retried report): settle under the same lock if the evidence can be read
     let evidence: NonceEvidence | null = null;
     if (tx.isExecuted) {
       evidence = await this.updater
-        .readEvidence(before.chain_id, before.safe_address, N)
+        .readEvidence(before.chain_id, before.safe_address, N, lowest ?? N)
         .catch(() => null);
     }
 
@@ -462,26 +463,33 @@ export class PayoutProposalsService {
   }
 
   /**
-   * Every queued tx (signed or not) from the Safe's current nonce on, for the
-   * stray check. Fails closed when it cannot be read whole.
+   * The stray-rule view (queued from the current nonce, executed from the
+   * run's lowest attempt nonce). Fails closed when it cannot be read whole.
    */
   private async queueView(
-    chainId: string,
-    safeAddress: Address,
+    orgId: string,
+    run: PayoutRunRow,
     currentNonce: number,
   ): Promise<{
     queued: Array<MultisigTransaction>;
     callOnly: ReadonlySet<string>;
+    lowest: bigint | null;
   }> {
+    const lowest = await this.tx.runInOrgTx(
+      (em) => lowestNonce(em, run),
+      orgId,
+    );
     try {
       const [view, callOnly] = await Promise.all([
-        this.updater.readQueued(chainId, safeAddress, {
-          nonceGte: currentNonce,
-          trusted: false,
-        }),
-        this.updater.callOnly(chainId),
+        this.updater.readStrayView(
+          run.chain_id,
+          getAddress(run.safe_address),
+          currentNonce,
+          lowest,
+        ),
+        this.updater.callOnly(run.chain_id),
       ]);
-      if (view.complete) return { queued: view.txs, callOnly };
+      if (view.complete) return { queued: view.txs, callOnly, lowest };
     } catch {
       // mapped below
     }

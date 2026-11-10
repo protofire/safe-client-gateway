@@ -66,8 +66,8 @@ export type NonceEvidence = {
   queued: Array<MultisigTransaction>;
   /** Taken before any read: evidence older than a run's `verifying_since` cannot roll it back. */
   readAt: Date;
-  /** Every queued tx (signed or not) from the current nonce on, for the stray rule; `complete` false = truncated. */
-  queueView: { txs: Array<MultisigTransaction>; complete: boolean };
+  /** Where copies of the run's calls could be: see {@link PayoutStatusUpdater.readStrayView}. */
+  strayView: StrayView;
   /** ERC20/native transfers of the tx executed at N, as far as they could be read. */
   transfers: Array<Transfer>;
   callOnly: ReadonlySet<string>;
@@ -75,6 +75,12 @@ export type NonceEvidence = {
 };
 
 const lower = (a: string): string => a.toLowerCase();
+
+/** Queued txs from the Safe's current nonce (unsigned included) + executed ones from the run's lowest nonce; `complete` false = a read was capped. */
+export type StrayView = {
+  txs: Array<MultisigTransaction>;
+  complete: boolean;
+};
 
 /**
  * Moves pinned payout runs along the canonical lifecycle once their nonce N
@@ -173,20 +179,27 @@ export class PayoutStatusUpdater
       chain_id: string;
       safe_address: string;
       pinned_nonce: string | null;
+      lowest: string | null;
     }> = await this.tx.runInOrgTx(
       (em) =>
         em.query(
-          `SELECT chain_id, safe_address::text AS safe_address, pinned_nonce::text AS pinned_nonce
-             FROM payout_runs WHERE org_id = $1 AND id = $2`,
+          `SELECT chain_id, safe_address::text AS safe_address, pinned_nonce::text AS pinned_nonce,
+                  (SELECT min(a.nonce)::text FROM payout_proposal_attempts a
+                    WHERE a.org_id = r.org_id AND a.run_id = r.id) AS lowest
+             FROM payout_runs r WHERE org_id = $1 AND id = $2`,
           [orgId, runId],
         ),
       orgId,
     );
     if (!peek || peek.pinned_nonce === null) return;
+    const pinned = BigInt(peek.pinned_nonce);
     const evidence = await this.readEvidence(
       peek.chain_id,
       peek.safe_address,
-      BigInt(peek.pinned_nonce),
+      pinned,
+      peek.lowest !== null && BigInt(peek.lowest) < pinned
+        ? BigInt(peek.lowest)
+        : pinned,
     );
     await this.tx.runInOrgTx(async (em) => {
       const run = await lockRun(em, orgId, runId);
@@ -200,6 +213,8 @@ export class PayoutStatusUpdater
     chainId: string,
     address: string,
     nonce: bigint,
+    /** The run's lowest attempt nonce (≤ N): executed copies are looked for from there. */
+    lowest: bigint = nonce,
   ): Promise<NonceEvidence> {
     const readAt = this.clock.now();
     const safeAddress = getAddress(address);
@@ -222,10 +237,12 @@ export class PayoutStatusUpdater
       }),
       this.readQueued(chainId, safeAddress, { nonce: nonce.toString() }),
     ]);
-    const queueView = await this.readQueued(chainId, safeAddress, {
-      nonceGte: currentNonce,
-      trusted: false,
-    });
+    const strayView = await this.readStrayView(
+      chainId,
+      safeAddress,
+      currentNonce,
+      lowest,
+    );
     const executed =
       executedPage.results.find(
         (t) =>
@@ -247,7 +264,7 @@ export class PayoutStatusUpdater
       // adoption on a capped read just sees fewer candidates
       queued: queued.txs.filter((t) => BigInt(t.nonce) === nonce),
       readAt,
-      queueView,
+      strayView,
       transfers,
       callOnly,
       trusted,
@@ -255,14 +272,51 @@ export class PayoutStatusUpdater
   }
 
   /**
-   * Queued txs of the Safe matching `filter` (trusted only unless `trusted: false`),
-   * paged up to a cap; `complete` is false when the cap cut the list short.
+   * The one view the stray rule reads at every decision point: queued txs
+   * from the Safe's current nonce (unsigned included) and executed txs from
+   * the run's lowest attempt nonce (null: no attempt yet, none needed).
+   */
+  async readStrayView(
+    chainId: string,
+    safeAddress: Address,
+    currentNonce: number | bigint,
+    lowest: bigint | null,
+  ): Promise<StrayView> {
+    const [queued, executed] = await Promise.all([
+      this.readQueued(chainId, safeAddress, {
+        nonceGte: Number(currentNonce),
+        trusted: false,
+      }),
+      lowest === null
+        ? { txs: [], complete: true }
+        : this.readQueued(chainId, safeAddress, {
+            nonceGte: Number(lowest),
+            trusted: false,
+            executed: true,
+          }),
+    ]);
+    return {
+      txs: [...queued.txs, ...executed.txs],
+      complete: queued.complete && executed.complete,
+    };
+  }
+
+  /**
+   * Txs of the Safe matching `filter` (queued unless `executed: true`; trusted
+   * only unless `trusted: false`), paged up to a cap; `complete` is false
+   * when the cap cut the list short.
    */
   async readQueued(
     chainId: string,
     safeAddress: Address,
-    filter: { nonce?: string; nonceGte?: number; trusted?: boolean },
+    filter: {
+      nonce?: string;
+      nonceGte?: number;
+      trusted?: boolean;
+      executed?: boolean;
+    },
   ): Promise<{ txs: Array<MultisigTransaction>; complete: boolean }> {
+    const executed = filter.executed ?? false;
     const out: Array<MultisigTransaction> = [];
     let complete = false;
     for (let page = 0; page < MAX_QUEUED_PAGES; page++) {
@@ -270,7 +324,7 @@ export class PayoutStatusUpdater
         chainId,
         safeAddress,
         ...filter,
-        executed: false,
+        executed,
         limit: QUEUED_PAGE,
         offset: out.length,
       });
@@ -282,7 +336,8 @@ export class PayoutStatusUpdater
     }
     return {
       txs: out.filter(
-        (t) => !t.isExecuted && lower(t.safe) === lower(safeAddress),
+        (t) =>
+          t.isExecuted === executed && lower(t.safe) === lower(safeAddress),
       ),
       complete,
     };
@@ -321,6 +376,19 @@ export class PayoutStatusUpdater
       const stale =
         run.verifying_since !== null && run.verifying_since > ev.readAt;
       if (run.status === 'verifying' && !stale) await this.unverify(em, run);
+      // periodic check of a proposed run: a copy elsewhere could pay besides N
+      if (run.status === 'proposed' && ev.strayView.complete) {
+        const stray = findStray(
+          ev.strayView.txs,
+          ev.nonce,
+          await knownCalls(em, run),
+          ev.callOnly,
+        );
+        if (stray) {
+          const items = await readItems(em, run.org_id, run.id);
+          await this.finish(em, run, strayReview(stray), null, items.length);
+        }
+      }
       return;
     }
     await this.settle(em, run, ev);
@@ -434,16 +502,15 @@ export class PayoutStatusUpdater
             .map((a) => lower(a.safe_tx_hash!))
         : [],
     );
-    // the stray rule of claim/report: no adoption while the run's calls are queued at another nonce
+    // the stray rule: no adoption while a copy may exist at another nonce
     if (
-      !consumed &&
-      (!ev.queueView.complete ||
-        findStray(
-          ev.queueView.txs,
-          ev.nonce,
-          await knownCalls(em, run),
-          ev.callOnly,
-        ))
+      !ev.strayView.complete ||
+      findStray(
+        ev.strayView.txs,
+        ev.nonce,
+        await knownCalls(em, run),
+        ev.callOnly,
+      )
     )
       return run;
     const executedAtN = ev.executed ? [ev.executed] : [];
@@ -524,18 +591,14 @@ export class PayoutStatusUpdater
             }
           : { status: 'verifying', ...(executedTxHash && { executedTxHash }) };
     }
-    if (outcome.status === 'executed') {
-      // a copy of the paid calls still queued later could pay a second time
+    if (FINAL_STATUSES.includes(outcome.status)) {
+      // the stray rule: a copy of the run's calls at another nonce could pay (again)
       const executedTxHash = outcome.executedTxHash;
-      const stray = ev.queueView.complete
-        ? findStray(
-            ev.queueView.txs,
-            null,
-            await knownCalls(em, run),
-            ev.callOnly,
-          )
+      const view = ev.strayView;
+      const stray = view.complete
+        ? findStray(view.txs, ev.nonce, await knownCalls(em, run), ev.callOnly)
         : undefined;
-      if (!ev.queueView.complete) {
+      if (!view.complete) {
         outcome =
           deadline !== null && now >= deadline
             ? {
@@ -549,12 +612,7 @@ export class PayoutStatusUpdater
               };
       } else if (stray) {
         outcome = {
-          status: 'needs_review',
-          review: {
-            reason: 'stray_proposal',
-            nonce: String(stray.nonce),
-            safeTxHash: stray.safeTxHash,
-          },
+          ...strayReview(stray),
           ...(executedTxHash && { executedTxHash }),
         };
       }
@@ -787,16 +845,50 @@ export async function knownCalls(
   ].map(fromStoredCalls);
 }
 
-/** A queued tx at another nonce than `nonce` (null: any) carrying one of `known`'s call lists. */
+/** A queued or executed tx at another nonce than `nonce` (null: any) carrying one of `known`'s call lists. */
 export function findStray(
-  queued: ReadonlyArray<MultisigTransaction>,
+  txs: ReadonlyArray<MultisigTransaction>,
   nonce: bigint | null,
   known: ReadonlyArray<ReadonlyArray<SafeCall>>,
   callOnly: ReadonlySet<string>,
 ): MultisigTransaction | undefined {
-  return queued.find(
+  return txs.find(
     (t) =>
       (nonce === null || BigInt(t.nonce) !== nonce) &&
+      // a copy that executed and reverted paid nothing
+      !(t.isExecuted && t.isSuccessful === false) &&
       known.some((calls) => callsMismatch(t, calls, callOnly) === null),
   );
+}
+
+/** Outcomes that end the watch; each passes the stray rule first. */
+const FINAL_STATUSES: ReadonlyArray<Settlement['status']> = [
+  'executed',
+  'failed',
+  'replaced',
+  'rejected',
+];
+
+const strayReview = (stray: MultisigTransaction): Settlement => ({
+  status: 'needs_review',
+  review: {
+    reason: 'stray_proposal',
+    nonce: String(stray.nonce),
+    safeTxHash: stray.safeTxHash,
+  },
+});
+
+/** The run's lowest attempt nonce (and its pin), from where executed copies are looked for; null: none yet. */
+export async function lowestNonce(
+  em: EntityManager,
+  run: Pick<PayoutRunRow, 'org_id' | 'id' | 'pinned_nonce'>,
+): Promise<bigint | null> {
+  const [{ lowest }]: Array<{ lowest: string | null }> = await em.query(
+    `SELECT min(nonce)::text AS lowest FROM payout_proposal_attempts WHERE org_id = $1 AND run_id = $2`,
+    [run.org_id, run.id],
+  );
+  const all = [lowest, run.pinned_nonce]
+    .filter((n): n is string => n !== null)
+    .map(BigInt);
+  return all.length === 0 ? null : all.reduce((a, b) => (a < b ? a : b));
 }
