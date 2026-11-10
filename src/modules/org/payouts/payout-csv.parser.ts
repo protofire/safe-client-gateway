@@ -72,26 +72,60 @@ export function parsePayoutCsv(text: string): {
       errors: [{ line: lines[MAX_PAYOUT_ROWS], reason: 'too_many_rows' }],
     };
   }
+  const cells: Array<PayoutRowCells> = [];
+  for (const { line, cells: c } of body) {
+    // e.g. an unquoted `1,000` would shift every later column
+    if (c.length > head.cells.length) {
+      errors.push({ line, reason: 'too_many_cells' });
+      continue;
+    }
+    const cell = (i: number): string => (i < 0 ? '' : (c[i] ?? ''));
+    cells.push({
+      line,
+      address: cell(iAddress),
+      amount: cell(iAmount),
+      token: cell(iToken),
+      name: cell(iName),
+    });
+  }
+  const checked = checkPayoutRows(cells);
+  errors.push(...checked.errors);
+  errors.sort((a, b) => a.line - b.line);
+  return { rows: checked.rows, errors };
+}
+
+export type PayoutRowCells = {
+  line: number;
+  address: string;
+  amount: string;
+  token: string;
+  name?: string;
+};
+
+/**
+ * Row checks shared by the CSV and the JSON body: same reasons, same
+ * normalisation (trimmed cells, lowercase addresses). Amounts are not parsed
+ * here (they need the token decimals).
+ */
+export function checkPayoutRows(input: ReadonlyArray<PayoutRowCells>): {
+  rows: Array<PayoutCsvRow>;
+  errors: Array<PayoutCsvError>;
+} {
   const rows: Array<PayoutCsvRow> = [];
+  const errors: Array<PayoutCsvError> = [];
   const tokens = new Set<string>();
-  for (const { line, cells } of body) {
-    const cell = (i: number): string => (i < 0 ? '' : (cells[i] ?? '').trim());
-    const address = cell(iAddress);
-    const amount = cell(iAmount);
-    const rawToken = cell(iToken);
-    const name = cell(iName);
+  for (const cells of input) {
+    const { line } = cells;
+    const address = cells.address.trim();
+    const amount = cells.amount.trim();
+    const rawToken = cells.token.trim();
+    const name = (cells.name ?? '').trim();
     const token =
       rawToken === '' || rawToken.toLowerCase() === 'native'
         ? 'native'
         : rawToken.toLowerCase();
     let reason: string | null = null;
-    if (cells.length > head.cells.length) {
-      // e.g. an unquoted `1,000` would shift every later column
-      reason = 'too_many_cells';
-    } else if (
-      !isStrictAddress(address) ||
-      address.toLowerCase() === zeroAddress
-    ) {
+    if (!isStrictAddress(address) || address.toLowerCase() === zeroAddress) {
       reason = 'invalid_address';
     } else if (amount === '') {
       reason = 'missing_amount';
@@ -120,6 +154,5 @@ export function parsePayoutCsv(text: string): {
       ...(name ? { name } : {}),
     });
   }
-  errors.sort((a, b) => a.line - b.line);
   return { rows, errors };
 }
