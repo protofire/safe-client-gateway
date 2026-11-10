@@ -69,6 +69,10 @@ export class PurgeProcessor implements OnApplicationBootstrap, OnModuleDestroy {
       ],
       ['sessions purge', (): Promise<unknown> => this.purgeDeadSessions()],
       ['log IP purge', (): Promise<unknown> => this.clearOldLogIps()],
+      [
+        'orphan snapshot purge',
+        (): Promise<unknown> => this.purgeOrphanSnapshots(),
+      ],
     ] as const) {
       try {
         await job();
@@ -129,6 +133,22 @@ export class PurgeProcessor implements OnApplicationBootstrap, OnModuleDestroy {
         changed += n;
       }
       return changed;
+    });
+  }
+
+  /**
+   * Snapshots of Safes no org links (item 8), e.g. left by an unlink whose
+   * delete raced a diff; a later link starts from the current state.
+   */
+  async purgeOrphanSnapshots(): Promise<number> {
+    return this.tx.runInOrgTx(async (em) => {
+      await em.query(`SET LOCAL statement_timeout = 0`);
+      const [, deleted]: [unknown, number] = await em.query(
+        `DELETE FROM linked_safe_snapshots s
+         WHERE NOT EXISTS (SELECT 1 FROM linked_safes l
+                           WHERE l.chain_id = s.chain_id AND l.address = s.address)`,
+      );
+      return deleted;
     });
   }
 

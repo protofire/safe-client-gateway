@@ -99,6 +99,7 @@ class TestProvidersModule {}
 const safeRepo = {
   isSafe: jest.fn(),
   getSafe: jest.fn(),
+  clearSafe: jest.fn(),
   getTransactionQueue: jest.fn(),
 };
 const balancesRepo = { getBalances: jest.fn(), getFiatCodes: jest.fn() };

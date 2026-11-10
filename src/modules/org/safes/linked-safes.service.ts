@@ -142,7 +142,8 @@ export class LinkedSafesService {
    * So the first on-chain change after linking has something to diff
    * against. Item 8: if no other org links the Safe, nobody diffed against
    * an existing row, so it may predate a gap: overwrite it with the state
-   * read under the per-Safe lock. Otherwise keep the other orgs' diff base.
+   * read under the per-Safe lock, past the tx-service cache. Otherwise keep
+   * the other orgs' diff base.
    */
   private async seedSnapshot(
     orgId: string,
@@ -152,13 +153,14 @@ export class LinkedSafesService {
     try {
       await this.tx.runInOrgTx(async (em) => {
         await lockSafe(em, chainId, address);
-        const snapshot = toSnapshot(
-          await this.safes.getSafe({ chainId, address }),
-        );
         const [{ others }]: Array<{ others: number }> = await em.query(
           `SELECT count(*)::int AS others FROM linked_safes
            WHERE chain_id = $1 AND address = $2 AND org_id <> $3`,
           [chainId, address, orgId],
+        );
+        if (others === 0) await this.safes.clearSafe({ chainId, address });
+        const snapshot = toSnapshot(
+          await this.safes.getSafe({ chainId, address }),
         );
         await (others === 0 ? overwriteSnapshot : seedSnapshotIfAbsent)(
           em,

@@ -366,6 +366,7 @@ describe('OrgEventsHandler', () => {
         {
           isSafe: jest.fn().mockResolvedValue(true),
           getSafe: safeRepo.getSafe,
+          clearSafe: safeRepo.clearSafe,
         } as never,
         allowLink,
         logger as never,
@@ -422,6 +423,7 @@ describe('OrgEventsHandler', () => {
         {
           isSafe: jest.fn().mockResolvedValue(true),
           getSafe: safeRepo.getSafe,
+          clearSafe: safeRepo.clearSafe,
         } as never,
         allowAll,
         logger as never,
@@ -481,6 +483,47 @@ describe('OrgEventsHandler', () => {
         { userId: userA },
       );
       expect(await snapshot()).toEqual([{ owners: [O1, O3] }]);
+    });
+
+    it('clears the cached Safe before reading the state it overwrites the snapshot with (round 2 item 8)', async () => {
+      await sql.query(`DELETE FROM linked_safes`);
+      await seedStale();
+      safeRepo.getSafe.mockResolvedValue(safeState({ owners: [O1, O3] }));
+      await service().link(
+        orgA,
+        { chainId: CHAIN, address: SAFE },
+        { userId: userA },
+      );
+      expect(safeRepo.clearSafe).toHaveBeenCalledWith({
+        chainId: CHAIN,
+        address: SAFE,
+      });
+      expect(safeRepo.clearSafe.mock.invocationCallOrder[0]).toBeLessThan(
+        safeRepo.getSafe.mock.invocationCallOrder[0],
+      );
+      expect(await snapshot()).toEqual([{ owners: [O1, O3] }]);
+    });
+
+    it('hourly purge deletes orphan snapshots no org links (round 2 item 8)', async () => {
+      // SAFE is linked by orgs A and B; OTHER by nobody
+      for (const address of [SAFE, OTHER]) {
+        await sql.transaction((em) =>
+          seedSnapshotIfAbsent(
+            em,
+            CHAIN,
+            address,
+            toSnapshot(safeState() as Safe),
+          ),
+        );
+      }
+      await new PurgeProcessor(
+        new OrgTransaction(sql),
+        systemClock,
+        logger as never,
+      ).run();
+      expect(
+        await sql.query(`SELECT address FROM linked_safe_snapshots`),
+      ).toEqual([{ address: SAFE }]);
     });
 
     it('keeps the snapshot other orgs diff against when one more org links', async () => {
