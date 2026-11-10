@@ -27,7 +27,7 @@ import { PayoutRunsService } from '@/modules/org/payouts/payout-runs.service';
 import {
   findStray,
   knownCalls,
-  lowestNonce,
+  firstAttemptAt,
   PayoutStatusUpdater,
   type NonceEvidence,
 } from '@/modules/org/payouts/payout-status.updater';
@@ -276,7 +276,7 @@ export class PayoutProposalsService {
       before.chain_id,
       getAddress(before.safe_address),
     );
-    const { queued, callOnly, lowest } = await this.queueView(
+    const { queued, callOnly, since } = await this.queueView(
       orgId,
       before,
       nonces.currentNonce,
@@ -285,7 +285,7 @@ export class PayoutProposalsService {
     let evidence: NonceEvidence | null = null;
     if (tx.isExecuted) {
       evidence = await this.updater
-        .readEvidence(before.chain_id, before.safe_address, N, lowest ?? N)
+        .readEvidence(before.chain_id, before.safe_address, N, since)
         .catch(() => null);
     }
 
@@ -464,7 +464,7 @@ export class PayoutProposalsService {
 
   /**
    * The stray-rule view (queued from the current nonce, executed from the
-   * run's lowest attempt nonce). Fails closed when it cannot be read whole.
+   * run's first attempt). Fails closed when it cannot be read whole.
    */
   private async queueView(
     orgId: string,
@@ -473,10 +473,10 @@ export class PayoutProposalsService {
   ): Promise<{
     queued: Array<MultisigTransaction>;
     callOnly: ReadonlySet<string>;
-    lowest: bigint | null;
+    since: Date | null;
   }> {
-    const lowest = await this.tx.runInOrgTx(
-      (em) => lowestNonce(em, run),
+    const since = await this.tx.runInOrgTx(
+      (em) => firstAttemptAt(em, run),
       orgId,
     );
     try {
@@ -485,11 +485,11 @@ export class PayoutProposalsService {
           run.chain_id,
           getAddress(run.safe_address),
           currentNonce,
-          lowest,
+          since,
         ),
         this.updater.callOnly(run.chain_id),
       ]);
-      if (view.complete) return { queued: view.txs, callOnly, lowest };
+      if (view.complete) return { queued: view.txs, callOnly, since };
     } catch {
       throw unavailable();
     }

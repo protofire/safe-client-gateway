@@ -50,6 +50,8 @@ const DELAY_NOTICE_MS = 10 * MINUTE;
 const DEADLINE_MS = 24 * 60 * MINUTE;
 const TRANSFER_PAGE = 100;
 const QUEUED_PAGE = 100;
+// tx-service execution dates vs our clock
+const STRAY_SKEW_MS = 10 * MINUTE;
 const MAX_QUEUED_PAGES = 5;
 const MAX_TRANSFER_PAGES = 10;
 const SAFE_CONCURRENCY = 5;
@@ -76,7 +78,7 @@ export type NonceEvidence = {
 
 const lower = (a: string): string => a.toLowerCase();
 
-/** Queued txs from the Safe's current nonce (unsigned included) + executed ones from the run's lowest nonce; `complete` false = a read was capped. */
+/** Queued txs from the Safe's current nonce (unsigned included) + executed ones since the run's first attempt; `complete` false = a read was capped. */
 export type StrayView = {
   txs: Array<MultisigTransaction>;
   complete: boolean;
@@ -179,27 +181,24 @@ export class PayoutStatusUpdater
       chain_id: string;
       safe_address: string;
       pinned_nonce: string | null;
-      lowest: string | null;
+      first_attempt_at: Date | null;
     }> = await this.tx.runInOrgTx(
       (em) =>
         em.query(
           `SELECT chain_id, safe_address::text AS safe_address, pinned_nonce::text AS pinned_nonce,
-                  (SELECT min(a.nonce)::text FROM payout_proposal_attempts a
-                    WHERE a.org_id = r.org_id AND a.run_id = r.id) AS lowest
+                  (SELECT min(a.created_at) FROM payout_proposal_attempts a
+                    WHERE a.org_id = r.org_id AND a.run_id = r.id) AS first_attempt_at
              FROM payout_runs r WHERE org_id = $1 AND id = $2`,
           [orgId, runId],
         ),
       orgId,
     );
     if (!peek || peek.pinned_nonce === null) return;
-    const pinned = BigInt(peek.pinned_nonce);
     const evidence = await this.readEvidence(
       peek.chain_id,
       peek.safe_address,
-      pinned,
-      peek.lowest !== null && BigInt(peek.lowest) < pinned
-        ? BigInt(peek.lowest)
-        : pinned,
+      BigInt(peek.pinned_nonce),
+      peek.first_attempt_at,
     );
     await this.tx.runInOrgTx(async (em) => {
       const run = await lockRun(em, orgId, runId);
@@ -213,8 +212,8 @@ export class PayoutStatusUpdater
     chainId: string,
     address: string,
     nonce: bigint,
-    /** The run's lowest attempt nonce (≤ N): executed copies are looked for from there. */
-    lowest: bigint = nonce,
+    /** The run's first attempt: executed copies are looked for since then. */
+    since: Date | null,
   ): Promise<NonceEvidence> {
     const readAt = this.clock.now();
     const safeAddress = getAddress(address);
@@ -241,7 +240,7 @@ export class PayoutStatusUpdater
       chainId,
       safeAddress,
       currentNonce,
-      lowest,
+      since,
     );
     const executed =
       executedPage.results.find(
@@ -274,23 +273,26 @@ export class PayoutStatusUpdater
   /**
    * The one view the stray rule reads at every decision point: queued txs
    * from the Safe's current nonce (unsigned included) and executed txs from
-   * the run's lowest attempt nonce (null: no attempt yet, none needed).
+   * the run's first attempt (minus a clock skew; null: no attempt yet, none
+   * needed). By time, not nonce: a copy may sit at a then-current nonce below N.
    */
   async readStrayView(
     chainId: string,
     safeAddress: Address,
     currentNonce: number | bigint,
-    lowest: bigint | null,
+    since: Date | null,
   ): Promise<StrayView> {
     const [queued, executed] = await Promise.all([
       this.readQueued(chainId, safeAddress, {
         nonceGte: Number(currentNonce),
         trusted: false,
       }),
-      lowest === null
+      since === null
         ? { txs: [], complete: true }
         : this.readQueued(chainId, safeAddress, {
-            nonceGte: Number(lowest),
+            executionDateGte: new Date(
+              since.getTime() - STRAY_SKEW_MS,
+            ).toISOString(),
             trusted: false,
             executed: true,
           }),
@@ -314,6 +316,7 @@ export class PayoutStatusUpdater
       nonceGte?: number;
       trusted?: boolean;
       executed?: boolean;
+      executionDateGte?: string;
     },
   ): Promise<{ txs: Array<MultisigTransaction>; complete: boolean }> {
     const executed = filter.executed ?? false;
@@ -385,6 +388,11 @@ export class PayoutStatusUpdater
           ev.callOnly,
         );
         if (stray) await this.warnStray(em, run, stray);
+        else if (run.review?.reason === 'stray_proposal')
+          await em.query(
+            `UPDATE payout_runs SET review = NULL, updated_at = now() WHERE org_id = $1 AND id = $2`,
+            [run.org_id, run.id],
+          );
       }
       return;
     }
@@ -858,25 +866,39 @@ function message(error: unknown): string {
 }
 
 /** The run's current calls and every attempt's calls: what a stray copy would carry. */
+/** What a copy of the run would carry, and the txs other runs of the org own (identical payouts are not copies). */
+export type KnownCalls = {
+  calls: Array<Array<SafeCall>>;
+  otherRuns: ReadonlySet<string>;
+};
+
 export async function knownCalls(
   em: EntityManager,
   run: Pick<PayoutRunRow, 'org_id' | 'id' | 'calls'>,
-): Promise<Array<Array<SafeCall>>> {
+): Promise<KnownCalls> {
   const attempts: Array<{ calls: Array<StoredCall> }> = await em.query(
     `SELECT calls FROM payout_proposal_attempts WHERE org_id = $1 AND run_id = $2`,
     [run.org_id, run.id],
   );
-  return [
-    ...(run.calls ? [run.calls] : []),
-    ...attempts.map((a) => a.calls),
-  ].map(fromStoredCalls);
+  const others: Array<{ safe_tx_hash: string }> = await em.query(
+    `SELECT safe_tx_hash FROM payout_runs
+      WHERE org_id = $1 AND id <> $2 AND safe_tx_hash IS NOT NULL`,
+    [run.org_id, run.id],
+  );
+  return {
+    calls: [
+      ...(run.calls ? [run.calls] : []),
+      ...attempts.map((a) => a.calls),
+    ].map(fromStoredCalls),
+    otherRuns: new Set(others.map((o) => lower(o.safe_tx_hash))),
+  };
 }
 
-/** A queued or executed tx at another nonce than `nonce` (null: any) carrying one of `known`'s call lists. */
+/** A queued or executed tx at another nonce than `nonce` (null: any) carrying one of the known call lists. */
 export function findStray(
   txs: ReadonlyArray<MultisigTransaction>,
   nonce: bigint | null,
-  known: ReadonlyArray<ReadonlyArray<SafeCall>>,
+  known: KnownCalls,
   callOnly: ReadonlySet<string>,
 ): MultisigTransaction | undefined {
   return txs.find(
@@ -884,7 +906,8 @@ export function findStray(
       (nonce === null || BigInt(t.nonce) !== nonce) &&
       // a copy that executed and reverted paid nothing
       !(t.isExecuted && t.isSuccessful === false) &&
-      known.some((calls) => callsMismatch(t, calls, callOnly) === null),
+      !known.otherRuns.has(lower(t.safeTxHash)) &&
+      known.calls.some((calls) => callsMismatch(t, calls, callOnly) === null),
   );
 }
 
@@ -905,17 +928,14 @@ const strayReview = (stray: MultisigTransaction): Settlement => ({
   },
 });
 
-/** The run's lowest attempt nonce (and its pin), from where executed copies are looked for; null: none yet. */
-export async function lowestNonce(
+/** When the run's first proposal attempt was claimed; null: none yet. */
+export async function firstAttemptAt(
   em: EntityManager,
-  run: Pick<PayoutRunRow, 'org_id' | 'id' | 'pinned_nonce'>,
-): Promise<bigint | null> {
-  const [{ lowest }]: Array<{ lowest: string | null }> = await em.query(
-    `SELECT min(nonce)::text AS lowest FROM payout_proposal_attempts WHERE org_id = $1 AND run_id = $2`,
+  run: Pick<PayoutRunRow, 'org_id' | 'id'>,
+): Promise<Date | null> {
+  const [{ first }]: Array<{ first: Date | null }> = await em.query(
+    `SELECT min(created_at) AS first FROM payout_proposal_attempts WHERE org_id = $1 AND run_id = $2`,
     [run.org_id, run.id],
   );
-  const all = [lowest, run.pinned_nonce]
-    .filter((n): n is string => n !== null)
-    .map(BigInt);
-  return all.length === 0 ? null : all.reduce((a, b) => (a < b ? a : b));
+  return first;
 }

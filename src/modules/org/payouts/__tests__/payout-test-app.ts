@@ -104,6 +104,7 @@ export class FakeChain {
         nonceGte?: number;
         executed?: boolean;
         trusted?: boolean;
+        executionDateGte?: string;
         limit?: number;
         offset?: number;
       }) => {
@@ -115,7 +116,10 @@ export class FakeChain {
               (args.nonceGte === undefined || t.nonce >= args.nonceGte) &&
               (args.executed === undefined || t.isExecuted === args.executed) &&
               // the gateway repository reads trusted txs unless told otherwise
-              (args.trusted === false || t.trusted),
+              (args.trusted === false || t.trusted) &&
+              (args.executionDateGte === undefined ||
+                (t.executionDate !== null &&
+                  t.executionDate >= new Date(args.executionDateGte))),
           )
           .sort((a, b) => b.nonce - a.nonce);
         const size = Math.min(args.limit ?? 20, this.txPageSize);
