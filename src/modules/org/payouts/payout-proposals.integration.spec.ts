@@ -603,6 +603,45 @@ describe('payout proposals API', () => {
       });
     });
 
+    it('rejects an untrusted tx with tx_mismatch field trusted', async () => {
+      const c = await claimed();
+      const tx = p.chain.propose(SAFE_A, 5, c.calls, { trusted: false });
+      const res = await p
+        .report(orgA, c.runId, member, {
+          attemptId: c.attemptId,
+          expectedVersion: c.version,
+          safeTxHash: tx.safeTxHash,
+        })
+        .expect(422);
+      expect(res.body).toMatchObject({ code: 'tx_mismatch', field: 'trusted' });
+      expect(await p.runRow(orgA, c.runId)).toMatchObject({
+        status: 'proposing',
+      });
+    });
+
+    it('rejects a tx whose returned fields do not hash to the reported safeTxHash', async () => {
+      const c = await claimed();
+      // the tx-service copy claims a hash its fields do not produce
+      const tx = p.chain.propose(SAFE_A, 5, c.calls, {
+        safeTxHash: `0x${'5a'.repeat(32)}`,
+      });
+      const res = await p
+        .report(orgA, c.runId, member, {
+          attemptId: c.attemptId,
+          expectedVersion: c.version,
+          safeTxHash: tx.safeTxHash,
+        })
+        .expect(422);
+      expect(res.body).toMatchObject({
+        code: 'tx_mismatch',
+        field: 'safeTxHash',
+      });
+      expect(p.chain.repo.getSafe).toHaveBeenCalledWith({
+        chainId: '1',
+        address: SAFE_A,
+      });
+    });
+
     it('answers 422 multisend_unknown when the outer target is not a MultiSendCallOnly', async () => {
       const c = await claimed();
       const tx = p.chain.propose(SAFE_A, 5, c.calls, { to: addr(0xbad) });

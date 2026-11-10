@@ -10,6 +10,7 @@ import {
 import type { EntityManager } from 'typeorm';
 import { getAddress, type Address } from 'viem';
 import { z } from 'zod';
+import { getSafeTxHash } from '@/domain/common/utils/safe';
 import { DataSourceError } from '@/domain/errors/data-source.error';
 import { ActivityLog } from '@/modules/org/activity/activity-log.service';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
@@ -38,6 +39,7 @@ import {
   type PayoutRunStatus,
 } from '@/modules/org/payouts/payout.schemas';
 import type { MultisigTransaction } from '@/modules/safe/domain/entities/multisig-transaction.entity';
+import type { Safe } from '@/modules/safe/domain/entities/safe.entity';
 import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
 
 const expectedVersion = z.number().int().min(1);
@@ -251,15 +253,23 @@ export class PayoutProposalsService {
     const N = BigInt(before.pinned_nonce!);
 
     let tx: MultisigTransaction;
+    let safe: Safe;
     try {
       await this.safes.clearMultisigTransaction({
         chainId: before.chain_id,
         safeTransactionHash: body.safeTxHash,
       });
-      tx = await this.safes.getMultiSigTransaction({
-        chainId: before.chain_id,
-        safeTransactionHash: body.safeTxHash,
-      });
+      [tx, safe] = await Promise.all([
+        this.safes.getMultiSigTransaction({
+          chainId: before.chain_id,
+          safeTransactionHash: body.safeTxHash,
+        }),
+        // the Safe version decides the EIP-712 hash the fields are checked against
+        this.safes.getSafe({
+          chainId: before.chain_id,
+          address: getAddress(before.safe_address),
+        }),
+      ]);
     } catch (error) {
       if (error instanceof DataSourceError && error.code === 404) {
         // not indexed yet (or unknown): retryable, the attempt stays open
@@ -344,6 +354,10 @@ export class PayoutProposalsService {
         if (late) throw proposalClosed();
         throw mismatch(result.code, result.field);
       }
+      // only an owner- or delegate-signed copy, whose fields really hash to what was reported
+      if (!tx.trusted) throw mismatch('tx_mismatch', 'trusted');
+      if (!hashesTo(run.chain_id, safe, tx, body.safeTxHash))
+        throw mismatch('tx_mismatch', 'safeTxHash');
       await assertNoStray(em, run, run.pinned_nonce!, queued, callOnly);
       const proposed = await this.updater.markProposed(
         em,
@@ -659,6 +673,24 @@ async function assertLinked(
       'safe_unlinked',
       'The Safe of this run is no longer linked to the organization',
     );
+  }
+}
+
+/** Whether the tx's own fields give `safeTxHash` (EIP-712, chainId, Safe address and version). */
+function hashesTo(
+  chainId: string,
+  safe: Safe,
+  tx: MultisigTransaction,
+  safeTxHash: string,
+): boolean {
+  try {
+    return (
+      getSafeTxHash({ chainId, transaction: tx, safe }).toLowerCase() ===
+      safeTxHash
+    );
+  } catch {
+    // no Safe version known: the hash cannot be checked, so it is not accepted
+    return false;
   }
 }
 

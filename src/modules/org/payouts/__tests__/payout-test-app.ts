@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import type request from 'supertest';
 import type { EntityManager } from 'typeorm';
 import { getAddress, zeroAddress, type Address, type Hex } from 'viem';
+import { getSafeTxHash } from '@/domain/common/utils/safe';
 import { DataSourceError } from '@/domain/errors/data-source.error';
 import { ITransactionApiManager } from '@/domain/interfaces/transaction-api.manager.interface';
 import { IBalancesRepository } from '@/modules/balances/domain/balances.repository.interface';
@@ -31,6 +32,7 @@ import type {
 import { erc20TransferBuilder } from '@/modules/safe/domain/entities/__tests__/erc20-transfer.builder';
 import { multisigTransactionBuilder } from '@/modules/safe/domain/entities/__tests__/multisig-transaction.builder';
 import type { MultisigTransaction } from '@/modules/safe/domain/entities/multisig-transaction.entity';
+import type { Safe } from '@/modules/safe/domain/entities/safe.entity';
 import type { Transfer } from '@/modules/safe/domain/entities/transfer.entity';
 import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
 
@@ -48,6 +50,15 @@ export const CALL_ONLY = getAddress(
   '0x40a2accbd92bca938b02010e17a5b8929b49130d',
 );
 export const HOUR = 3_600_000;
+export const SAFE_VERSION = '1.3.0';
+
+/** The EIP-712 safeTxHash of `tx` as the Safe contract computes it. */
+export const safeTxHashOf = (tx: MultisigTransaction): Hex =>
+  getSafeTxHash({
+    chainId: CHAIN,
+    transaction: tx,
+    safe: { address: tx.safe, version: SAFE_VERSION } as Safe,
+  });
 
 let hashSeq = 0;
 const hex32 = (prefix: string): Hex =>
@@ -158,6 +169,15 @@ export class FakeChain {
         });
       },
     ),
+    getSafe: jest.fn(
+      (args: { address: Address }): Promise<Safe> =>
+        this.notDeployed.has(args.address.toLowerCase())
+          ? Promise.reject(new DataSourceError('Not Found', 404))
+          : Promise.resolve({
+              address: args.address,
+              version: SAFE_VERSION,
+            } as Safe),
+    ),
     clearSafe: jest.fn().mockResolvedValue(undefined),
     clearMultisigTransactions: jest.fn().mockResolvedValue(undefined),
     clearMultisigTransaction: jest.fn().mockResolvedValue(undefined),
@@ -178,7 +198,7 @@ export class FakeChain {
     this.nonce.set(safe.toLowerCase(), nonce);
   }
 
-  /** A queued tx of the Safe carrying `calls` as the UI would build them. */
+  /** A queued tx of the Safe carrying `calls` as the UI would build them; its safeTxHash is the real one unless `over` sets it. */
   propose(
     safe: Address,
     nonce: number,
@@ -198,16 +218,18 @@ export class FakeChain {
         .with('gasPrice', '0')
         .with('gasToken', zeroAddress)
         .with('refundReceiver', zeroAddress)
-        .with('safeTxGas', 0)
+        // distinct per proposal: equal calls at one nonce still get distinct hashes
+        .with('safeTxGas', ++hashSeq)
+        .with('baseGas', 0)
         .with('trusted', true)
         .with('isExecuted', false)
         .with('isSuccessful', null)
         .with('executionDate', null)
         .with('transactionHash', null)
-        .with('safeTxHash', hex32('5a'))
         .build(),
       ...over,
     };
+    if (!over.safeTxHash) tx.safeTxHash = safeTxHashOf(tx);
     this.txs.push(tx);
     return tx;
   }
