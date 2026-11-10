@@ -53,6 +53,22 @@ export class PolicyContextService {
     orgId: string,
     safe: { chainId: string; address: Address },
   ): Promise<Array<CompiledPolicy>> {
+    return (await this.orgPolicies(em, orgId))
+      .filter((p) => inScope(p.scope, safe))
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        version: p.version,
+        configHash: p.configHash,
+        rules: p.rules,
+      }));
+  }
+
+  /** All active policies of the org with their scope, for callers that filter many Safes. */
+  async orgPolicies(
+    em: EntityManager,
+    orgId: string,
+  ): Promise<Array<CompiledPolicy & { scope: PolicyScope }>> {
     const rows: Array<{
       id: string;
       name: string;
@@ -69,16 +85,15 @@ export class PolicyContextService {
         ORDER BY p.created_at, p.id`,
       [orgId],
     );
-    return rows
-      .filter((r) => inScope(PolicyScopeSchema.parse(r.scope), safe))
-      .map((r) => ({
-        id: r.id,
-        name: r.name,
-        version: r.version,
-        configHash: r.config_hash,
-        // evaluate compares lowercase strings: always go through the schema
-        rules: StoredRulesSchema.parse(r.rules),
-      }));
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      version: r.version,
+      configHash: r.config_hash,
+      scope: PolicyScopeSchema.parse(r.scope),
+      // evaluate compares lowercase strings: always go through the schema
+      rules: StoredRulesSchema.parse(r.rules),
+    }));
   }
 
   /** `trustedMultiSend`: the result of {@link trustedMultiSend}, read before the transaction. */

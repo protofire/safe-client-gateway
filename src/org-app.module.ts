@@ -20,6 +20,7 @@ import { RequestScopedLoggingModule } from '@/logging/logging.module';
 import { OrgAccountModule } from '@/modules/org/account/account.module';
 import { ActivityModule } from '@/modules/org/activity/activity.module';
 import { AddressBookModule } from '@/modules/org/address-book/address-book.module';
+import { ControlsModule } from '@/modules/org/controls/controls.module';
 import { CsrfGuard } from '@/modules/org/auth/csrf.guard';
 import { ORG_KEY_PREFIX } from '@/modules/org/auth/nonce.store';
 import { OrgAuthModule } from '@/modules/org/auth/org-auth.module';
@@ -97,6 +98,7 @@ export class OrgAppModule implements NestModule {
         AddressBookModule,
         PoliciesModule,
         PayoutsModule,
+        ControlsModule,
         OrgJobsModule,
         OrgEventsModule,
       ],

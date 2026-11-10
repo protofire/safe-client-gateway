@@ -16,13 +16,13 @@ import {
 import { mapLimit } from '@/modules/org/safes/map-limit';
 import { readQueue } from '@/modules/org/safes/queue-reader';
 
-const CONCURRENCY = 5;
+export const CONCURRENCY = 5;
 /** Injectable so tests can shrink the per-Safe deadline. */
 export const OVERVIEW_SAFE_TIMEOUT_MS = 'OVERVIEW_SAFE_TIMEOUT_MS';
 // ponytail: fixed 8 s per Safe, not configurable; make it config if a chain needs more
-const DEFAULT_SAFE_TIMEOUT_MS = 8_000;
+export const DEFAULT_SAFE_TIMEOUT_MS = 8_000;
 
-function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+export function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error('Safe deadline exceeded')), ms);
