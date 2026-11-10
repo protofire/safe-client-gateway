@@ -28,6 +28,14 @@ export function limitExports(
 
 /** Upload limit for CSV imports (contacts, payout runs). */
 export const MAX_CSV_BYTES = 1024 * 1024;
+/** Multer limits of every CSV upload: one file and a few short text fields. */
+export const CSV_UPLOAD_LIMITS = {
+  fileSize: MAX_CSV_BYTES,
+  files: 1,
+  fields: 4,
+  fieldSize: 1024,
+  parts: 6,
+};
 
 export type CsvRecordError = {
   line: number;

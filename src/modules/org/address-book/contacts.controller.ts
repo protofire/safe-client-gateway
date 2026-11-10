@@ -36,7 +36,11 @@ import {
 import { ContactRequestsService } from '@/modules/org/address-book/contact-requests.service';
 import { ContactsService } from '@/modules/org/address-book/contacts.service';
 import { OrgSession, RequireStrongAuth } from '@/modules/org/auth/decorators';
-import { csvCast, limitExports, MAX_CSV_BYTES } from '@/modules/org/common/csv';
+import {
+  csvCast,
+  CSV_UPLOAD_LIMITS,
+  limitExports,
+} from '@/modules/org/common/csv';
 import { RateLimiter } from '@/modules/org/common/rate-limiter';
 import { actor, parse } from '@/modules/org/orgs/parse';
 import { RequirePermission } from '@/modules/org/permissions/require-permission.decorator';
@@ -146,9 +150,7 @@ export class ContactsController {
   @HttpCode(200)
   @RequirePermission('addressbook.write')
   @RequireStrongAuth()
-  @UseInterceptors(
-    FileInterceptor('file', { limits: { fileSize: MAX_CSV_BYTES, files: 1 } }),
-  )
+  @UseInterceptors(FileInterceptor('file', { limits: CSV_UPLOAD_LIMITS }))
   import(
     @Req() req: Request,
     @Param('orgId') orgId: string,

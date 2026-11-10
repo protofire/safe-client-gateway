@@ -30,12 +30,24 @@ describe('parsePayoutCsv', () => {
     });
   });
 
-  it('maps empty token and "native" to native', () => {
+  it('maps "native" to native and rejects an empty token cell as invalid_token', () => {
     const { rows, errors } = parsePayoutCsv(
       `address,amount,token\n${A},1,\n${A},2,NATIVE\n${A},3, native `,
     );
-    expect(errors).toEqual([]);
-    expect(rows.map((r) => r.token)).toEqual(['native', 'native', 'native']);
+    expect(errors).toEqual([{ line: 2, reason: 'invalid_token' }]);
+    expect(rows.map((r) => r.token)).toEqual(['native', 'native']);
+  });
+
+  it('rejects an unquoted thousands separator that shifts the token column, and short rows', () => {
+    // `1,000` meant one thousand: the empty last cell must not become native
+    const { rows, errors } = parsePayoutCsv(
+      `address,amount,name,token\n${A},1,000,\n${A},1\n${A},1,Bob,native`,
+    );
+    expect(errors).toEqual([
+      { line: 2, reason: 'invalid_token' },
+      { line: 3, reason: 'wrong_cell_count' },
+    ]);
+    expect(rows.map((r) => r.line)).toEqual([4]);
   });
 
   it('reports the line number of a row with a missing amount', () => {
@@ -44,7 +56,7 @@ describe('parsePayoutCsv', () => {
     );
     expect(errors).toEqual([
       { line: 3, reason: 'missing_amount' },
-      { line: 4, reason: 'missing_amount' },
+      { line: 4, reason: 'wrong_cell_count' },
     ]);
     expect(rows.map((r) => r.line)).toEqual([2]);
   });
