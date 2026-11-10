@@ -7,6 +7,22 @@ const LowerAddressSchema = z
   .string()
   .refine((v) => isAddress(v, { strict: false }), 'Invalid address')
   .transform((v) => v.toLowerCase() as Address);
+/** Rejects an array element whose key repeats an earlier one (after lowercasing), at its index. */
+function unique<T>(key: (x: T) => string, what: string) {
+  return (items: Array<T>, ctx: z.RefinementCtx): void => {
+    const seen = new Set<string>();
+    items.forEach((item, i) => {
+      const k = key(item);
+      if (seen.has(k))
+        ctx.addIssue({
+          code: 'custom',
+          message: `Duplicate ${what}`,
+          path: [i],
+        });
+      seen.add(k);
+    });
+  };
+}
 const SelectorSchema = z
   .string()
   .regex(/^0x[0-9a-fA-F]{8}$/)
@@ -26,12 +42,17 @@ export const CallAllowlistRuleSchema = z.object({
         target: LowerAddressSchema,
         selectors: z.union([
           z.literal('any'),
-          z.array(SelectorSchema).min(1).max(200),
+          z
+            .array(SelectorSchema)
+            .min(1)
+            .max(200)
+            .superRefine(unique((s) => s, 'selector')),
         ]),
       }),
     )
     .min(1)
-    .max(200),
+    .max(200)
+    .superRefine(unique((e) => `${e.chainId}:${e.target}`, 'call entry')),
 });
 
 export const AmountCapRuleSchema = z.object({
@@ -49,7 +70,8 @@ export const AmountCapRuleSchema = z.object({
       }),
     )
     .min(1)
-    .max(50),
+    .max(50)
+    .superRefine(unique((c) => `${c.chainId}:${c.token}`, 'cap')),
 });
 
 export const NoDelegatecallRuleSchema = z.object({
@@ -66,8 +88,12 @@ export const PolicyRuleSchema = z.discriminatedUnion('kind', [
 export const PolicyScopeSchema = z.object({
   safes: z
     .array(z.object({ chainId: ChainIdSchema, address: LowerAddressSchema }))
-    .max(200),
-  chainIds: z.array(ChainIdSchema).max(200),
+    .max(200)
+    .superRefine(unique((s) => `${s.chainId}:${s.address}`, 'Safe')),
+  chainIds: z
+    .array(ChainIdSchema)
+    .max(200)
+    .superRefine(unique((c) => c, 'chain')),
 });
 
 export type PolicyRule = z.infer<typeof PolicyRuleSchema>;

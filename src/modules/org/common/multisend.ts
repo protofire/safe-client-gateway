@@ -98,7 +98,11 @@ export function walkCalls(
   return { calls, issues };
 }
 
-/** All plain calls of a Safe transaction, or why it cannot be fully decoded. */
+/**
+ * All plain calls of a Safe transaction, or why it cannot be fully decoded.
+ * An empty `multiSend(0x)` decodes to zero calls (`ok: true, calls: []`);
+ * B7 must treat zero calls as undecodable, since nothing in it can match a run.
+ */
 export function flattenCalls(
   tx: SafeCall,
   trustedMultiSend: ReadonlySet<string>,

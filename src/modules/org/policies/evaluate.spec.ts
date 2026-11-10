@@ -270,21 +270,12 @@ describe('evaluate', () => {
   });
 
   it('matches a cap on a checksummed token address', () => {
-    // stored lowercase, tx target checksummed; and a checksummed stored token still matches
+    // caps are stored lowercase (schema); the tx target is checksummed
     expect(
       rulesOf(
         evaluate(
           [policy(cap('per_transfer', '1'))],
           erc20('transfer', ALLOWED, 2n, getAddress(USDC)),
-          ctx,
-        ),
-      ),
-    ).toEqual([['amount_cap', '']]);
-    expect(
-      rulesOf(
-        evaluate(
-          [policy(cap('per_transfer', '1', USDC))],
-          erc20('transfer', ALLOWED, 2n, USDC.toLowerCase() as Address),
           ctx,
         ),
       ),
@@ -301,18 +292,49 @@ describe('evaluate', () => {
     });
     expect(
       rulesOf(evaluate([policy(cap('per_transaction', '100'))], tx, ctx)),
-    ).toEqual([['amount_cap', '']]);
+    ).toEqual([
+      ['amount_cap', '0'],
+      ['amount_cap', '1'],
+    ]);
     expect(rulesOf(evaluate([policy(cap('both', '100'))], tx, ctx))).toEqual([
-      ['amount_cap', ''],
+      ['amount_cap', '0'],
+      ['amount_cap', '1'],
     ]);
     const big = ms([erc20('transfer', ALLOWED, 150n)]);
     expect(
       rulesOf(evaluate([policy(cap('per_transfer', '100'))], big, ctx)),
     ).toEqual([['amount_cap', '0']]);
     expect(rulesOf(evaluate([policy(cap('both', '100'))], big, ctx))).toEqual([
-      ['amount_cap', ''],
+      ['amount_cap', '0'],
       ['amount_cap', '0'],
     ]);
+  });
+
+  it('reports a per_transaction cap once per contributing call, naming the total', () => {
+    const tx = ms([
+      erc20('transfer', ALLOWED, 60n),
+      send(ALLOWED, 1n),
+      erc20('transfer', ALLOWED, 0n),
+      erc20('approve', ALLOWED, 500n),
+      erc20('transfer', ALLOWED, 60n),
+    ]);
+    const r = evaluate([policy(cap('per_transaction', '100'))], tx, ctx);
+    expect(
+      r.status === 'violation' &&
+        r.violations.map((v) => [v.callPath, v.to, v.detail]),
+    ).toEqual([
+      ['0', USDC, expect.stringContaining('total 120')],
+      ['4', USDC, expect.stringContaining('total 120')],
+    ]);
+    expect(
+      rulesOf(
+        evaluate(
+          [policy(cap('per_transaction', '1', 'native'))],
+          send(ALLOWED, 2n),
+          ctx,
+        ),
+      ),
+    ).toEqual([['amount_cap', '']]);
   });
 
   it('sums native value across calls per transaction', () => {
@@ -321,7 +343,10 @@ describe('evaluate', () => {
       rulesOf(
         evaluate([policy(cap('per_transaction', '100', 'native'))], tx, ctx),
       ),
-    ).toEqual([['amount_cap', '']]);
+    ).toEqual([
+      ['amount_cap', '0'],
+      ['amount_cap', '1'],
+    ]);
   });
 
   it('treats an approve or increaseAllowance spender as a recipient and its amount as capped', () => {
@@ -377,7 +402,11 @@ describe('evaluate', () => {
           target: USDC.toLowerCase() as Address,
           selectors: ['0xa9059cbb'],
         },
-        { chainId: '1', target: OTHER, selectors: 'any' },
+        {
+          chainId: '1',
+          target: OTHER.toLowerCase() as Address,
+          selectors: 'any',
+        },
       ],
     };
     const tx = ms([

@@ -112,14 +112,13 @@ function checkRule(
     case 'call_allowlist': {
       const entries = rule.entries.filter((e) => e.chainId === ctx.chainId);
       for (const c of calls) {
-        if (c.data === '0x' || c.data.length <= 2) continue;
+        if (c.data.length <= 2) continue;
         const target = c.to.toLowerCase();
         const selector = c.data.slice(0, 10).toLowerCase();
         const allowed = entries.some(
           (e) =>
-            e.target.toLowerCase() === target &&
-            (e.selectors === 'any' ||
-              e.selectors.some((s) => s.toLowerCase() === selector)),
+            e.target === target &&
+            (e.selectors === 'any' || e.selectors.some((s) => s === selector)),
         );
         if (!allowed)
           out.push({
@@ -134,23 +133,32 @@ function checkRule(
     case 'amount_cap': {
       const caps = rule.caps.filter((cap) => cap.chainId === ctx.chainId);
       const capsOf = (token: string): typeof caps =>
-        caps.filter((cap) => cap.token.toLowerCase() === token);
+        caps.filter((cap) => cap.token === token);
       if (rule.capMode !== 'per_transfer') {
         // an allowance is not spent yet, so only transfers count towards the total
-        const totals = new Map<string, bigint>();
+        const totals = new Map<
+          string,
+          { total: bigint; from: Array<Analysed> }
+        >();
         for (const c of calls)
-          for (const p of c.payments)
-            if (!p.allowance)
-              totals.set(p.token, (totals.get(p.token) ?? 0n) + p.amount);
-        for (const [token, total] of totals)
+          for (const p of c.payments) {
+            if (p.allowance || p.amount === 0n) continue;
+            const t = totals.get(p.token) ?? { total: 0n, from: [] };
+            t.total += p.amount;
+            if (!t.from.includes(c)) t.from.push(c);
+            totals.set(p.token, t);
+          }
+        // one violation per contributing call, so a payout item maps to its own warning
+        for (const [token, { total, from }] of totals)
           for (const cap of capsOf(token))
             if (total > BigInt(cap.maxRaw))
-              out.push({
-                rule: rule.kind,
-                callPath: '',
-                to: tx.to,
-                detail: `total ${total} of ${token} exceeds the per-transaction cap ${cap.maxRaw}`,
-              });
+              for (const c of from)
+                out.push({
+                  rule: rule.kind,
+                  callPath: c.callPath,
+                  to: c.to,
+                  detail: `total ${total} of ${token} in this transaction exceeds the per-transaction cap ${cap.maxRaw}`,
+                });
       }
       if (rule.capMode !== 'per_transaction')
         for (const c of calls)

@@ -48,6 +48,10 @@ describe('unpackMultiSend', () => {
     expect(
       unpackMultiSend(multiSendData(pack([erc20]).slice(0, -2) as Hex)),
     ).toBeNull();
+    // a 60-byte entry: shorter than the 85-byte header
+    expect(
+      unpackMultiSend(multiSendData(pack([native]).slice(0, 2 + 120) as Hex)),
+    ).toBeNull();
     // fewer bytes than one entry header
     expect(
       unpackMultiSend(multiSendData(pack([native]).slice(0, 40) as Hex)),

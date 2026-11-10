@@ -64,4 +64,88 @@ describe('PolicyRuleSchema', () => {
       }).success,
     ).toBe(true);
   });
+
+  it('rejects duplicates, with the path of the repeated element', () => {
+    const lower = USDC.toLowerCase();
+    const cap = {
+      chainId: '1',
+      token: USDC,
+      maxRaw: '1',
+      decimals: 6,
+      symbol: 'USDC',
+    };
+    const issuePaths = (
+      schema: {
+        safeParse: (v: unknown) => {
+          success: boolean;
+          error?: { issues: Array<{ path: Array<PropertyKey> }> };
+        };
+      },
+      v: unknown,
+    ): Array<Array<PropertyKey>> => {
+      const r = schema.safeParse(v);
+      expect(r.success).toBe(false);
+      return r.error!.issues.map((i) => i.path);
+    };
+    expect(
+      issuePaths(PolicyRuleSchema, {
+        kind: 'call_allowlist',
+        entries: [
+          {
+            chainId: '1',
+            target: USDC,
+            selectors: ['0xA9059CBB', '0xa9059cbb'],
+          },
+        ],
+      }),
+    ).toEqual([['entries', 0, 'selectors', 1]]);
+    expect(
+      issuePaths(PolicyRuleSchema, {
+        kind: 'call_allowlist',
+        entries: [
+          { chainId: '1', target: USDC, selectors: 'any' },
+          { chainId: '10', target: USDC, selectors: 'any' },
+          { chainId: '1', target: lower, selectors: ['0xa9059cbb'] },
+        ],
+      }),
+    ).toEqual([['entries', 2]]);
+    expect(
+      issuePaths(PolicyRuleSchema, {
+        kind: 'amount_cap',
+        capMode: 'both',
+        caps: [cap, { ...cap, token: lower, maxRaw: '2' }],
+      }),
+    ).toEqual([['caps', 1]]);
+    expect(
+      issuePaths(PolicyRuleSchema, {
+        kind: 'amount_cap',
+        capMode: 'both',
+        caps: [
+          { ...cap, token: 'native' },
+          { ...cap, token: 'native' },
+        ],
+      }),
+    ).toEqual([['caps', 1]]);
+    expect(
+      issuePaths(PolicyScopeSchema, {
+        safes: [
+          { chainId: '1', address: USDC },
+          { chainId: '1', address: lower },
+        ],
+        chainIds: ['1', '10', '1'],
+      }),
+    ).toEqual([
+      ['safes', 1],
+      ['chainIds', 2],
+    ]);
+    expect(
+      PolicyScopeSchema.safeParse({
+        safes: [
+          { chainId: '1', address: USDC },
+          { chainId: '10', address: USDC },
+        ],
+        chainIds: ['1', '10'],
+      }).success,
+    ).toBe(true);
+  });
 });
