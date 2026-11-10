@@ -1237,4 +1237,55 @@ describe('payout runs API', () => {
       .expect(400);
     expect(await runCount(orgA)).toBe(0);
   });
+
+  it('keeps the stored evaluation and its policy warnings once the run left draft, even after a policy change', async () => {
+    const cap = (maxRaw: string): Array<object> => [
+      {
+        kind: 'amount_cap',
+        capMode: 'per_transfer',
+        caps: [
+          {
+            chainId: '1',
+            token: USDC.toLowerCase(),
+            maxRaw,
+            decimals: 6,
+            symbol: 'USDC',
+          },
+        ],
+      },
+    ];
+    await addPolicy(orgA, cap('1000000000'));
+    const { run } = await createRun();
+    const built = await write(
+      'post',
+      `${orgA}/payout-runs/${run.id}/build`,
+      member,
+      { expectedVersion: 1 },
+    ).expect(200);
+    const stored = built.body.run.evaluation;
+    expect(stored.status).toBe('violation');
+    await setRun(
+      orgA,
+      run.id,
+      `status = 'executed', executed_tx_hash = '0x${'cd'.repeat(32)}'`,
+    );
+    // the policy no longer flags the run; the executed run keeps what it was built with
+    await asOrg(orgA, (em) => em.query(`DELETE FROM policies`));
+    await addPolicy(orgA, cap('5000000000'));
+    const res = await get(`${orgA}/payout-runs/${run.id}`, member).expect(200);
+    expect(res.body.run.evaluation).toEqual(stored);
+    expect((res.body as PayoutRunDetail).items.map((i) => i.warnings)).toEqual([
+      ['unknown_recipient'],
+      ['unknown_recipient', 'policy'],
+    ]);
+    // back in an editable status it follows the current policies again
+    await setRun(orgA, run.id, `status = 'failed'`);
+    const failed = await get(`${orgA}/payout-runs/${run.id}`, member).expect(
+      200,
+    );
+    expect(failed.body.run.evaluation).toEqual({ status: 'ok' });
+    expect(
+      (failed.body as PayoutRunDetail).items.map((i) => i.warnings),
+    ).toEqual([['unknown_recipient'], ['unknown_recipient']]);
+  });
 });

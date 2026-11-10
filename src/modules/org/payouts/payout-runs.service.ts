@@ -750,9 +750,13 @@ export class PayoutRunsService {
     const rows = await readItems(em, orgId, runId);
 
     const calls = r.calls ? fromStoredCalls(r.calls) : itemCalls(rows);
-    const evaluation = await this.evaluateCalls(em, r, calls);
+    // editable runs follow the current policies; once a run left draft it keeps
+    // the evaluation it was built (or claimed) with
+    const evaluation = EDITABLE_STATUSES.includes(r.status)
+      ? await this.evaluateCalls(em, r, calls)
+      : r.evaluation;
     const flagged = new Set<number>();
-    if (evaluation.status === 'violation') {
+    if (evaluation?.status === 'violation') {
       for (const v of evaluation.violations) {
         const index = itemIndex(v.callPath, calls.length);
         if (index !== null) flagged.add(index);
@@ -777,7 +781,7 @@ export class PayoutRunsService {
         calls: r.calls,
         estimatedGas: r.est_gas === null ? null : Number(r.est_gas),
         gasBound: Number(PAYOUT_GAS_BOUND),
-        evaluation: r.calls ? evaluation : null,
+        evaluation: r.calls ? (evaluation ?? null) : null,
         safeTxHash: r.safe_tx_hash,
         nonce: r.nonce,
         executedTxHash: r.executed_tx_hash,
