@@ -6,6 +6,7 @@ import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import { OrgEventsConsumer } from '@/modules/org/events/org-events.consumer';
 import { OrgEventsHandler } from '@/modules/org/events/org-events.handler';
 import { OrgEventsReconciler } from '@/modules/org/events/org-events.reconciler';
+import { PayoutsModule } from '@/modules/org/payouts/payouts.module';
 import { PoliciesModule } from '@/modules/org/policies/policies.module';
 
 @Module({
@@ -14,6 +15,7 @@ import { PoliciesModule } from '@/modules/org/policies/policies.module';
     BalancesModule,
     SafeRepositoryModule,
     PoliciesModule,
+    PayoutsModule,
   ],
   providers: [
     OrgTransaction,

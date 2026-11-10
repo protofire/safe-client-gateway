@@ -16,6 +16,7 @@ import {
   toSnapshot,
   type Snapshot,
 } from '@/modules/org/events/safe-snapshot';
+import { PayoutStatusUpdater } from '@/modules/org/payouts/payout-status.updater';
 import { PolicyScanner } from '@/modules/org/policies/policy-scanner';
 import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
 
@@ -51,6 +52,7 @@ export class OrgEventsHandler {
     private readonly activityLog: ActivityLog,
     @Inject(LoggingService) private readonly logger: ILoggingService,
     @Optional() private readonly scanner?: PolicyScanner,
+    @Optional() private readonly payouts?: PayoutStatusUpdater,
   ) {}
 
   /** Throws on infrastructure failures (cache, node, DB): the consumer decides to retry. */
@@ -77,6 +79,7 @@ export class OrgEventsHandler {
         : [];
     if (orgIds.length === 0) {
       await this.invalidate(e);
+      this.settlePayouts(e);
       return;
     }
     if (isConfigCandidate || isSeedOnly) {
@@ -94,6 +97,23 @@ export class OrgEventsHandler {
         (e as { safeTxHash: string }).safeTxHash,
       );
     }
+    this.settlePayouts(e);
+  }
+
+  /** Payout runs pinned on any Safe (linked or not, unlinked runs still settle); returns at once when none watches it. */
+  private settlePayouts(e: TxEvent): void {
+    if (e.type !== TransactionEventType.EXECUTED_MULTISIG_TRANSACTION) return;
+    const safeTxHash = (e as { safeTxHash: string }).safeTxHash;
+    this.payouts
+      ?.onExecuted(e.chainId, e.address, safeTxHash)
+      .catch((error: unknown) =>
+        this.logger.warn({
+          type: 'org_events_payout_settle_failed',
+          chainId: e.chainId,
+          address: e.address,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
   }
 
   /**

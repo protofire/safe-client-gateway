@@ -641,8 +641,8 @@ export class PayoutRunsService {
     );
   }
 
-  /** Policy check of the transaction the UI will build, from the current policies; DB only, not logged. */
-  private async evaluateCalls(
+  /** Policy check of the transaction the UI will build, from the current policies; DB only, not logged. Also used by the claim (B8). */
+  async evaluateCalls(
     em: EntityManager,
     run: PayoutRunRow,
     calls: ReadonlyArray<SafeCall>,

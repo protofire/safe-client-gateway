@@ -104,6 +104,7 @@ export interface ITransactionApi {
     limit?: number;
     offset?: number;
     to?: Address;
+    transactionHash?: string;
   }): Promise<Raw<Page<Transfer>>>;
 
   clearTransfers(safeAddress: Address): Promise<void>;

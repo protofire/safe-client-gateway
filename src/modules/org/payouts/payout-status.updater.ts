@@ -1,0 +1,623 @@
+import {
+  Inject,
+  Injectable,
+  type OnApplicationBootstrap,
+  type OnModuleDestroy,
+} from '@nestjs/common';
+import { InjectDataSource } from '@nestjs/typeorm';
+import type { DataSource, EntityManager } from 'typeorm';
+import { getAddress, type Address } from 'viem';
+import { ILoggingService, LoggingService } from '@/logging/logging.interface';
+import { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
+import { ActivityLog } from '@/modules/org/activity/activity-log.service';
+import { Clock, type IClock } from '@/modules/org/common/clock';
+import type { SafeCall } from '@/modules/org/common/multisend';
+import { ORG_DATA_SOURCE } from '@/modules/org/db/org-data-source';
+import { OrgTransaction } from '@/modules/org/db/org-transaction';
+import { lockSafe } from '@/modules/org/events/safe-snapshot';
+import type { Actor } from '@/modules/org/orgs/parse';
+import { PolicyContextService } from '@/modules/org/policies/policy-context.service';
+import {
+  fromStoredCalls,
+  lockRun,
+  readItems,
+  type PayoutRunRow,
+} from '@/modules/org/payouts/payout-runs.service';
+import {
+  settlementOutcome,
+  type Settlement,
+} from '@/modules/org/payouts/payout-settlement';
+import {
+  callsEqual,
+  multiSendCallOnlySet,
+  verifyProposedTx,
+} from '@/modules/org/payouts/payout-verify';
+import type {
+  PayoutRunStatus,
+  StoredCall,
+} from '@/modules/org/payouts/payout.schemas';
+import { mapLimit } from '@/modules/org/safes/map-limit';
+import type { MultisigTransaction } from '@/modules/safe/domain/entities/multisig-transaction.entity';
+import type { Transfer } from '@/modules/safe/domain/entities/transfer.entity';
+import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
+
+const MINUTE = 60_000;
+const INTERVAL_MS = 2 * MINUTE;
+const BOOT_DELAY_MS = MINUTE;
+const DELAY_NOTICE_MS = 10 * MINUTE;
+const DEADLINE_MS = 24 * 60 * MINUTE;
+const TRANSFER_PAGE = 100;
+const MAX_TRANSFER_PAGES = 10;
+const SAFE_CONCURRENCY = 5;
+// two-int4 advisory key space: never collides with the per-Safe bigint locks
+const RUN_LOCK = [0x6f7267, 3] as const;
+
+/** What the tx-service says about the pinned nonce N; read before any transaction (HTTP). */
+export type NonceEvidence = {
+  nonce: bigint;
+  currentNonce: bigint;
+  /** Every tx the tx-service lists at N, executed and queued. */
+  atNonce: Array<MultisigTransaction>;
+  /** ERC20/native transfers of the tx executed at N, as far as they could be read. */
+  transfers: Array<Transfer>;
+  callOnly: ReadonlySet<string>;
+  trusted: ReadonlySet<string>;
+};
+
+const lower = (a: string): string => a.toLowerCase();
+
+/**
+ * Moves pinned payout runs along the canonical lifecycle once their nonce N
+ * is used on-chain (or a matching proposal at N shows up): adoption, then
+ * B7 `settlementOutcome`. Every 2 min (lock `[0x6f7267, 3]`) and right after
+ * an executed-transaction event. Each run is handled in its own transaction:
+ * run row lock, then the Safe lock — the order claims use too.
+ */
+@Injectable()
+export class PayoutStatusUpdater
+  implements OnApplicationBootstrap, OnModuleDestroy
+{
+  private timer: NodeJS.Timeout | undefined;
+  private bootTimer: NodeJS.Timeout | undefined;
+
+  constructor(
+    @InjectDataSource(ORG_DATA_SOURCE) private readonly db: DataSource,
+    private readonly tx: OrgTransaction,
+    private readonly log: ActivityLog,
+    private readonly policies: PolicyContextService,
+    @Inject(ISafeRepository) private readonly safes: ISafeRepository,
+    @Inject(IChainsRepository) private readonly chains: IChainsRepository,
+    @Inject(Clock) private readonly clock: IClock,
+    @Inject(LoggingService) private readonly logger: ILoggingService,
+  ) {}
+
+  onApplicationBootstrap(): void {
+    const run = (): void => {
+      this.run().catch((error: unknown) =>
+        this.logger.error(`payout status run failed: ${message(error)}`),
+      );
+    };
+    this.bootTimer = setTimeout(run, BOOT_DELAY_MS);
+    this.bootTimer.unref();
+    this.timer = setInterval(run, INTERVAL_MS);
+    this.timer.unref();
+  }
+
+  onModuleDestroy(): void {
+    clearTimeout(this.bootTimer);
+    clearInterval(this.timer);
+  }
+
+  /** Returns the number of watched runs, or null if another replica holds the run lock. */
+  async run(): Promise<number | null> {
+    const runner = this.db.createQueryRunner();
+    await runner.connect();
+    try {
+      const [{ locked }]: Array<{ locked: boolean }> = await runner.query(
+        `SELECT pg_try_advisory_lock($1, $2) AS locked`,
+        [...RUN_LOCK],
+      );
+      if (!locked) return null;
+      try {
+        // payout_watch has no RLS on purpose: cross-org fan-out
+        const rows: Array<{ run_id: string; org_id: string; safe: string }> =
+          await runner.query(
+            `SELECT run_id, org_id, chain_id || ':' || safe_address AS safe FROM payout_watch`,
+          );
+        const bySafe = new Map<string, typeof rows>();
+        for (const r of rows)
+          bySafe.set(r.safe, [...(bySafe.get(r.safe) ?? []), r]);
+        await mapLimit([...bySafe.values()], SAFE_CONCURRENCY, async (runs) => {
+          for (const r of runs) await this.handleSafely(r.org_id, r.run_id);
+        });
+        return rows.length;
+      } finally {
+        await runner.query(`SELECT pg_advisory_unlock($1, $2)`, [...RUN_LOCK]);
+      }
+    } finally {
+      await runner.release();
+    }
+  }
+
+  /** Executed-transaction event of any Safe, linked or not: handles the runs watching it. */
+  async onExecuted(
+    chainId: string,
+    safeAddress: string,
+    safeTxHash: string,
+  ): Promise<void> {
+    const rows: Array<{ run_id: string; org_id: string }> =
+      await this.tx.runInOrgTx((em) =>
+        em.query(
+          `SELECT run_id, org_id FROM payout_watch WHERE chain_id = $1 AND safe_address = $2`,
+          [chainId, lower(safeAddress)],
+        ),
+      );
+    for (const r of rows) {
+      await this.handleSafely(r.org_id, r.run_id, safeTxHash);
+    }
+  }
+
+  /** One run: evidence read without a DB connection, then applied under the locks. */
+  async handle(orgId: string, runId: string): Promise<void> {
+    const [peek]: Array<{
+      chain_id: string;
+      safe_address: string;
+      pinned_nonce: string | null;
+    }> = await this.tx.runInOrgTx(
+      (em) =>
+        em.query(
+          `SELECT chain_id, safe_address::text AS safe_address, pinned_nonce::text AS pinned_nonce
+             FROM payout_runs WHERE org_id = $1 AND id = $2`,
+          [orgId, runId],
+        ),
+      orgId,
+    );
+    if (!peek || peek.pinned_nonce === null) return;
+    const evidence = await this.readEvidence(
+      peek.chain_id,
+      peek.safe_address,
+      BigInt(peek.pinned_nonce),
+    );
+    await this.tx.runInOrgTx(async (em) => {
+      const run = await lockRun(em, orgId, runId);
+      await lockSafe(em, run.chain_id, run.safe_address);
+      await this.apply(em, run, evidence);
+    }, orgId);
+  }
+
+  /** HTTP only: nonces, the txs at N, the transfers of the one executed at N, MultiSend sets. */
+  async readEvidence(
+    chainId: string,
+    address: string,
+    nonce: bigint,
+  ): Promise<NonceEvidence> {
+    const safeAddress = getAddress(address);
+    await Promise.all([
+      this.safes.clearSafe({ chainId, address: safeAddress }),
+      this.safes.clearMultisigTransactions({ chainId, safeAddress }),
+      this.safes.clearTransfers({ chainId, safeAddress }),
+    ]);
+    const { currentNonce } = await this.safes.getNonces({
+      chainId,
+      safeAddress,
+    });
+    const page = await this.safes.getMultisigTransactions({
+      chainId,
+      safeAddress,
+      nonce: nonce.toString(),
+      limit: 100,
+    });
+    const atNonce = page.results.filter(
+      (t) => BigInt(t.nonce) === nonce && lower(t.safe) === lower(safeAddress),
+    );
+    const executed = atNonce.find((t) => t.isExecuted);
+    const [transfers, callOnly, trusted] = await Promise.all([
+      executed?.transactionHash
+        ? this.readTransfers(chainId, safeAddress, executed.transactionHash)
+        : [],
+      this.callOnly(chainId),
+      this.policies.trustedMultiSend(chainId),
+    ]);
+    return {
+      nonce,
+      currentNonce: BigInt(currentNonce),
+      atNonce,
+      transfers,
+      callOnly,
+      trusted,
+    };
+  }
+
+  async callOnly(chainId: string): Promise<ReadonlySet<string>> {
+    const chain = await this.chains.getChain(chainId);
+    return multiSendCallOnlySet(
+      chainId,
+      chain.contractAddresses.multiSendCallOnlyAddress ?? undefined,
+    );
+  }
+
+  /**
+   * Under the run row lock and the Safe lock, with evidence read for the
+   * run's current pin: adoption for a pinned draft or proposing run, then
+   * either the reorg check (N unused) or settlement (N used).
+   */
+  async apply(
+    em: EntityManager,
+    locked: PayoutRunRow,
+    ev: NonceEvidence,
+  ): Promise<void> {
+    if (
+      locked.pinned_nonce === null ||
+      BigInt(locked.pinned_nonce) !== ev.nonce
+    )
+      return; // the pin changed after the read: the next pass reads again
+    let run = locked;
+    const consumed = ev.currentNonce > ev.nonce;
+    if (run.status === 'draft' || run.status === 'proposing') {
+      run = await this.adopt(em, run, ev, consumed);
+    }
+    if (!consumed) {
+      if (run.status === 'verifying') await this.unverify(em, run);
+      return;
+    }
+    await this.settle(em, run, ev);
+  }
+
+  /** Report accepted (report route or adoption): attempt reported, run proposed. */
+  async markProposed(
+    em: EntityManager,
+    run: PayoutRunRow,
+    attemptId: string,
+    safeTxHash: string,
+    actor?: Actor,
+  ): Promise<PayoutRunRow> {
+    await em.query(
+      `UPDATE payout_proposal_attempts
+          SET status = 'reported', safe_tx_hash = $3, reported_at = now(), updated_at = now()
+        WHERE org_id = $1 AND id = $2`,
+      [run.org_id, attemptId, safeTxHash],
+    );
+    await em.query(
+      `UPDATE payout_runs
+          SET status = 'proposed', safe_tx_hash = $3, nonce = pinned_nonce,
+              version = version + 1, updated_at = now()
+        WHERE org_id = $1 AND id = $2`,
+      [run.org_id, run.id, safeTxHash],
+    );
+    await this.event(
+      em,
+      run,
+      'payout_run.proposed',
+      { name: run.name, safeTxHash, nonce: run.pinned_nonce },
+      actor,
+    );
+    return lockRun(em, run.org_id, run.id);
+  }
+
+  // ---- helpers ----
+
+  private async handleSafely(
+    orgId: string,
+    runId: string,
+    safeTxHash?: string,
+  ): Promise<void> {
+    try {
+      await this.handle(orgId, runId);
+    } catch (error) {
+      this.logger.warn({
+        type: 'payout_status_run_failed',
+        orgId,
+        runId,
+        safeTxHash,
+        error: message(error),
+      });
+    }
+  }
+
+  /** Pages of the executed tx's transfers; a failed or capped read just yields less evidence. */
+  private async readTransfers(
+    chainId: string,
+    safeAddress: Address,
+    transactionHash: string,
+  ): Promise<Array<Transfer>> {
+    const out: Array<Transfer> = [];
+    for (let page = 0; page < MAX_TRANSFER_PAGES; page++) {
+      try {
+        const { results, next } = await this.safes.getTransfers({
+          chainId,
+          safeAddress,
+          transactionHash,
+          limit: TRANSFER_PAGE,
+          // by what came back: the server may cap the page below `limit`
+          offset: out.length,
+        });
+        out.push(...results);
+        if (next === null || results.length === 0) break;
+      } catch (error) {
+        this.logger.warn({
+          type: 'payout_transfers_read_failed',
+          chainId,
+          safeAddress,
+          error: message(error),
+        });
+        break;
+      }
+    }
+    // the server filter is not trusted
+    return out.filter(
+      (t) => lower(t.transactionHash) === lower(transactionHash),
+    );
+  }
+
+  /**
+   * A matching tx at N (passes `verifyProposedTx` against the current calls)
+   * is treated like a report. Hashes of the run's released attempts are
+   * skipped (no release/adopt loop); once N is used only the executed tx counts.
+   */
+  private async adopt(
+    em: EntityManager,
+    run: PayoutRunRow,
+    ev: NonceEvidence,
+    consumed: boolean,
+  ): Promise<PayoutRunRow> {
+    if (run.calls === null) return run;
+    const calls = fromStoredCalls(run.calls);
+    const attempts = await this.attempts(em, run);
+    const skip = new Set(
+      attempts
+        .filter((a) => a.status === 'released' && a.safe_tx_hash !== null)
+        .map((a) => lower(a.safe_tx_hash!)),
+    );
+    const match = ev.atNonce.find(
+      (t) =>
+        t.isExecuted === consumed &&
+        !skip.has(lower(t.safeTxHash)) &&
+        verifyProposedTx(
+          t,
+          { safeAddress: getAddress(run.safe_address), nonce: ev.nonce, calls },
+          ev.callOnly,
+        ).ok,
+    );
+    if (!match) return run;
+    const taken: Array<unknown> = await em.query(
+      `SELECT 1 FROM payout_runs WHERE org_id = $1 AND safe_tx_hash = $2 AND id <> $3`,
+      [run.org_id, lower(match.safeTxHash), run.id],
+    );
+    if (taken.length > 0) return run;
+    // proposing: its open attempt; a pinned draft: a released, never reported attempt at N with these calls
+    const attempt =
+      run.status === 'proposing'
+        ? attempts.find((a) => a.status === 'open')
+        : attempts.find(
+            (a) =>
+              a.status === 'released' &&
+              a.safe_tx_hash === null &&
+              BigInt(a.nonce) === ev.nonce &&
+              sameCalls(fromStoredCalls(a.calls), calls),
+          );
+    if (!attempt) return run;
+    return this.markProposed(em, run, attempt.id, lower(match.safeTxHash));
+  }
+
+  private async settle(
+    em: EntityManager,
+    run: PayoutRunRow,
+    ev: NonceEvidence,
+  ): Promise<void> {
+    const items = await readItems(em, run.org_id, run.id);
+    const attempts = (await this.attempts(em, run)).filter(
+      (a) => BigInt(a.nonce) === ev.nonce,
+    );
+    const executed = ev.atNonce.find((t) => t.isExecuted) ?? null;
+    const now = this.clock.now();
+    const outcome = settlementOutcome({
+      run: {
+        chainId: run.chain_id,
+        safeAddress: getAddress(run.safe_address),
+        calls: run.calls ? fromStoredCalls(run.calls) : null,
+        items: items.map((i) => ({
+          line: i.line_no,
+          recipient: getAddress(i.recipient),
+          token: i.token === 'native' ? 'native' : getAddress(i.token),
+          amountRaw: BigInt(i.amount_raw),
+        })),
+      },
+      attemptCalls: attempts.map((a) => fromStoredCalls(a.calls)),
+      executedAtNonce: executed,
+      transfers: ev.transfers,
+      trusted: ev.trusted,
+      callOnly: ev.callOnly,
+      now,
+      deadline: run.verifying_since
+        ? new Date(run.verifying_since.getTime() + DEADLINE_MS)
+        : null,
+    });
+    if (outcome.status === 'pending') return;
+    if (outcome.status === 'verifying')
+      return this.markVerifying(em, run, outcome, now);
+    await this.finish(em, run, outcome, executed!, items.length);
+  }
+
+  private async markVerifying(
+    em: EntityManager,
+    run: PayoutRunRow,
+    outcome: Settlement,
+    now: Date,
+  ): Promise<void> {
+    const since = run.verifying_since ?? now;
+    const notify =
+      run.delay_notified_at === null &&
+      now.getTime() - since.getTime() >= DELAY_NOTICE_MS;
+    const executedTxHash = outcome.executedTxHash ?? null;
+    if (
+      run.status === 'verifying' &&
+      !notify &&
+      run.executed_tx_hash === executedTxHash
+    )
+      return;
+    // `verifying` only moves forward; entering it is a status change (version + 1)
+    await em.query(
+      `UPDATE payout_runs
+          SET status = 'verifying', verifying_since = $3, executed_tx_hash = $4,
+              delay_notified_at = CASE WHEN $5::boolean THEN $6::timestamptz ELSE delay_notified_at END,
+              version = version + CASE WHEN status = 'verifying' THEN 0 ELSE 1 END,
+              updated_at = now()
+        WHERE org_id = $1 AND id = $2`,
+      [run.org_id, run.id, since, executedTxHash, notify, now],
+    );
+    if (notify) {
+      await this.event(em, run, 'payout_run.verification_delayed', {
+        name: run.name,
+        safeTxHash: run.safe_tx_hash,
+        executedTxHash,
+      });
+    }
+  }
+
+  /** Reorged out (Safe nonce back to ≤ N): back where it was before N was used. */
+  private async unverify(em: EntityManager, run: PayoutRunRow): Promise<void> {
+    await em.query(
+      `UPDATE payout_runs
+          SET status = $3, verifying_since = NULL, delay_notified_at = NULL,
+              executed_tx_hash = NULL, version = version + 1, updated_at = now()
+        WHERE org_id = $1 AND id = $2`,
+      [run.org_id, run.id, await this.restingStatus(em, run)],
+    );
+  }
+
+  /** The status a pinned run has while N is unused: proposed (reported tx), proposing (open attempt) or draft. */
+  private async restingStatus(
+    em: EntityManager,
+    run: PayoutRunRow,
+  ): Promise<PayoutRunStatus> {
+    if (run.status !== 'verifying') return run.status;
+    if (run.safe_tx_hash !== null) return 'proposed';
+    const attempts = await this.attempts(em, run);
+    return attempts.some((a) => a.status === 'open') ? 'proposing' : 'draft';
+  }
+
+  /** A final outcome: pin cleared, open attempt released (`nonce_used`), watch row gone, `payout_run.settled`. */
+  private async finish(
+    em: EntityManager,
+    run: PayoutRunRow,
+    outcome: Settlement,
+    executed: MultisigTransaction,
+    itemCount: number,
+  ): Promise<void> {
+    if (
+      outcome.status === 'replaced' &&
+      (await this.restingStatus(em, run)) === 'draft'
+    ) {
+      // a pinned draft N went to an unrelated tx: it only loses its pin
+      await em.query(
+        `UPDATE payout_runs
+            SET status = 'draft', pinned_nonce = NULL, verifying_since = NULL,
+                delay_notified_at = NULL, executed_tx_hash = NULL,
+                version = version + 1, updated_at = now()
+          WHERE org_id = $1 AND id = $2`,
+        [run.org_id, run.id],
+      );
+      await this.unwatch(em, run);
+      return;
+    }
+    const ownTx = outcome.status === 'executed' || outcome.status === 'failed';
+    const safeTxHash =
+      run.safe_tx_hash ?? (ownTx ? lower(executed.safeTxHash) : null);
+    await em.query(
+      `UPDATE payout_runs
+          SET status = $3, executed_tx_hash = $4, review = $5::jsonb, safe_tx_hash = $6,
+              nonce = pinned_nonce, pinned_nonce = NULL, version = version + 1, updated_at = now()
+        WHERE org_id = $1 AND id = $2`,
+      [
+        run.org_id,
+        run.id,
+        outcome.status,
+        outcome.executedTxHash ?? null,
+        outcome.review ? JSON.stringify(outcome.review) : null,
+        safeTxHash,
+      ],
+    );
+    // UPDATE … RETURNING gives [rows, rowCount] in TypeORM's pg driver
+    const [released]: [Array<{ id: string; nonce: string }>, number] =
+      await em.query(
+        `UPDATE payout_proposal_attempts
+          SET status = 'released', release_reason = 'nonce_used', released_at = now(), updated_at = now()
+        WHERE org_id = $1 AND run_id = $2 AND status = 'open'
+        RETURNING id, nonce::text AS nonce`,
+        [run.org_id, run.id],
+      );
+    for (const a of released) {
+      await this.event(em, run, 'payout_run.proposal_released', {
+        name: run.name,
+        attemptId: a.id,
+        nonce: a.nonce,
+        reason: 'nonce_used',
+      });
+    }
+    await this.unwatch(em, run);
+    await this.event(em, run, 'payout_run.settled', {
+      name: run.name,
+      status: outcome.status,
+      safeTxHash,
+      ...(outcome.executedTxHash && { executedTxHash: outcome.executedTxHash }),
+      items: itemCount,
+      ...(outcome.review && { review: outcome.review }),
+    });
+  }
+
+  private unwatch(em: EntityManager, run: PayoutRunRow): Promise<unknown> {
+    return em.query(`DELETE FROM payout_watch WHERE run_id = $1`, [run.id]);
+  }
+
+  private attempts(
+    em: EntityManager,
+    run: PayoutRunRow,
+  ): Promise<
+    Array<{
+      id: string;
+      status: 'open' | 'reported' | 'released';
+      nonce: string;
+      calls: Array<StoredCall>;
+      safe_tx_hash: string | null;
+    }>
+  > {
+    return em.query(
+      `SELECT id, status, nonce::text AS nonce, calls, safe_tx_hash
+         FROM payout_proposal_attempts WHERE org_id = $1 AND run_id = $2
+        ORDER BY created_at DESC, id DESC`,
+      [run.org_id, run.id],
+    );
+  }
+
+  private event(
+    em: EntityManager,
+    run: PayoutRunRow,
+    type:
+      | 'payout_run.proposed'
+      | 'payout_run.proposal_released'
+      | 'payout_run.verification_delayed'
+      | 'payout_run.settled',
+    payload: Record<string, unknown>,
+    actor?: Actor,
+  ): Promise<void> {
+    return this.log.record(em, {
+      orgId: run.org_id,
+      actorUserId: actor?.userId ?? null,
+      type,
+      targetType: 'payout_run',
+      targetId: run.id,
+      payload,
+      ip: actor?.ip,
+      userAgent: actor?.userAgent,
+    });
+  }
+}
+
+const sameCalls = (
+  a: ReadonlyArray<SafeCall>,
+  b: ReadonlyArray<SafeCall>,
+): boolean => a.length === b.length && a.every((c, i) => callsEqual(c, b[i]));
+
+function message(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

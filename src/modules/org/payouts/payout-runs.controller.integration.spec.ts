@@ -37,8 +37,12 @@ import {
 } from '@/modules/org/db/__tests__/org-test-db';
 import { ORG_DATA_SOURCE } from '@/modules/org/db/org-data-source';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
+import { CsvService } from '@/modules/csv-export/csv-utils/csv.service';
+import { PayoutProposalsService } from '@/modules/org/payouts/payout-proposals.service';
 import { PayoutRunsController } from '@/modules/org/payouts/payout-runs.controller';
 import { PayoutRunsService } from '@/modules/org/payouts/payout-runs.service';
+import { PayoutStatusUpdater } from '@/modules/org/payouts/payout-status.updater';
+import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
 import type { PayoutRunDetail } from '@/modules/org/payouts/payout.schemas';
 import { PermissionsModule } from '@/modules/org/permissions/permissions.module';
 import { PolicyContextService } from '@/modules/org/policies/policy-context.service';
@@ -307,6 +311,11 @@ describe('payout runs API', () => {
         ActivityLog,
         FieldEncryptionService,
         PayoutRunsService,
+        // the B8 routes share the controller; this spec does not reach them
+        PayoutProposalsService,
+        PayoutStatusUpdater,
+        CsvService,
+        { provide: ISafeRepository, useValue: {} },
         PolicyContextService,
         { provide: IChainsRepository, useValue: chainsRepo },
         { provide: ITransactionApiManager, useValue: txApiManager },
@@ -322,6 +331,7 @@ describe('payout runs API', () => {
     app = moduleRef.createNestApplication<NestExpressApplication>();
     configureOrgApp(app);
     await listenForTests(app);
+    app.get(PayoutStatusUpdater).onModuleDestroy();
     sql = moduleRef.get<DataSource>(getDataSourceToken(ORG_DATA_SOURCE), {
       strict: false,
     });

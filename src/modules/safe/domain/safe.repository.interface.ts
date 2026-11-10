@@ -174,6 +174,8 @@ export interface ISafeRepository {
     chainId: string;
     safeAddress: Address;
     limit?: number;
+    offset?: number;
+    transactionHash?: string;
   }): Promise<Page<Transfer>>;
 
   getSafesByOwner(args: {

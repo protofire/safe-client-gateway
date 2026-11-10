@@ -520,6 +520,8 @@ export class SafeRepository implements ISafeRepository {
     chainId: string;
     safeAddress: Address;
     limit?: number | undefined;
+    offset?: number;
+    transactionHash?: string;
   }): Promise<Page<Transfer>> {
     const transactionService = await this.transactionApiManager.getApi(
       args.chainId,
