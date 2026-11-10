@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import type { EntityManager } from 'typeorm';
 import type { Address } from 'viem';
 import { ILoggingService, LoggingService } from '@/logging/logging.interface';
@@ -16,6 +16,7 @@ import {
   toSnapshot,
   type Snapshot,
 } from '@/modules/org/events/safe-snapshot';
+import { PolicyScanner } from '@/modules/org/policies/policy-scanner';
 import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
 
 type TxEvent = Extract<Event, { address: string; chainId: string }>;
@@ -49,6 +50,7 @@ export class OrgEventsHandler {
     private readonly tx: OrgTransaction,
     private readonly activityLog: ActivityLog,
     @Inject(LoggingService) private readonly logger: ILoggingService,
+    @Optional() private readonly scanner?: PolicyScanner,
   ) {}
 
   /** Throws on infrastructure failures (cache, node, DB): the consumer decides to retry. */
@@ -75,6 +77,14 @@ export class OrgEventsHandler {
     await this.tx.runInOrgTx((em) =>
       this.process(em, e, orgIds, isConfigCandidate),
     );
+    // after commit; failed executions are resolved by the scanner's pass recheck
+    if (e.type !== TransactionEventType.MODULE_TRANSACTION) {
+      this.scanner?.enqueue(
+        e.chainId,
+        e.address,
+        (e as { safeTxHash: string }).safeTxHash,
+      );
+    }
   }
 
   /**

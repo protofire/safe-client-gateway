@@ -7,8 +7,6 @@ import {
 import type { Address } from 'viem';
 import { IBalancesRepository } from '@/modules/balances/domain/balances.repository.interface';
 import { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
-import type { MultisigTransaction } from '@/modules/safe/domain/entities/multisig-transaction.entity';
-import type { Safe } from '@/modules/safe/domain/entities/safe.entity';
 import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
 import { sumDecimals } from '@/modules/org/safes/decimal';
 import {
@@ -16,6 +14,7 @@ import {
   type LinkedSafeRow,
 } from '@/modules/org/safes/linked-safes.service';
 import { mapLimit } from '@/modules/org/safes/map-limit';
+import { readQueue } from '@/modules/org/safes/queue-reader';
 
 const CONCURRENCY = 5;
 /** Injectable so tests can shrink the per-Safe deadline. */
@@ -30,7 +29,6 @@ function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
   });
   return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
 }
-const QUEUE_PAGE_SIZE = 20;
 /** A11: at most this many queued transactions are read per Safe. */
 export const MAX_QUEUED_PER_SAFE = 100;
 
@@ -179,7 +177,13 @@ export class OverviewService {
           excludeSpam: true,
         }),
       ),
-      this.walkQueue(row.chainId, safe),
+      readQueue(this.safes, row.chainId, safe, {
+        offset: 0,
+        max: MAX_QUEUED_PER_SAFE,
+      }).then(({ queued, nextOffset }) => ({
+        queued,
+        queueTruncated: nextOffset !== null,
+      })),
     ]);
 
     const myOwnerAddresses = safe.owners.filter((o) =>
@@ -217,26 +221,5 @@ export class OverviewService {
       queueTruncated,
       awaiting,
     };
-  }
-
-  private async walkQueue(
-    chainId: string,
-    safe: Safe,
-  ): Promise<{ queued: Array<MultisigTransaction>; queueTruncated: boolean }> {
-    const queued: Array<MultisigTransaction> = [];
-    let queueTruncated = false;
-    for (let offset = 0; queued.length < MAX_QUEUED_PER_SAFE; ) {
-      const page = await this.safes.getTransactionQueue({
-        chainId,
-        safe,
-        limit: QUEUE_PAGE_SIZE,
-        offset,
-      });
-      queued.push(...page.results);
-      offset += QUEUE_PAGE_SIZE;
-      if (page.next === null || page.results.length === 0) break;
-      if (queued.length >= MAX_QUEUED_PER_SAFE) queueTruncated = true;
-    }
-    return { queued, queueTruncated };
   }
 }

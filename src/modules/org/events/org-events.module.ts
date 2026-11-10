@@ -6,9 +6,15 @@ import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import { OrgEventsConsumer } from '@/modules/org/events/org-events.consumer';
 import { OrgEventsHandler } from '@/modules/org/events/org-events.handler';
 import { OrgEventsReconciler } from '@/modules/org/events/org-events.reconciler';
+import { PoliciesModule } from '@/modules/org/policies/policies.module';
 
 @Module({
-  imports: [ActivityModule, BalancesModule, SafeRepositoryModule],
+  imports: [
+    ActivityModule,
+    BalancesModule,
+    SafeRepositoryModule,
+    PoliciesModule,
+  ],
   providers: [
     OrgTransaction,
     OrgEventsHandler,
