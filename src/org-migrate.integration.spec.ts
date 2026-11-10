@@ -108,6 +108,35 @@ describe('org migrations entry (org-migrate)', () => {
     ).resolves.toBeDefined();
   });
 
+  it('applies migrations and the restricted grants in one transaction: no committed table ever has the default DML', async () => {
+    const other = await createOrgTestDb();
+    const ds = other.owner();
+    try {
+      await ds.initialize();
+      // the grant step fails (unknown role): the migrations must roll back with it
+      await expect(
+        runOrgMigrations(ds, 'no_such_app_role'),
+      ).rejects.toThrow(/does not exist/);
+      const [{ n }] = await ds.query(
+        `SELECT count(*)::int AS n FROM information_schema.tables WHERE table_schema = 'public'`,
+      );
+      expect(n).toBe(0);
+
+      expect((await runOrgMigrations(ds, other.appUser)).length).toBeGreaterThan(
+        0,
+      );
+      const [grants] = await ds.query(
+        `SELECT has_table_privilege($1, 'payout_proposal_attempts', 'DELETE') AS del,
+                has_column_privilege($1, 'payout_proposal_attempts', 'calls', 'UPDATE') AS upd`,
+        [other.appUser],
+      );
+      expect(grants).toEqual({ del: false, upd: false });
+    } finally {
+      if (ds.isInitialized) await ds.destroy();
+      await other.drop();
+    }
+  });
+
   it('fails before migrating when the migrator does not own schema public', async () => {
     const other = await createOrgTestDb({ ownsPublicSchema: false });
     const ds = other.owner();
