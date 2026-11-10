@@ -45,10 +45,14 @@ export function reorgMarginMs(chainId: string): number {
   return (REORG_MARGIN_MIN[chainId] ?? 5) * MINUTE;
 }
 
+/** A tx-service integer string as bigint; null if it is not a plain non-negative integer. */
+export const toRaw = (s: string): bigint | null =>
+  /^\d+$/.test(s) ? BigInt(s) : null;
+
 const normData = (data: Hex | null): string => (data ?? '0x').toLowerCase();
 const sameAddress = (a: string | null, b: string): boolean =>
   a !== null && a.toLowerCase() === b.toLowerCase();
-const isZeroAddress = (a: string | null): boolean =>
+export const isZeroAddress = (a: string | null): boolean =>
   a === null || sameAddress(a, zeroAddress);
 
 /** Same call after normalising `to` case, `data` case and null data. */
@@ -81,7 +85,8 @@ export function callsMismatch(
     code: 'tx_mismatch',
     field,
   });
-  const value = BigInt(tx.value);
+  const value = toRaw(tx.value);
+  if (value === null) return mismatch('value');
   if (calls.length === 1) {
     if (tx.operation !== Operation.CALL) return mismatch('operation');
     const diff = firstDifference({ to: tx.to, value, data: tx.data }, calls[0]);
@@ -116,10 +121,13 @@ export function verifyProposedTx(
     field,
   });
   if (!sameAddress(tx.safe, run.safeAddress)) return mismatch('safe');
-  if (BigInt(tx.nonce) !== run.nonce) return mismatch('nonce');
-  if (tx.gasPrice !== null && BigInt(tx.gasPrice) !== 0n)
+  if (!Number.isSafeInteger(tx.nonce) || BigInt(tx.nonce) !== run.nonce)
+    return mismatch('nonce');
+  if (tx.gasPrice !== null && toRaw(tx.gasPrice) !== 0n)
     return mismatch('gasPrice');
   if (!isZeroAddress(tx.gasToken)) return mismatch('gasToken');
   if (!isZeroAddress(tx.refundReceiver)) return mismatch('refundReceiver');
+  // safeTxGas > 0 lets an inner failure execute (consuming N) instead of reverting
+  if (tx.safeTxGas !== null && tx.safeTxGas !== 0) return mismatch('safeTxGas');
   return callsMismatch(tx, run.calls, callOnly) ?? { ok: true };
 }

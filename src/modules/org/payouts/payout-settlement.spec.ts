@@ -8,6 +8,7 @@ import {
 } from 'viem';
 import { multisigTransactionBuilder } from '@/modules/safe/domain/entities/__tests__/multisig-transaction.builder';
 import { erc20TransferBuilder } from '@/modules/safe/domain/entities/__tests__/erc20-transfer.builder';
+import { nativeTokenTransferBuilder } from '@/modules/safe/domain/entities/__tests__/native-token-transfer.builder';
 import type { MultisigTransaction } from '@/modules/safe/domain/entities/multisig-transaction.entity';
 import type { Transfer } from '@/modules/safe/domain/entities/transfer.entity';
 import { multiSendCall } from '@/modules/org/common/__tests__/multisend.builder';
@@ -447,5 +448,156 @@ describe('settlementOutcome', () => {
     expect(settlementOutcome(input({ executedAtNonce: tx })).review).toEqual({
       reason: 'partial_overlap',
     });
+  });
+
+  describe('gas refund (gasPrice > 0) is a payment path', () => {
+    const refund = {
+      gasPrice: '1',
+      gasToken: zeroAddress,
+      refundReceiver: zeroAddress,
+      executor: STRANGER,
+    } satisfies Partial<MultisigTransaction>;
+    const unrelated = (o: Partial<MultisigTransaction>): MultisigTransaction =>
+      executed(erc20('transfer', USDC, STRANGER, 5n), o);
+
+    it('A: never replaced; verifying, then indirect_unproven at the deadline', () => {
+      const tx = unrelated(refund);
+      expect(
+        settlementOutcome(input({ executedAtNonce: tx, transfers: [] })),
+      ).toEqual({ status: 'verifying', executedTxHash: TX_HASH });
+      expect(
+        settlementOutcome(
+          input({ executedAtNonce: tx, transfers: [], now: DEADLINE }),
+        ).review,
+      ).toEqual({ reason: 'indirect_unproven' });
+    });
+
+    it('B: a rejection tx with a refund is never rejected', () => {
+      const tx = executed(
+        { to: SAFE, value: 0n, data: '0x', operation: 0 },
+        { ...refund, data: null },
+      );
+      expect(
+        settlementOutcome(input({ executedAtNonce: tx, transfers: [] })).status,
+      ).toBe('verifying');
+      expect(
+        settlementOutcome(
+          input({ executedAtNonce: tx, transfers: [], now: DEADLINE }),
+        ).review,
+      ).toEqual({ reason: 'indirect_unproven' });
+    });
+
+    it('C: equal calls that failed with a refund are never failed', () => {
+      const tx = runTx({ ...refund, isSuccessful: false });
+      expect(settlementOutcome(input({ executedAtNonce: tx })).status).toBe(
+        'verifying',
+      );
+      expect(
+        settlementOutcome(input({ executedAtNonce: tx, now: DEADLINE })).review,
+      ).toEqual({ reason: 'indirect_unproven' });
+    });
+
+    it('returns partial_overlap when the refund goes to a run recipient', () => {
+      // native refund to the executor, who is a native run recipient
+      expect(
+        settlementOutcome(
+          input({
+            executedAtNonce: unrelated({ ...refund, executor: ALICE }),
+            transfers: [],
+          }),
+        ).review,
+      ).toEqual({ reason: 'partial_overlap' });
+      // run-token refund to an explicit refundReceiver who is that token's recipient
+      expect(
+        settlementOutcome(
+          input({
+            executedAtNonce: runTx({
+              ...refund,
+              gasToken: USDC,
+              refundReceiver: BOB,
+            }),
+          }),
+        ).review,
+      ).toEqual({ reason: 'partial_overlap' });
+    });
+
+    it('still settles executed for equal successful calls with an unrelated refund', () => {
+      expect(
+        settlementOutcome(input({ executedAtNonce: runTx(refund) })).status,
+      ).toBe('executed');
+    });
+  });
+
+  it('returns replaced for an unrelated tx at N that failed without a refund', () => {
+    const tx = executed(
+      { to: SOME_CONTRACT, value: 0n, data: '0x12345678', operation: 0 },
+      { isSuccessful: false },
+    );
+    expect(
+      settlementOutcome(input({ executedAtNonce: tx, transfers: [] })).status,
+    ).toBe('replaced');
+  });
+
+  it('counts the same transfer record once (dedupe by transferId)', () => {
+    const items = [ITEMS[1], { ...ITEMS[1], line: 5 }];
+    const calls = callsOf(items);
+    const record = transferOf(items[0]);
+    const base = input({
+      executedAtNonce: executed(multiSendCall(CALL_ONLY, calls)),
+      transfers: [record, { ...record }],
+    });
+    base.run = { ...base.run, calls, items };
+    expect(settlementOutcome(base).status).toBe('verifying');
+    expect(settlementOutcome({ ...base, now: DEADLINE }).review).toEqual({
+      reason: 'missing_transfers',
+      lines: [5],
+    });
+  });
+
+  it('does not treat an approve(recipient, 0) revocation as overlap', () => {
+    const tx = executed(erc20('approve', DAI, CAROL, 0n));
+    expect(
+      settlementOutcome(input({ executedAtNonce: tx, transfers: [] })).status,
+    ).toBe('replaced');
+  });
+
+  it('does not treat a payment-shaped call that also sends value as unable to pay indirectly', () => {
+    const tx = executed({
+      ...erc20('transfer', USDC, STRANGER, 5n),
+      value: 1n,
+    });
+    expect(
+      settlementOutcome(input({ executedAtNonce: tx, transfers: [] })).status,
+    ).toBe('verifying');
+  });
+
+  it('returns partial_overlap for a native transfer record from the Safe to a native recipient', () => {
+    const tx = executed({
+      to: SOME_CONTRACT,
+      value: 0n,
+      data: '0x12345678',
+      operation: 0,
+    });
+    const record = {
+      ...nativeTokenTransferBuilder()
+        .with('from', SAFE)
+        .with('to', ALICE)
+        .with('value', '1')
+        .with('transactionHash', TX_HASH)
+        .build(),
+    } as Transfer;
+    expect(
+      settlementOutcome(input({ executedAtNonce: tx, transfers: [record] }))
+        .review,
+    ).toEqual({ reason: 'partial_overlap' });
+  });
+
+  it('makes no decision when tx-service numbers are not integers', () => {
+    expect(
+      settlementOutcome(input({ executedAtNonce: runTx({ value: '1.5' }) })),
+    ).toEqual({ status: 'pending' });
+    expect(
+      settlementOutcome(input({ executedAtNonce: runTx({ gasPrice: 'x' }) })),
+    ).toEqual({ status: 'pending' });
   });
 });

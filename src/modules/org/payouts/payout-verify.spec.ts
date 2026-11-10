@@ -39,6 +39,7 @@ function txOf(outer: SafeCall): MultisigTransaction {
     .with('gasPrice', '0')
     .with('gasToken', zeroAddress)
     .with('refundReceiver', zeroAddress)
+    .with('safeTxGas', 0)
     .with('isExecuted', false)
     .build();
 }
@@ -86,8 +87,41 @@ describe('verifyProposedTx', () => {
       gasPrice: null,
       gasToken: null,
       refundReceiver: null,
+      safeTxGas: null,
     };
     expect(verify(tx)).toEqual({ ok: true });
+  });
+
+  it('rejects a non-zero safeTxGas (a proposal that may fail on purpose)', () => {
+    expect(verify({ ...multiTx(), safeTxGas: 1 })).toEqual(
+      mismatch('safeTxGas'),
+    );
+  });
+
+  it('reports the first tampered field in the documented order', () => {
+    expect(verify({ ...multiTx(), safe: ALICE, gasPrice: '1' })).toEqual(
+      mismatch('safe'),
+    );
+    expect(verify({ ...multiTx(), nonce: 8, gasToken: USDC })).toEqual(
+      mismatch('nonce'),
+    );
+    expect(
+      verify({ ...multiTx([CALLS[1], CALLS[0]]), refundReceiver: BOB }),
+    ).toEqual(mismatch('refundReceiver'));
+    expect(verify({ ...multiTx(), safeTxGas: 1, value: '1' })).toEqual(
+      mismatch('safeTxGas'),
+    );
+    expect(verify({ ...multiTx(), operation: 0, value: '1' })).toEqual(
+      mismatch('operation'),
+    );
+  });
+
+  it('treats non-integer tx-service numbers as a mismatch instead of throwing', () => {
+    expect(verify({ ...multiTx(), gasPrice: '1.5' })).toEqual(
+      mismatch('gasPrice'),
+    );
+    expect(verify({ ...multiTx(), value: 'abc' })).toEqual(mismatch('value'));
+    expect(verify({ ...multiTx(), nonce: 7.5 })).toEqual(mismatch('nonce'));
   });
 
   it('rejects a tx of another Safe', () => {
