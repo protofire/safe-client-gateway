@@ -8,7 +8,13 @@ import {
   type ILoggingService,
   LoggingService,
 } from '@/logging/logging.interface';
-import { type InviteMail, inviteTemplate } from '@/modules/org/mail/templates';
+import {
+  type InviteMail,
+  inviteTemplate,
+  type MailContent,
+  type SecurityNotice,
+  securityNoticeTemplate,
+} from '@/modules/org/mail/templates';
 
 /** Transactional mail through the Resend HTTP API (`POST {baseUrl}/emails`). */
 @Injectable()
@@ -40,9 +46,20 @@ export class MailService {
       );
       return;
     }
+    await this.send(to, inviteTemplate(mail));
+  }
+
+  async sendSecurityNotice(to: string, notice: SecurityNotice): Promise<void> {
+    if (!this.apiKey) {
+      throw new Error('org mail is not configured (ORG_MAIL_API_KEY)');
+    }
+    await this.send(to, securityNoticeTemplate(notice));
+  }
+
+  private async send(to: string, content: MailContent): Promise<void> {
     await this.network.post({
       url: `${this.baseUrl!.replace(/\/+$/, '')}/emails`,
-      data: { from: this.from, to: [to], ...inviteTemplate(mail) },
+      data: { from: this.from, to: [to], ...content },
       networkRequest: { headers: { Authorization: `Bearer ${this.apiKey}` } },
     });
   }

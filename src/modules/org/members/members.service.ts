@@ -12,6 +12,10 @@ import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
 import { Clock, type IClock } from '@/modules/org/common/clock';
 import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
+import {
+  ADMIN_PERMISSION,
+  SecurityNotifier,
+} from '@/modules/org/mail/security-notifier';
 import { maskEmail, maskIdentity } from '@/modules/org/members/identity-mask';
 import { memberRows, type MemberRow } from '@/modules/org/members/member-rows';
 import {
@@ -96,6 +100,7 @@ export class MembersService {
     private readonly encryption: FieldEncryptionService,
     private readonly sessions: SessionsRepository,
     private readonly securityEvents: SecurityEvents,
+    private readonly notifier: SecurityNotifier,
     @Inject(Clock) private readonly clock: IClock,
   ) {}
 
@@ -115,7 +120,7 @@ export class MembersService {
     roleKey: SystemRoleKey,
     by: Actor,
   ): Promise<void> {
-    await this.underOrgLock(
+    const demoted = await this.underOrgLock(
       orgId,
       by.userId,
       'roles.assign',
@@ -123,7 +128,7 @@ export class MembersService {
         const role = await systemRole(em, roleKey);
         assertCanGrant(role, caller.permissions);
         const member = await this.member(em, orgId, memberId);
-        if (member.role === role.key) return;
+        if (member.role === role.key) return null;
         await em.query(
           `DELETE FROM role_bindings WHERE member_id = $1 AND scope = 'org'`,
           [memberId],
@@ -146,28 +151,68 @@ export class MembersService {
           ip: by.ip,
           userAgent: by.userAgent,
         });
+        if (!role.permissions.includes('members.invite')) {
+          await this.revokeInvitationsBy(
+            em,
+            orgId,
+            member,
+            'inviter_demoted',
+            by,
+          );
+        }
+        return member.permissions.includes(ADMIN_PERMISSION) &&
+          !role.permissions.includes(ADMIN_PERMISSION)
+          ? member
+          : null;
       },
     );
+    if (demoted) {
+      await this.notifier.notify(
+        orgId,
+        { kind: 'admin_demoted', target: maskIdentity(demoted.identity) },
+        demoted.userId ? [demoted.userId] : [],
+      );
+    }
   }
 
   async remove(orgId: string, memberId: string, by: Actor): Promise<void> {
-    await this.underOrgLock(orgId, by.userId, 'members.remove', async (em) => {
-      const member = await this.member(em, orgId, memberId);
-      if (member.userId === by.userId) {
-        throw new BadRequestException('Use leave to remove yourself');
-      }
-      await em.query(`DELETE FROM members WHERE id = $1`, [memberId]);
-      await this.activity.record(em, {
+    const removed = await this.underOrgLock(
+      orgId,
+      by.userId,
+      'members.remove',
+      async (em) => {
+        const member = await this.member(em, orgId, memberId);
+        if (member.userId === by.userId) {
+          throw new BadRequestException('Use leave to remove yourself');
+        }
+        await this.revokeInvitationsBy(
+          em,
+          orgId,
+          member,
+          'inviter_removed',
+          by,
+        );
+        await em.query(`DELETE FROM members WHERE id = $1`, [memberId]);
+        await this.activity.record(em, {
+          orgId,
+          actorUserId: by.userId,
+          type: 'member.removed',
+          targetType: 'membership',
+          targetId: memberId,
+          payload: { target: maskIdentity(member.identity) },
+          ip: by.ip,
+          userAgent: by.userAgent,
+        });
+        return member;
+      },
+    );
+    if (removed.permissions.includes(ADMIN_PERMISSION)) {
+      await this.notifier.notify(
         orgId,
-        actorUserId: by.userId,
-        type: 'member.removed',
-        targetType: 'membership',
-        targetId: memberId,
-        payload: { target: maskIdentity(member.identity) },
-        ip: by.ip,
-        userAgent: by.userAgent,
-      });
-    });
+        { kind: 'admin_removed', target: maskIdentity(removed.identity) },
+        removed.userId ? [removed.userId] : [],
+      );
+    }
   }
 
   async leave(orgId: string, by: Actor): Promise<void> {
@@ -177,6 +222,7 @@ export class MembersService {
       'org.view',
       async (em, caller) => {
         const member = await this.member(em, orgId, caller.memberId);
+        await this.revokeInvitationsBy(em, orgId, member, 'inviter_left', by);
         await em.query(`DELETE FROM members WHERE id = $1`, [member.id]);
         await this.activity.record(em, {
           orgId,
@@ -250,11 +296,52 @@ export class MembersService {
         ip: by.ip,
         userAgent: by.userAgent,
       });
-      return member.userId;
+      return member;
     }, orgId);
-    await this.securityEvents.record(target, 'security.totp_removed', {
+    await this.securityEvents.record(target.userId!, 'security.totp_removed', {
       resetBy: by.userId,
     });
+    await this.notifier.notify(
+      orgId,
+      { kind: 'factors_reset', target: maskIdentity(target.identity) },
+      [target.userId!],
+    );
+  }
+
+  /**
+   * Item 11: an inviter who loses the right to invite (removed, demoted,
+   * left) takes their pending invitations along. Deleting the invited
+   * member row cascades to its invitation and role binding.
+   */
+  private async revokeInvitationsBy(
+    em: EntityManager,
+    orgId: string,
+    inviter: MemberRow,
+    reason: 'inviter_removed' | 'inviter_demoted' | 'inviter_left',
+    by: Actor,
+  ): Promise<void> {
+    if (!inviter.userId) return;
+    const pending: Array<{ id: string }> = await em.query(
+      `SELECT DISTINCT m.id FROM members m
+       JOIN invitations i ON i.member_id = m.id
+       WHERE m.org_id = $1 AND m.status = 'invited' AND i.invited_by = $2
+         AND i.accepted_at IS NULL AND i.declined_at IS NULL`,
+      [orgId, inviter.userId],
+    );
+    for (const { id } of pending) {
+      const [row] = await memberRows(em, this.encryption, orgId, id);
+      await em.query(`DELETE FROM members WHERE id = $1`, [id]);
+      await this.activity.record(em, {
+        orgId,
+        actorUserId: by.userId,
+        type: 'member.invite_revoked',
+        targetType: 'membership',
+        targetId: id,
+        payload: { target: maskIdentity(row.identity), reason },
+        ip: by.ip,
+        userAgent: by.userAgent,
+      });
+    }
   }
 
   private async member(
@@ -271,16 +358,16 @@ export class MembersService {
    * Amendment A4: locks the org row first, then re-checks that the caller
    * still holds `permission` (a concurrent change may have revoked it while
    * we waited; the guard checked before the wait). The last-admin trigger
-   * and lock deadlocks map to 409.
+   * and lock deadlocks map to 409 (`last_admin` / `retry`).
    */
-  private async underOrgLock(
+  private async underOrgLock<T>(
     orgId: string,
     userId: string,
     permission: Permission,
-    fn: (em: EntityManager, caller: EffectivePermissions) => Promise<void>,
-  ): Promise<void> {
+    fn: (em: EntityManager, caller: EffectivePermissions) => Promise<T>,
+  ): Promise<T> {
     try {
-      await this.tx.runInOrgTx(async (em) => {
+      return await this.tx.runInOrgTx(async (em) => {
         await lockOrgs(em, [orgId]);
         // permission checked after the trigger below, see there
         const effective = await recheckPermission(
@@ -291,7 +378,7 @@ export class MembersService {
           permission,
           { deferForbidden: true },
         );
-        await fn(em, effective);
+        const result = await fn(em, effective);
         // Invariant before the permission recheck: when two admins demote or
         // remove each other, the one that waited sees 409 last_admin (A4)
         // rather than 403 for the role it just lost. Either way it rolls back.
@@ -299,9 +386,10 @@ export class MembersService {
         if (!effective.permissions.includes(permission)) {
           throw new ForbiddenException();
         }
+        return result;
       }, orgId);
     } catch (error) {
-      mapLastAdmin(error);
+      return mapLastAdmin(error);
     }
   }
 }

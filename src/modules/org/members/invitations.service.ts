@@ -46,7 +46,7 @@ import { assertOrgLimit } from '@/modules/org/orgs/orgs.service';
 import type { Actor } from '@/modules/org/orgs/parse';
 import { PermissionResolver } from '@/modules/org/permissions/permission.resolver';
 import type { Permission } from '@/modules/org/permissions/permissions';
-import type { SystemRoleKey } from '@/modules/org/permissions/role-keys';
+import { INVITATION_ROLE_KEY } from '@/modules/org/permissions/role-keys';
 
 export const MAX_MEMBERS_PER_ORG = 100;
 const INVITE_TTL_MS = 7 * 24 * 3600 * 1000;
@@ -111,7 +111,6 @@ export class InvitationsService {
   async invite(
     orgId: string,
     target: InviteTarget,
-    roleKey: SystemRoleKey,
     by: Actor,
   ): Promise<MemberView & { emailSent?: boolean }> {
     await this.limitInvites(orgId);
@@ -123,7 +122,7 @@ export class InvitationsService {
 
     const { member, orgName } = await this.tx.runInOrgTx(async (em) => {
       const caller = await this.lockAndCheck(em, orgId, by.userId);
-      const role = await systemRole(em, roleKey);
+      const role = await systemRole(em, INVITATION_ROLE_KEY);
       assertCanGrant(role, caller.permissions);
 
       const [{ count }]: Array<{ count: number }> = await em.query(

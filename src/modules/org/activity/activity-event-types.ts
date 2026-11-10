@@ -5,6 +5,7 @@ export const ACTIVITY_EVENT_TYPES = [
   'org.restored',
   'member.invited',
   'member.invite_renewed',
+  'member.invite_revoked',
   'member.joined',
   'member.declined',
   'member.role_changed',

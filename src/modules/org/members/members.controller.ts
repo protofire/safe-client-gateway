@@ -21,7 +21,10 @@ import {
 } from '@/modules/org/members/members.service';
 import { actor, parse } from '@/modules/org/orgs/parse';
 import { RequirePermission } from '@/modules/org/permissions/require-permission.decorator';
-import { SYSTEM_ROLE_KEYS } from '@/modules/org/permissions/role-keys';
+import {
+  INVITATION_ROLE_KEY,
+  SYSTEM_ROLE_KEYS,
+} from '@/modules/org/permissions/role-keys';
 
 const InviteSchema = z
   .object({
@@ -30,7 +33,8 @@ const InviteSchema = z
       .refine((v) => isAddress(v, { strict: false }))
       .optional(),
     email: z.email().max(254).optional(),
-    role: z.enum(SYSTEM_ROLE_KEYS),
+    // accepted for compatibility; any other role is a 400 (item 1)
+    role: z.literal(INVITATION_ROLE_KEY).optional(),
   })
   .refine((v) => (v.wallet === undefined) !== (v.email === undefined), {
     error: 'Exactly one of wallet or email',
@@ -75,7 +79,6 @@ export class MembersController {
       input.wallet !== undefined
         ? { wallet: input.wallet }
         : { email: input.email! },
-      input.role,
       actor(req, session.userId),
     );
   }

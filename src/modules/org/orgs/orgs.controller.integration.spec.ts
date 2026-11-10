@@ -183,6 +183,31 @@ describe('organizations (org)', () => {
       return { orgId, admin, member };
     }
 
+    it('mails every active admin with an email when the org is deleted (item 2)', async () => {
+      const aEmail = 'a-del@example.com';
+      const bEmail = 'b-del@example.com';
+      const a = await t.user({ email: aEmail, totp: true });
+      const b = await t.user({ email: bEmail });
+      const m = await t.user({ email: 'm-del@example.com' });
+      const orgId = await t.createOrg(a, 'Visit https://evil.example.com now');
+      await t.addMember(orgId, b, 'admin');
+      await t.addMember(orgId, m, 'member');
+      t.mailPost.mockClear();
+
+      await t.del(`/v1/orgs/${orgId}`).set('Cookie', a.cookie).expect(200);
+
+      const sent = t.mailPost.mock.calls.map(([args]) => args.data);
+      expect(sent.map((d) => d.to[0]).toSorted()).toEqual(
+        [aEmail, bEmail].toSorted(),
+      );
+      for (const d of sent) {
+        expect(d.subject).toMatch(/deleted/i);
+        expect(`${d.subject} ${d.text} ${d.html}`).not.toMatch(
+          /https?:|www\.|evil\.example\.com/i,
+        );
+      }
+    });
+
     it('hides a deleted org from members and lists it for admins with includeDeleted', async () => {
       const { orgId, admin, member } = await deletedOrg();
 

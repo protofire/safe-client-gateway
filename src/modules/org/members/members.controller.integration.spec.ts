@@ -29,12 +29,11 @@ describe('members and invitations (org)', () => {
     orgId: string,
     admin: TestUser,
     to: string,
-    role = 'member',
   ): Promise<{ memberId: string; token: string }> {
     const res = await t
       .post(`/v1/orgs/${orgId}/members/invite`)
       .set('Cookie', admin.cookie)
-      .send({ email: to, role })
+      .send({ email: to })
       .expect(201);
     expect(res.body.emailSent).toBe(true);
     return { memberId: res.body.id, token: t.lastInviteToken(to) };
@@ -333,7 +332,7 @@ describe('members and invitations (org)', () => {
       await t
         .post(`/v1/orgs/${orgId}/members/invite`)
         .set('Cookie', admin.cookie)
-        .send({ wallet: invitee.wallet, role: 'admin' })
+        .send({ wallet: invitee.wallet })
         .expect(201);
       const lock = await t.holdOrgLock(orgId);
       let pending: Promise<{ status: number }> | undefined;
@@ -718,6 +717,195 @@ describe('members and invitations (org)', () => {
         .get('/v1/orgs/auth/me')
         .set('Cookie', target.cookie)
         .expect(200);
+    });
+  });
+
+  describe('review fixes 2026-11-10', () => {
+    /** Resend calls whose subject matches, as { to, subject, text }. */
+    const mails = (
+      subject: RegExp,
+    ): Array<{ to: string; subject: string; text: string }> =>
+      t.mailPost.mock.calls
+        .map(
+          ([args]) =>
+            args.data as { to: Array<string>; subject: string; text: string },
+        )
+        .filter((d) => subject.test(d.subject))
+        .map((d) => ({ to: d.to[0], subject: d.subject, text: d.text }));
+
+    async function memberIdOf(orgId: string, u: TestUser): Promise<string> {
+      const [{ id }] = await t.sql.query(
+        `SELECT id FROM members WHERE org_id = $1 AND user_id = $2`,
+        [orgId, u.userId],
+      );
+      return id;
+    }
+
+    it('invites as member only: 400 for role admin, role may be omitted or member (item 1)', async () => {
+      const admin = await t.user({ wallet: true });
+      const orgId = await t.createOrg(admin);
+      const invitee = await t.user({ wallet: true });
+
+      await t
+        .post(`/v1/orgs/${orgId}/members/invite`)
+        .set('Cookie', admin.cookie)
+        .send({ wallet: invitee.wallet, role: 'admin' })
+        .expect(400);
+      const res = await t
+        .post(`/v1/orgs/${orgId}/members/invite`)
+        .set('Cookie', admin.cookie)
+        .send({ wallet: invitee.wallet })
+        .expect(201);
+      expect(res.body.role).toBe('member');
+      await t
+        .post(`/v1/orgs/${orgId}/members/invite`)
+        .set('Cookie', admin.cookie)
+        .send({ email: email(), role: 'member' })
+        .expect(201);
+      await t
+        .post(`/v1/orgs/${orgId}/members/accept`)
+        .set('Cookie', invitee.cookie)
+        .expect(200);
+      expect(await t.adminCount(orgId)).toBe(1);
+    });
+
+    it.each(['removed', 'demoted'] as const)(
+      'deletes the pending invitations of an admin who is %s (item 11)',
+      async (how) => {
+        const a = await t.user({ wallet: true });
+        const b = await t.user({ wallet: true });
+        const orgId = await t.createOrg(a);
+        const bId = await t.addMember(orgId, b, 'admin');
+        const byB = await inviteEmail(orgId, b, email());
+        const byA = await inviteEmail(orgId, a, email());
+
+        if (how === 'removed') {
+          await t
+            .del(`/v1/orgs/${orgId}/members/${bId}`)
+            .set('Cookie', a.cookie)
+            .expect(204);
+        } else {
+          await t
+            .patch(`/v1/orgs/${orgId}/members/${bId}/role`)
+            .set('Cookie', a.cookie)
+            .send({ role: 'member' })
+            .expect(204);
+        }
+
+        const pending: Array<{ id: string }> = await t.sql.query(
+          `SELECT m.id FROM members m WHERE m.org_id = $1 AND m.status = 'invited'`,
+          [orgId],
+        );
+        expect(pending.map((r) => r.id)).toEqual([byA.memberId]);
+        await accept(await t.user({ wallet: true }), byB.token).expect(404);
+        const [revoked] = await t.sql.query(
+          `SELECT payload FROM activity_events WHERE org_id = $1 AND type = 'member.invite_revoked'`,
+          [orgId],
+        );
+        expect(revoked.payload).toEqual({
+          target: expect.stringContaining('***'),
+          reason: how === 'removed' ? 'inviter_removed' : 'inviter_demoted',
+        });
+      },
+    );
+
+    describe('security notification mails (item 2)', () => {
+      it('mails the remaining admins and the removed admin when an admin is removed', async () => {
+        const aEmail = email();
+        const bEmail = email();
+        const a = await t.user({ email: aEmail, totp: true });
+        const b = await t.user({ email: bEmail, totp: true });
+        const walletAdmin = await t.user({ wallet: true });
+        const orgId = await t.createOrg(a, 'Acme');
+        await t.addMember(orgId, walletAdmin, 'admin');
+        const bId = await t.addMember(orgId, b, 'admin');
+
+        await t
+          .del(`/v1/orgs/${orgId}/members/${bId}`)
+          .set('Cookie', a.cookie)
+          .expect(204);
+
+        const sent = mails(/admin was removed/i);
+        expect(sent.map((m) => m.to).toSorted()).toEqual(
+          [aEmail, bEmail].toSorted(),
+        );
+        expect(sent[0].text).toContain('Acme');
+      });
+
+      it('does not mail when a plain member is removed', async () => {
+        const a = await t.user({ email: email(), totp: true });
+        const m = await t.user({ email: email() });
+        const orgId = await t.createOrg(a);
+        const mId = await t.addMember(orgId, m, 'member');
+        t.mailPost.mockClear();
+
+        await t
+          .del(`/v1/orgs/${orgId}/members/${mId}`)
+          .set('Cookie', a.cookie)
+          .expect(204);
+
+        expect(t.mailPost).not.toHaveBeenCalled();
+      });
+
+      it('mails the admins and the demoted person when an admin is demoted', async () => {
+        const aEmail = email();
+        const bEmail = email();
+        const a = await t.user({ email: aEmail, totp: true });
+        const b = await t.user({ email: bEmail, totp: true });
+        const orgId = await t.createOrg(a);
+        const bId = await t.addMember(orgId, b, 'admin');
+
+        await t
+          .patch(`/v1/orgs/${orgId}/members/${bId}/role`)
+          .set('Cookie', a.cookie)
+          .send({ role: 'member' })
+          .expect(204);
+
+        expect(
+          mails(/admin role was removed/i)
+            .map((m) => m.to)
+            .toSorted(),
+        ).toEqual([aEmail, bEmail].toSorted());
+      });
+
+      it("mails the admins and the member when a member's 2FA is reset", async () => {
+        const aEmail = email();
+        const targetEmail = email();
+        const a = await t.user({ email: aEmail, totp: true });
+        const target = await t.user({ email: targetEmail, totp: true });
+        const orgId = await t.createOrg(a);
+        const memberId = await t.addMember(orgId, target, 'member');
+
+        await t
+          .post(`/v1/orgs/${orgId}/members/${memberId}/factors/reset`)
+          .set('Cookie', a.cookie)
+          .expect(204);
+
+        expect(
+          mails(/two-factor/i)
+            .map((m) => m.to)
+            .toSorted(),
+        ).toEqual([aEmail, targetEmail].toSorted());
+      });
+
+      it('completes the action when the mail provider fails', async () => {
+        const a = await t.user({ email: email(), totp: true });
+        const b = await t.user({ email: email(), totp: true });
+        const orgId = await t.createOrg(a);
+        const bId = await t.addMember(orgId, b, 'admin');
+        t.mailPost.mockRejectedValue(new Error('resend down'));
+        try {
+          await t
+            .del(`/v1/orgs/${orgId}/members/${bId}`)
+            .set('Cookie', a.cookie)
+            .expect(204);
+        } finally {
+          t.mailPost.mockReset();
+          t.mailPost.mockResolvedValue({ status: 200, data: {} });
+        }
+        expect(await memberIdOf(orgId, a)).toEqual(expect.any(String));
+        expect(await t.adminCount(orgId)).toBe(1);
+      });
     });
   });
 });

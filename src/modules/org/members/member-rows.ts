@@ -7,6 +7,7 @@ type Row = {
   userId: string | null;
   status: 'invited' | 'active' | 'declined';
   role: string | null;
+  permissions: Array<string> | null;
   wallet: string | null;
   emailEncrypted: string | null;
   targetWallet: string | null;
@@ -20,6 +21,8 @@ export type MemberRow = {
   userId: string | null;
   status: 'invited' | 'active' | 'declined';
   role: string | null;
+  /** Permissions of `role`; empty without a role. */
+  permissions: Array<string>;
   identity: MemberIdentity;
   invitedAt: Date | null;
   expiresAt: Date | null;
@@ -37,13 +40,13 @@ export async function memberRows(
   memberId: string | null = null,
 ): Promise<Array<MemberRow>> {
   const rows: Array<Row> = await em.query(
-    `SELECT m.id, m.user_id AS "userId", m.status, role.key AS role,
+    `SELECT m.id, m.user_id AS "userId", m.status, role.key AS role, role.permissions,
        w.wallet_address AS wallet, e.email_encrypted AS "emailEncrypted",
        i.target_wallet AS "targetWallet", i.target_email_encrypted AS "targetEmailEncrypted",
        i.created_at AS "invitedAt", i.expires_at AS "expiresAt"
      FROM members m
      LEFT JOIN LATERAL (
-       SELECT r.key FROM role_bindings rb JOIN roles r ON r.id = rb.role_id
+       SELECT r.key, r.permissions FROM role_bindings rb JOIN roles r ON r.id = rb.role_id
        WHERE rb.member_id = m.id AND rb.scope = 'org'
          AND (r.org_id IS NULL OR r.org_id = m.org_id)
        ORDER BY r.key LIMIT 1) role ON true
@@ -74,6 +77,7 @@ export async function memberRows(
       userId: r.userId,
       status: r.status,
       role: r.role,
+      permissions: r.permissions ?? [],
       identity,
       invitedAt: r.invitedAt,
       expiresAt: r.expiresAt,

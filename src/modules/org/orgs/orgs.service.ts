@@ -3,6 +3,7 @@ import type { EntityManager } from 'typeorm';
 import { ActivityLog } from '@/modules/org/activity/activity-log.service';
 import { Clock, type IClock } from '@/modules/org/common/clock';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
+import { SecurityNotifier } from '@/modules/org/mail/security-notifier';
 import {
   conflict,
   lockOrgs,
@@ -64,6 +65,7 @@ export class OrgsService {
     private readonly tx: OrgTransaction,
     private readonly activity: ActivityLog,
     private readonly resolver: PermissionResolver,
+    private readonly notifier: SecurityNotifier,
     @Inject(Clock) private readonly clock: IClock,
   ) {}
 
@@ -202,7 +204,7 @@ export class OrgsService {
   /** Soft delete: hidden from members, restorable until `purge_after`. */
   async delete(orgId: string, by: Actor): Promise<OrgView> {
     const now = this.clock.now();
-    return this.tx.runInOrgTx(async (em) => {
+    const deleted = await this.tx.runInOrgTx(async (em) => {
       await lockOrgs(em, [orgId]);
       await recheckPermission(
         this.resolver,
@@ -228,6 +230,8 @@ export class OrgsService {
       });
       return serialize(org);
     });
+    await this.notifier.notify(orgId, { kind: 'org_deleted' });
+    return deleted;
   }
 
   /**

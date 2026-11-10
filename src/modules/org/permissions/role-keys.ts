@@ -6,3 +6,9 @@
 export const SYSTEM_ROLE_KEYS = ['admin', 'member'] as const;
 
 export type SystemRoleKey = (typeof SYSTEM_ROLE_KEYS)[number];
+
+/**
+ * Invitations always grant this role (Nick, 2026-11-10); promotion is the
+ * role-change endpoint, which needs step-up.
+ */
+export const INVITATION_ROLE_KEY = 'member' satisfies SystemRoleKey;
