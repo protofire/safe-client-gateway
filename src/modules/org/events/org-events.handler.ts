@@ -66,19 +66,28 @@ export class OrgEventsHandler {
       e.type === TransactionEventType.PENDING_MULTISIG_TRANSACTION ||
       e.type === TransactionEventType.NEW_CONFIRMATION;
 
+    // failed executions too: they consume the nonce, which clears policy findings
+    const isScan =
+      isSeedOnly ||
+      e.type === TransactionEventType.EXECUTED_MULTISIG_TRANSACTION;
+
     const orgIds =
-      isConfigCandidate || isSeedOnly
+      isConfigCandidate || isScan
         ? await this.linkingOrgs(e.chainId, e.address)
         : [];
     if (orgIds.length === 0) {
       await this.invalidate(e);
       return;
     }
-    await this.tx.runInOrgTx((em) =>
-      this.process(em, e, orgIds, isConfigCandidate),
-    );
-    // after commit; failed executions are resolved by the scanner's pass recheck
-    if (e.type !== TransactionEventType.MODULE_TRANSACTION) {
+    if (isConfigCandidate || isSeedOnly) {
+      await this.tx.runInOrgTx((em) =>
+        this.process(em, e, orgIds, isConfigCandidate),
+      );
+    } else {
+      await this.invalidate(e);
+    }
+    // after commit
+    if (isScan) {
       this.scanner?.enqueue(
         e.chainId,
         e.address,

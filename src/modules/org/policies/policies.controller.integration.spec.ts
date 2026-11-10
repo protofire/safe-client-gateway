@@ -34,6 +34,7 @@ import {
 import { ORG_DATA_SOURCE } from '@/modules/org/db/org-data-source';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import { PermissionsModule } from '@/modules/org/permissions/permissions.module';
+import { FindingsController } from '@/modules/org/policies/findings.controller';
 import { PoliciesController } from '@/modules/org/policies/policies.controller';
 import { PoliciesService } from '@/modules/org/policies/policies.service';
 import { PolicyContextService } from '@/modules/org/policies/policy-context.service';
@@ -274,7 +275,7 @@ describe('policies API and evaluation context', () => {
         OrgAuthModule,
         PermissionsModule,
       ],
-      controllers: [PoliciesController],
+      controllers: [PoliciesController, FindingsController],
       providers: [
         OrgTransaction,
         ActivityLog,
@@ -676,6 +677,49 @@ describe('policies API and evaluation context', () => {
       body({ name: 'ops' }),
     ).expect(409);
     expect(res.body.code).toBe('policy_exists');
+  });
+
+  it('serves policy findings to a member with policies.view and answers 404 across orgs', async () => {
+    await linkSafe(orgA, SAFE_A);
+    await linkSafe(orgB, SAFE_B);
+    const [{ id: linkedA }] = await sql.query(
+      `SELECT id FROM linked_safes WHERE org_id = $1 AND address = $2`,
+      [orgA, SAFE_A],
+    );
+    const [{ id: linkedB }] = await sql.query(
+      `SELECT id FROM linked_safes WHERE org_id = $1 AND address = $2`,
+      [orgB, SAFE_B],
+    );
+    await asOrg(orgA, (em) =>
+      em.query(
+        `INSERT INTO policy_findings (org_id, linked_safe_id, chain_id, safe_address, safe_tx_hash, nonce, evaluation_hash, violations)
+         VALUES ($1, $2, '1', $3, $4, 7, 'h', '[]')`,
+        [orgA, linkedA, SAFE_A, `0x${'ab'.repeat(32)}`],
+      ),
+    );
+
+    const { body: list } = await get(
+      `${orgA}/policy-findings?linkedSafeId=${linkedA}`,
+      member,
+    ).expect(200);
+    expect(list).toEqual([
+      expect.objectContaining({
+        linkedSafeId: linkedA,
+        safeAddress: SAFE_A,
+        nonce: '7',
+        resolvedAt: null,
+        firstSeenAt: expect.any(String),
+      }),
+    ]);
+    await get(`${orgA}/policy-findings?linkedSafeId=${linkedB}`, admin).expect(
+      404,
+    );
+    await get(`${orgA}/policy-findings?status=bogus`, admin).expect(400);
+    await get(`${orgA}/policy-findings`, adminB).expect(404);
+    expect(
+      (await get(`${orgB}/policy-findings?status=all`, adminB).expect(200))
+        .body,
+    ).toEqual([]);
   });
 
   it('answers 404 for a policy id of another org', async () => {

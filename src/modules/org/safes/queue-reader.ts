@@ -14,7 +14,7 @@ export async function readQueue(
   safes: ISafeRepository,
   chainId: string,
   safe: Safe,
-  opts: { offset?: number; max?: number } = {},
+  opts: { offset?: number; max?: number; trusted?: boolean } = {},
 ): Promise<{ queued: Array<MultisigTransaction>; nextOffset: number | null }> {
   const max = opts.max ?? DEFAULT_MAX;
   const queued: Array<MultisigTransaction> = [];
@@ -24,6 +24,7 @@ export async function readQueue(
       safe,
       limit: QUEUE_PAGE_SIZE,
       offset,
+      ...(opts.trusted === undefined ? {} : { trusted: opts.trusted }),
     });
     queued.push(...page.results);
     offset += QUEUE_PAGE_SIZE;

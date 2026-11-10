@@ -25,19 +25,18 @@ const RECIPIENT = addr(0xbeef);
 const ALLOWLIST: Array<PolicyRule> = [
   { kind: 'recipients_allowlist', tag: 'allowed' },
 ];
-const NATIVE_CAP_5: Array<PolicyRule> = [
+const NATIVE_CAP_5_CAP = {
+  chainId: CHAIN,
+  token: 'native' as const,
+  maxRaw: '5',
+  decimals: 18,
+  symbol: 'ETH',
+};
+const NATIVE_CAP_5 = [
   {
-    kind: 'amount_cap',
-    capMode: 'per_transfer',
-    caps: [
-      {
-        chainId: CHAIN,
-        token: 'native',
-        maxRaw: '5',
-        decimals: 18,
-        symbol: 'ETH',
-      },
-    ],
+    kind: 'amount_cap' as const,
+    capMode: 'per_transfer' as const,
+    caps: [NATIVE_CAP_5_CAP],
   },
 ];
 
@@ -60,6 +59,7 @@ type Tx = {
   nonce: number;
   safeTxHash: string;
   isExecuted: boolean;
+  trusted: boolean;
 };
 
 describe('PolicyScanner', () => {
@@ -67,6 +67,7 @@ describe('PolicyScanner', () => {
   let sql: DataSource;
   let scanner: PolicyScanner;
   let findingsApi: FindingsController;
+  let orgTx: OrgTransaction;
   let safeSeq = 0x5000;
   let hashSeq = 0;
 
@@ -89,6 +90,7 @@ describe('PolicyScanner', () => {
     nonce: 10 + queue.length,
     safeTxHash: `0x${(++hashSeq).toString(16).padStart(64, 'a')}`,
     isExecuted: false,
+    trusted: true,
     ...over,
   });
 
@@ -206,6 +208,31 @@ describe('PolicyScanner', () => {
         WHERE org_id = $1 AND type = 'policy.violation_found' ORDER BY created_at`,
       [org],
     );
+
+  const deferred = <T>(): {
+    promise: Promise<T>;
+    resolve: (v: T) => void;
+  } => {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => (resolve = r));
+    return { promise, resolve };
+  };
+  const insertFindings = (
+    org: string,
+    linkedSafeId: string,
+    count: number,
+  ): Promise<unknown> =>
+    asOrg(org, (em) =>
+      em.query(
+        `INSERT INTO policy_findings
+           (org_id, linked_safe_id, chain_id, safe_address, safe_tx_hash, nonce,
+            evaluation_hash, violations, last_seen_at)
+         SELECT $1, $2, $3, $4, '0x' || lpad(to_hex(i), 64, '0'), 10 + i, 'h', '[]',
+                now() - make_interval(secs => ($5::int - i)::float8)
+           FROM generate_series(1, $5::int) AS i`,
+        [org, linkedSafeId, CHAIN, SAFE, count],
+      ),
+    );
   const pool = (): { totalCount: number; idleCount: number } =>
     (sql.driver as PostgresDriver).master;
 
@@ -217,7 +244,7 @@ describe('PolicyScanner', () => {
     await owner.destroy();
     sql = db.app();
     await sql.initialize();
-    const orgTx = new OrgTransaction(sql);
+    orgTx = new OrgTransaction(sql);
     scanner = new PolicyScanner(
       sql,
       safeRepo as never,
@@ -243,13 +270,23 @@ describe('PolicyScanner', () => {
       Promise.resolve({ address: SAFE, nonce: 10 }),
     );
     safeRepo.getTransactionQueue.mockImplementation(
-      ({ limit, offset }: { limit: number; offset: number }) =>
-        Promise.resolve({
-          count: queue.length,
-          next: offset + limit < queue.length ? 'next' : null,
+      ({
+        limit,
+        offset,
+        trusted,
+      }: {
+        limit: number;
+        offset: number;
+        trusted?: boolean;
+      }) => {
+        const visible = queue.filter((t) => !trusted || t.trusted);
+        return Promise.resolve({
+          count: visible.length,
+          next: offset + limit < visible.length ? 'next' : null,
           previous: null,
-          results: queue.slice(offset, offset + limit),
-        }),
+          results: visible.slice(offset, offset + limit),
+        });
+      },
     );
     safeRepo.getMultiSigTransaction.mockImplementation(
       ({ safeTransactionHash }: { safeTransactionHash: string }) => {
@@ -465,10 +502,13 @@ describe('PolicyScanner', () => {
 
     expect(await open(org)).toHaveLength(40);
     const [state] = await sql.query(
-      `SELECT next_offset FROM policy_scan_state WHERE chain_id = $1 AND address = $2`,
+      `SELECT next_offset, last_success_at, last_error_at FROM policy_scan_state
+        WHERE chain_id = $1 AND address = $2`,
       [CHAIN, SAFE],
     );
     expect(state.next_offset).toBe(0);
+    expect(state.last_success_at).toBeInstanceOf(Date);
+    expect(state.last_error_at).toBeInstanceOf(Date);
   });
 
   it('continues the queue walk past the first 100 on the next scan', async () => {
@@ -561,5 +601,262 @@ describe('PolicyScanner', () => {
     const ofA = await findingsApi.list(a, {});
     expect(ofA).toHaveLength(1);
     expect(ofA[0].linkedSafeId).not.toBe(linkedB);
+  });
+  it('scans only trusted proposals in the queue walk', async () => {
+    const org = await newOrg();
+    await link(org);
+    await addPolicy(org, ALLOWLIST);
+    queue.push(tx('10', { trusted: false }));
+
+    await scanner.scanSafe(CHAIN, SAFE);
+
+    expect(safeRepo.getTransactionQueue).toHaveBeenCalledWith(
+      expect.objectContaining({ trusted: true }),
+    );
+    expect(await findings(org)).toEqual([]);
+    expect(await logged(org)).toEqual([]);
+  });
+
+  it('neither creates nor resolves a finding for an untrusted tx named by an event', async () => {
+    const org = await newOrg();
+    await link(org);
+    await addPolicy(org, ALLOWLIST);
+    const untrusted = tx('10', { trusted: false });
+    const known = tx('10');
+    queue.push(known);
+    await scanner.scanSafe(CHAIN, SAFE);
+    direct.set(untrusted.safeTxHash, untrusted);
+    direct.set(known.safeTxHash, {
+      ...known,
+      trusted: false,
+      isExecuted: true,
+    });
+
+    await scanner.scanTxs(CHAIN, SAFE, [
+      untrusted.safeTxHash,
+      known.safeTxHash,
+    ]);
+
+    expect(await open(org)).toEqual([known.safeTxHash]);
+    expect(await logged(org)).toHaveLength(1);
+  });
+
+  it('does not reopen a finding resolved while a queue page read was in flight', async () => {
+    const org = await newOrg();
+    await link(org);
+    await addPolicy(org, ALLOWLIST);
+    const t = tx('10');
+    queue.push(t);
+    await scanner.scanSafe(CHAIN, SAFE);
+    expect(await logged(org)).toHaveLength(1);
+
+    const read = safeRepo.getTransactionQueue.getMockImplementation()!;
+    const held = deferred<void>();
+    const reading = deferred<void>();
+    safeRepo.getTransactionQueue.mockImplementationOnce(async (args: never) => {
+      const page = read(args); // the stale page still lists t
+      reading.resolve();
+      await held.promise;
+      return page;
+    });
+    const stale = scanner.scanSafe(CHAIN, SAFE);
+    await reading.promise;
+    direct.set(t.safeTxHash, { ...t, isExecuted: true });
+    await scanner.scanTxs(CHAIN, SAFE, [t.safeTxHash]);
+    expect(await open(org)).toEqual([]);
+    held.resolve();
+    await stale;
+
+    expect(await open(org)).toEqual([]);
+    expect(await logged(org)).toHaveLength(1);
+  });
+
+  it('rechecks at most the 100 oldest missed findings per pass', async () => {
+    const org = await newOrg();
+    const linked = await link(org);
+    await addPolicy(org, ALLOWLIST);
+    await insertFindings(org, linked, 150);
+    // every direct read: executed
+    safeRepo.getMultiSigTransaction.mockImplementation(
+      ({ safeTransactionHash }: { safeTransactionHash: string }) =>
+        Promise.resolve({
+          ...tx('10'),
+          safeTxHash: safeTransactionHash,
+          isExecuted: true,
+        }),
+    );
+
+    await scanner.scanSafe(CHAIN, SAFE);
+
+    expect(safeRepo.getMultiSigTransaction).toHaveBeenCalledTimes(100);
+    const left = await open(org);
+    expect(left).toHaveLength(50);
+    // the 50 most recently seen stay for the next pass
+    expect(left).toContain(`0x${(150).toString(16).padStart(64, '0')}`);
+  });
+
+  it('writes at most 100 txs per transaction in scanTxs', async () => {
+    const org = await newOrg();
+    await link(org);
+    await addPolicy(org, ALLOWLIST);
+    const many = Array.from({ length: 150 }, () => tx('10'));
+    many.forEach((t) => direct.set(t.safeTxHash, t));
+    const spy = jest.spyOn(orgTx, 'runInOrgTx');
+    try {
+      await scanner.scanTxs(
+        CHAIN,
+        SAFE,
+        many.map((t) => t.safeTxHash),
+      );
+      // one pre-check, then two write chunks
+      expect(spy).toHaveBeenCalledTimes(3);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await open(org)).toHaveLength(150);
+  });
+
+  it('caps the pending hashes of one Safe at 500', () => {
+    const spy = jest.spyOn(scanner, 'scanTxs').mockResolvedValue();
+    jest.useFakeTimers();
+    try {
+      for (let i = 0; i < 600; i++) scanner.enqueue(CHAIN, SAFE, `0x${i}`);
+      jest.advanceTimersByTime(2000);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy.mock.calls[0][2]).toHaveLength(500);
+    } finally {
+      jest.useRealTimers();
+      spy.mockRestore();
+    }
+  });
+
+  it('reschedules events that arrive while a flush of the same Safe runs', async () => {
+    const running = deferred<void>();
+    const spy = jest
+      .spyOn(scanner, 'scanTxs')
+      .mockReturnValueOnce(running.promise)
+      .mockResolvedValue();
+    jest.useFakeTimers();
+    try {
+      scanner.enqueue(CHAIN, SAFE, '0x01');
+      jest.advanceTimersByTime(2000);
+      expect(spy).toHaveBeenCalledTimes(1);
+      scanner.enqueue(CHAIN, SAFE, '0x02');
+      scanner.enqueue(CHAIN, SAFE, '0x03');
+      jest.advanceTimersByTime(5000);
+      expect(spy).toHaveBeenCalledTimes(1);
+      running.resolve();
+      await jest.runOnlyPendingTimersAsync(); // settles the finally, no timer yet
+      jest.advanceTimersByTime(2000);
+      expect(spy).toHaveBeenCalledTimes(2);
+      expect(spy).toHaveBeenLastCalledWith(CHAIN, SAFE, ['0x02', '0x03']);
+    } finally {
+      jest.useRealTimers();
+      spy.mockRestore();
+    }
+  });
+
+  it('resolves open findings below the Safe nonce without reading each tx', async () => {
+    const org = await newOrg();
+    await link(org);
+    await addPolicy(org, ALLOWLIST);
+    const [a, b, c] = [
+      tx('10', { nonce: 10 }),
+      tx('10', { nonce: 11 }),
+      tx('10', { nonce: 12 }),
+    ];
+    queue.push(a, b, c);
+    await scanner.scanSafe(CHAIN, SAFE);
+    expect(await open(org)).toHaveLength(3);
+
+    safeRepo.getSafe.mockResolvedValue({ address: SAFE, nonce: 12 });
+    direct.set(b.safeTxHash, { ...b, isExecuted: true });
+    safeRepo.getMultiSigTransaction.mockClear();
+    await scanner.scanTxs(CHAIN, SAFE, [b.safeTxHash]);
+
+    expect(safeRepo.getMultiSigTransaction).toHaveBeenCalledTimes(1);
+    expect(await open(org)).toEqual([c.safeTxHash]);
+  });
+
+  it('does not log again when only versions or unrelated policies change', async () => {
+    const org = await newOrg();
+    await link(org);
+    const violated = await addPolicy(org, ALLOWLIST);
+    const unrelated = await addPolicy(org, [
+      { ...NATIVE_CAP_5[0], caps: [{ ...NATIVE_CAP_5_CAP, maxRaw: '1000' }] },
+    ]);
+    queue.push(tx('10'));
+    await scanner.scanSafe(CHAIN, SAFE);
+
+    await bumpPolicy(org, unrelated, [
+      { ...NATIVE_CAP_5[0], caps: [{ ...NATIVE_CAP_5_CAP, maxRaw: '2000' }] },
+    ]);
+    await bumpPolicy(org, violated, ALLOWLIST); // e.g. a rename: new version, same rules
+    await scanner.scanSafe(CHAIN, SAFE);
+
+    expect(await logged(org)).toHaveLength(1);
+    const [f] = await findings(org);
+    expect(f.violations.map((v) => [v.rule, v.policyVersion])).toEqual([
+      ['recipients_allowlist', 2],
+    ]);
+  });
+
+  it('resolves findings of an org without covering policy before any upstream read', async () => {
+    const org = await newOrg();
+    await link(org);
+    const policy = await addPolicy(org, ALLOWLIST);
+    queue.push(tx('10'));
+    await scanner.scanSafe(CHAIN, SAFE);
+    await setStatus(org, policy, 'disabled');
+    jest.clearAllMocks();
+    const down = (): Promise<never> =>
+      Promise.reject(new DataSourceError('Bad gateway', 502));
+    safeRepo.getSafe.mockImplementation(down);
+    safeRepo.getTransactionQueue.mockImplementation(down);
+    safeRepo.getMultiSigTransaction.mockImplementation(down);
+
+    await scanner.scanSafe(CHAIN, SAFE);
+    await scanner.scanTxs(CHAIN, SAFE, [queue[0].safeTxHash]);
+
+    expect(await open(org)).toEqual([]);
+    expect(safeRepo.getSafe).not.toHaveBeenCalled();
+    expect(safeRepo.getTransactionQueue).not.toHaveBeenCalled();
+    expect(safeRepo.getMultiSigTransaction).not.toHaveBeenCalled();
+    expect(chainsRepo.getChain).not.toHaveBeenCalled();
+  });
+
+  it('waits for the per-Safe lock before writing', async () => {
+    const org = await newOrg();
+    await link(org);
+    await addPolicy(org, ALLOWLIST);
+    queue.push(tx('10'));
+    const other = sql.createQueryRunner();
+    await other.connect();
+    await other.startTransaction();
+    try {
+      await other.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
+        `${CHAIN}:${SAFE.toLowerCase()}`,
+      ]);
+      let done = false;
+      const scan = scanner.scanSafe(CHAIN, SAFE).then(() => (done = true));
+      await new Promise((r) => setTimeout(r, 300));
+      expect(done).toBe(false);
+      expect(await findings(org)).toEqual([]);
+      await other.commitTransaction();
+      await scan;
+    } finally {
+      if (other.isTransactionActive) await other.rollbackTransaction();
+      await other.release();
+    }
+    expect(await open(org)).toHaveLength(1);
+  });
+
+  it('returns every open finding and caps status=all at 1000', async () => {
+    const org = await newOrg();
+    const linked = await link(org);
+    await insertFindings(org, linked, 1001);
+
+    expect(await findingsApi.list(org, {})).toHaveLength(1001);
+    expect(await findingsApi.list(org, { status: 'all' })).toHaveLength(1000);
   });
 });

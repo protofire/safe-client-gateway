@@ -16,7 +16,7 @@ const FindingsQuerySchema = z.object({
   status: z.enum(['open', 'all']).default('open'),
 });
 
-// shortcut: newest 1000 only, no paging; add a cursor if resolved history grows past it
+// shortcut: status=all returns the newest 1000, no paging; add a cursor if history needs it
 const MAX_FINDINGS = 1000;
 
 export type PolicyFinding = {
@@ -62,7 +62,7 @@ export class FindingsController {
             AND ($2::uuid IS NULL OR linked_safe_id = $2)
             AND ($3 = 'all' OR resolved_at IS NULL)
           ORDER BY first_seen_at DESC, id
-          LIMIT ${MAX_FINDINGS}`,
+          ${status === 'all' ? `LIMIT ${MAX_FINDINGS}` : ''}`,
         [orgId, linkedSafeId ?? null, status],
       );
     }, orgId);

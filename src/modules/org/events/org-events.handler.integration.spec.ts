@@ -256,6 +256,43 @@ describe('OrgEventsHandler', () => {
     expect(await events(orgA)).toEqual([]);
   });
 
+  it('hands pending, confirmed, executed and failed txs of linked Safes to the policy scanner after commit', async () => {
+    const scanner = { enqueue: jest.fn() };
+    const withScanner = new OrgEventsHandler(
+      safeRepo as never,
+      balancesRepo as never,
+      new OrgTransaction(sql),
+      new ActivityLog({} as FieldEncryptionService),
+      logger as never,
+      scanner as never,
+    );
+    await seed();
+    safeRepo.getSafe.mockResolvedValue(safeState());
+    const hash = (n: number): string => `0x${String(n).padStart(64, '0')}`;
+    await withScanner.handle({
+      ...executed({ safeTxHash: hash(1) }),
+      type: TransactionEventType.PENDING_MULTISIG_TRANSACTION,
+    } as Event);
+    await withScanner.handle({
+      ...executed({ safeTxHash: hash(2) }),
+      type: TransactionEventType.NEW_CONFIRMATION,
+    } as Event);
+    await withScanner.handle(executed({ safeTxHash: hash(3) }));
+    await withScanner.handle(executed({ safeTxHash: hash(4), failed: 'true' }));
+    await withScanner.handle(executed({ safeTxHash: hash(5), address: OTHER }));
+    await withScanner.handle({
+      type: TransactionEventType.MODULE_TRANSACTION,
+      chainId: CHAIN,
+      address: SAFE,
+      module: addr(5),
+      txHash: hash(6),
+    } as Event);
+
+    expect(scanner.enqueue.mock.calls).toEqual(
+      [1, 2, 3, 4].map((n) => [CHAIN, SAFE, hash(n)]),
+    );
+  });
+
   it('does not touch another Safe', async () => {
     await seed();
     await handler.handle(executed({ address: OTHER }));

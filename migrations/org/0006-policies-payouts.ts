@@ -233,6 +233,8 @@ export class PoliciesPayouts1794614400000 implements MigrationInterface {
       address citext NOT NULL,
       next_offset integer NOT NULL DEFAULT 0,
       pass_started_at timestamptz,
+      last_success_at timestamptz,
+      last_error_at timestamptz,
       PRIMARY KEY (chain_id, address)
     )`);
 

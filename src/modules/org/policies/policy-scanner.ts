@@ -29,7 +29,9 @@ import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface
 const INTERVAL_MS = 5 * 60 * 1000;
 const BOOT_DELAY_MS = 60 * 1000;
 const FLUSH_DELAY_MS = 2000;
+// queue page, missed-finding recheck and scanTxs write chunk: bounds work under lockSafe
 const PAGE = 100;
+const MAX_PENDING_PER_SAFE = 500;
 // org pool max is 20 and shared with the API; no connection is held across HTTP
 export const SCAN_CONCURRENCY = 5;
 const READ_CONCURRENCY = 5;
@@ -127,45 +129,71 @@ export class PolicyScanner implements OnApplicationBootstrap, OnModuleDestroy {
   }
 
   /**
-   * One queue page of 100 from the stored offset. A failed read throws and
-   * changes nothing. When the page ends a pass, open findings not seen since
-   * the pass started are rechecked directly ({@link scanTxs}): offsets shift
-   * as queued txs execute, so a pass can skip a tx.
+   * One page of 100 trusted queued txs from the stored offset. A failed read
+   * throws, stamps `last_error_at` and changes nothing else. When the page
+   * ends a pass, up to 100 open findings not seen since the pass started are
+   * rechecked directly ({@link scanTxs}): offsets shift as queued txs execute,
+   * so a pass can skip a tx.
    */
   async scanSafe(chainId: string, address: Address): Promise<void> {
-    const trusted = await this.context.trustedMultiSend(chainId);
-    // policy_scan_state has no RLS (fan-out index)
-    const [state]: Array<{ next_offset: number }> = await this.db.query(
-      `SELECT next_offset FROM policy_scan_state WHERE chain_id = $1 AND address = $2`,
+    if (!(await this.covered(chainId, address))) return;
+    try {
+      await this.scanPage(chainId, address);
+    } catch (error) {
+      // policy_scan_state has no RLS (fan-out index); B9 shows it
+      await this.db
+        .query(
+          `INSERT INTO policy_scan_state (chain_id, address, last_error_at) VALUES ($1, $2, now())
+           ON CONFLICT (chain_id, address) DO UPDATE SET last_error_at = now()`,
+          [chainId, address],
+        )
+        .catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async scanPage(chainId: string, address: Address): Promise<void> {
+    // DB clock, stamped before any tx-service read: a write never undoes a later resolve
+    const [{ read_at: readAt, next_offset }]: Array<{
+      read_at: Date;
+      next_offset: number | null;
+    }> = await this.db.query(
+      `SELECT clock_timestamp() AS read_at,
+              (SELECT next_offset FROM policy_scan_state WHERE chain_id = $1 AND address = $2) AS next_offset`,
       [chainId, address],
     );
-    const offset = state?.next_offset ?? 0;
+    const offset = next_offset ?? 0;
+    const trusted = await this.context.trustedMultiSend(chainId);
     const safe = await this.safes.getSafe({ chainId, address });
+    // unsigned proposals are not shown as policy warnings (anyone may post them)
     const { queued, nextOffset } = await readQueue(this.safes, chainId, safe, {
       offset,
       max: PAGE,
+      trusted: true,
     });
 
     const missed = await this.tx.runInOrgTx(async (em) => {
       await lockSafe(em, chainId, address);
       const [{ pass_started_at }]: Array<{ pass_started_at: Date | null }> =
         await em.query(
-          `INSERT INTO policy_scan_state (chain_id, address, next_offset, pass_started_at)
-           VALUES ($1, $2, $3, CASE WHEN $4 THEN now() END)
+          `INSERT INTO policy_scan_state (chain_id, address, next_offset, pass_started_at, last_success_at)
+           VALUES ($1, $2, $3, CASE WHEN $4 THEN now() END, now())
            ON CONFLICT (chain_id, address) DO UPDATE SET
              next_offset = EXCLUDED.next_offset,
-             pass_started_at = CASE WHEN $4 THEN now() ELSE policy_scan_state.pass_started_at END
+             pass_started_at = CASE WHEN $4 THEN now() ELSE policy_scan_state.pass_started_at END,
+             last_success_at = now()
            RETURNING pass_started_at`,
           [chainId, address, nextOffset ?? 0, offset === 0],
         );
       const orgs = await this.linking(em, chainId, address);
-      await this.apply(
-        em,
-        orgs,
-        { chainId, address },
-        trusted,
-        queued.map((tx) => ({ safeTxHash: tx.safeTxHash.toLowerCase(), tx })),
-      );
+      await this.apply(em, orgs, { chainId, address }, trusted, {
+        readAt,
+        safeNonce: safe.nonce,
+        items: queued.map((tx) => ({
+          safeTxHash: tx.safeTxHash.toLowerCase(),
+          tx,
+        })),
+      });
       if (nextOffset !== null || pass_started_at === null) return [];
       const hashes = new Set<string>();
       for (const { orgId, linkedSafeId } of orgs) {
@@ -173,19 +201,22 @@ export class PolicyScanner implements OnApplicationBootstrap, OnModuleDestroy {
         const rows: Array<{ safe_tx_hash: string }> = await em.query(
           `SELECT safe_tx_hash FROM policy_findings
             WHERE org_id = $1 AND linked_safe_id = $2 AND resolved_at IS NULL
-              AND last_seen_at < $3`,
+              AND last_seen_at < $3
+            ORDER BY last_seen_at, id LIMIT ${PAGE}`,
           [orgId, linkedSafeId, pass_started_at],
         );
         rows.forEach((r) => hashes.add(r.safe_tx_hash));
       }
-      return [...hashes];
+      return [...hashes].slice(0, PAGE);
     });
     if (missed.length > 0) await this.scanTxs(chainId, address, missed);
   }
 
   /**
-   * Evaluates the named txs by direct read. Executed, removed (404) or
-   * replaced at its nonce → its finding is resolved; a failed read keeps it.
+   * Evaluates the named txs by direct read, at most 100 per transaction.
+   * Executed, removed (404) or below the Safe nonce → resolved; a failed read
+   * keeps the finding; an untrusted (unsigned) proposal is skipped. Open
+   * findings below the Safe nonce are resolved without reading them.
    */
   async scanTxs(
     chainId: string,
@@ -194,46 +225,86 @@ export class PolicyScanner implements OnApplicationBootstrap, OnModuleDestroy {
   ): Promise<void> {
     const hashes = [...new Set(safeTxHashes.map((h) => h.toLowerCase()))];
     if (hashes.length === 0) return;
+    if (!(await this.covered(chainId, address))) return;
+    const [{ read_at: readAt }]: Array<{ read_at: Date }> = await this.db.query(
+      `SELECT clock_timestamp() AS read_at`,
+    );
     const trusted = await this.context.trustedMultiSend(chainId);
     // without the Safe nonce a tx replaced at its nonce just stays open
     const safeNonce = await this.safes
       .getSafe({ chainId, address })
       .then((s) => s.nonce)
       .catch(() => null);
-    const reads = await mapLimit(
-      hashes,
-      READ_CONCURRENCY,
-      async (safeTxHash): Promise<Item | null> => {
-        try {
-          const tx = await this.safes.getMultiSigTransaction({
-            chainId,
-            safeTransactionHash: safeTxHash,
-          });
-          if (tx.safe.toLowerCase() !== address.toLowerCase()) return null;
-          const gone =
-            tx.isExecuted || (safeNonce !== null && tx.nonce < safeNonce);
-          return { safeTxHash, tx: gone ? null : tx };
-        } catch (error) {
-          if (error instanceof DataSourceError && error.code === 404) {
-            return { safeTxHash, tx: null };
-          }
-          this.logger.warn({
-            type: 'policy_scan_tx_failed',
-            chainId,
-            address,
-            safeTxHash,
-            error: message(error),
-          });
-          return null;
-        }
-      },
-    );
-    const items = reads.filter((r): r is Item => r !== null);
-    if (items.length === 0) return;
-    await this.tx.runInOrgTx(async (em) => {
+    for (let i = 0; i < hashes.length; i += PAGE) {
+      const reads = await mapLimit(
+        hashes.slice(i, i + PAGE),
+        READ_CONCURRENCY,
+        (safeTxHash) => this.readTx(chainId, address, safeTxHash, safeNonce),
+      );
+      const items = reads.filter((r): r is Item => r !== null);
+      if (items.length === 0 && safeNonce === null) continue;
+      await this.tx.runInOrgTx(async (em) => {
+        await lockSafe(em, chainId, address);
+        const orgs = await this.linking(em, chainId, address);
+        await this.apply(em, orgs, { chainId, address }, trusted, {
+          readAt,
+          safeNonce,
+          items,
+        });
+      });
+    }
+  }
+
+  private async readTx(
+    chainId: string,
+    address: Address,
+    safeTxHash: string,
+    safeNonce: number | null,
+  ): Promise<Item | null> {
+    try {
+      const tx = await this.safes.getMultiSigTransaction({
+        chainId,
+        safeTransactionHash: safeTxHash,
+      });
+      if (tx.safe.toLowerCase() !== address.toLowerCase()) return null;
+      if (!tx.trusted) return null;
+      const gone =
+        tx.isExecuted || (safeNonce !== null && tx.nonce < safeNonce);
+      return { safeTxHash, tx: gone ? null : tx };
+    } catch (error) {
+      if (error instanceof DataSourceError && error.code === 404) {
+        return { safeTxHash, tx: null };
+      }
+      this.logger.warn({
+        type: 'policy_scan_tx_failed',
+        chainId,
+        address,
+        safeTxHash,
+        error: message(error),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Before any upstream read: resolves the open findings of every linking
+   * org without an active covering policy. False when no org has one (the
+   * Safe needs no reads at all).
+   */
+  private covered(chainId: string, address: Address): Promise<boolean> {
+    return this.tx.runInOrgTx(async (em) => {
       await lockSafe(em, chainId, address);
-      const orgs = await this.linking(em, chainId, address);
-      await this.apply(em, orgs, { chainId, address }, trusted, items);
+      let any = false;
+      for (const org of await this.linking(em, chainId, address)) {
+        await setOrg(em, org.orgId);
+        const policies = await this.context.activePolicies(em, org.orgId, {
+          chainId,
+          address,
+        });
+        if (policies.length > 0) any = true;
+        else await resolveAll(em, org);
+      }
+      return any;
     });
   }
 
@@ -249,7 +320,10 @@ export class PolicyScanner implements OnApplicationBootstrap, OnModuleDestroy {
       this.pending.set(key, entry);
       if (!this.flushing.has(key)) this.schedule(key);
     }
-    entry.hashes.add(safeTxHash.toLowerCase());
+    // the rest waits for the next timer pass
+    if (entry.hashes.size < MAX_PENDING_PER_SAFE) {
+      entry.hashes.add(safeTxHash.toLowerCase());
+    }
   }
 
   private schedule(key: string): void {
@@ -299,18 +373,22 @@ export class PolicyScanner implements OnApplicationBootstrap, OnModuleDestroy {
     orgs: Array<Linked>,
     safe: { chainId: string; address: Address },
     trusted: ReadonlySet<string>,
-    items: Array<Item>,
+    read: { readAt: Date; safeNonce: number | null; items: Array<Item> },
   ): Promise<void> {
     for (const org of orgs) {
       await setOrg(em, org.orgId);
       const policies = await this.context.activePolicies(em, org.orgId, safe);
       if (policies.length === 0) {
+        await resolveAll(em, org);
+        continue;
+      }
+      if (read.safeNonce !== null) {
+        // a nonce below the Safe's can never execute any more
         await em.query(
           `UPDATE policy_findings SET resolved_at = now(), updated_at = now()
-            WHERE org_id = $1 AND linked_safe_id = $2 AND resolved_at IS NULL`,
-          [org.orgId, org.linkedSafeId],
+            WHERE org_id = $1 AND linked_safe_id = $2 AND resolved_at IS NULL AND nonce < $3`,
+          [org.orgId, org.linkedSafeId, read.safeNonce],
         );
-        continue;
       }
       const ctx = await this.context.context(
         em,
@@ -318,8 +396,8 @@ export class PolicyScanner implements OnApplicationBootstrap, OnModuleDestroy {
         safe.chainId,
         trusted,
       );
-      for (const item of items) {
-        await this.check(em, org, safe, policies, ctx, item);
+      for (const item of read.items) {
+        await this.check(em, org, safe, policies, ctx, item, read.readAt);
       }
     }
   }
@@ -331,6 +409,7 @@ export class PolicyScanner implements OnApplicationBootstrap, OnModuleDestroy {
     policies: Array<CompiledPolicy>,
     ctx: EvalContext,
     { safeTxHash, tx }: Item,
+    readAt: Date,
   ): Promise<void> {
     const result =
       tx &&
@@ -354,9 +433,20 @@ export class PolicyScanner implements OnApplicationBootstrap, OnModuleDestroy {
       return;
     }
     const { violations } = result;
+    // semantic content only: a new policy version or an unrelated policy edit
+    // with the same violations is not news
     const evaluationHash = createHash('sha256')
-      .update(JSON.stringify(violations))
-      .update(policies.map((p) => p.configHash).join(','))
+      .update(
+        JSON.stringify(
+          violations.map((v) => [
+            v.policyId,
+            v.rule,
+            v.callPath,
+            v.to.toLowerCase(),
+            v.detail,
+          ]),
+        ),
+      )
       .digest('hex');
     const changed: Array<{ id: string }> = await em.query(
       `INSERT INTO policy_findings
@@ -365,8 +455,9 @@ export class PolicyScanner implements OnApplicationBootstrap, OnModuleDestroy {
        ON CONFLICT (org_id, linked_safe_id, safe_tx_hash) DO UPDATE SET
          violations = EXCLUDED.violations, evaluation_hash = EXCLUDED.evaluation_hash,
          nonce = EXCLUDED.nonce, resolved_at = NULL, last_seen_at = now(), updated_at = now()
-       WHERE policy_findings.evaluation_hash IS DISTINCT FROM EXCLUDED.evaluation_hash
-          OR policy_findings.resolved_at IS NOT NULL
+       WHERE (policy_findings.resolved_at IS NULL
+              AND policy_findings.evaluation_hash IS DISTINCT FROM EXCLUDED.evaluation_hash)
+          OR policy_findings.resolved_at < $9
        RETURNING id`,
       [
         ...key,
@@ -375,13 +466,15 @@ export class PolicyScanner implements OnApplicationBootstrap, OnModuleDestroy {
         tx.nonce,
         evaluationHash,
         JSON.stringify(violations),
+        readAt,
       ],
     );
     if (changed.length === 0) {
+      // same news (or resolved after this read): keep stored versions current, never reopen
       await em.query(
-        `UPDATE policy_findings SET last_seen_at = now()
-          WHERE org_id = $1 AND linked_safe_id = $2 AND safe_tx_hash = $3`,
-        key,
+        `UPDATE policy_findings SET violations = $4::jsonb, last_seen_at = now()
+          WHERE org_id = $1 AND linked_safe_id = $2 AND safe_tx_hash = $3 AND resolved_at IS NULL`,
+        [...key, JSON.stringify(violations)],
       );
       return;
     }
@@ -411,6 +504,14 @@ function violatingPolicies(
   return policies
     .filter((p) => ids.has(p.id))
     .map((p) => ({ id: p.id, name: p.name }));
+}
+
+function resolveAll(em: EntityManager, org: Linked): Promise<unknown> {
+  return em.query(
+    `UPDATE policy_findings SET resolved_at = now(), updated_at = now()
+      WHERE org_id = $1 AND linked_safe_id = $2 AND resolved_at IS NULL`,
+    [org.orgId, org.linkedSafeId],
+  );
 }
 
 function setOrg(em: EntityManager, orgId: string): Promise<unknown> {
