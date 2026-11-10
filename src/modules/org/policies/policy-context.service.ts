@@ -116,9 +116,10 @@ export class PolicyContextService {
   }
 
   /**
-   * MultiSend and MultiSendCallOnly of every version, plus the chain's
-   * configured ones (lowercase). Throws if the chain config cannot be read:
-   * without it a custom MultiSend would raise false warnings.
+   * MultiSend and MultiSendCallOnly of every version (lowercase); the chain's
+   * configured ones only where safe-deployments has none (custom chains).
+   * Throws if the chain config cannot be read: without it a custom MultiSend
+   * would raise false warnings.
    */
   async trustedMultiSend(chainId: string): Promise<ReadonlySet<string>> {
     const { contractAddresses } = await this.chains.getChain(chainId);
@@ -135,14 +136,12 @@ export class PolicyContextService {
       contractAddresses.multiSendAddress,
       contractAddresses.multiSendCallOnlyAddress,
     ]) {
-      if (!a) continue;
-      if (!official.has(a.toLowerCase())) {
-        // kept (custom chains), but a wrong config entry would hide delegatecalls from policies
-        this.logger.error(
-          `Chain ${chainId} config MultiSend ${a} is not a safe-deployments address`,
-        );
-      }
-      trusted.add(a.toLowerCase());
+      if (!a || official.has(a.toLowerCase())) continue;
+      // a wrong config entry would hide delegatecalls from policies: ignored where deployments exist
+      this.logger.error(
+        `Chain ${chainId} config MultiSend ${a} is not a safe-deployments address${official.size > 0 ? '; ignored' : ''}`,
+      );
+      if (official.size === 0) trusted.add(a.toLowerCase());
     }
     return trusted;
   }

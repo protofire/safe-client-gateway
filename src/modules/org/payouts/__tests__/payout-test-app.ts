@@ -43,7 +43,10 @@ export const USDC = getAddress('0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48');
 export const ALICE = addr(0xa11ce);
 export const BOB = addr(0xb0b);
 export const CAROL = addr(0xca401);
-export const CALL_ONLY = addr(0x3518);
+// MultiSendCallOnly 1.3.0 on chain 1: the chain config is ignored where deployments exist
+export const CALL_ONLY = getAddress(
+  '0x40a2accbd92bca938b02010e17a5b8929b49130d',
+);
 export const HOUR = 3_600_000;
 
 let hashSeq = 0;

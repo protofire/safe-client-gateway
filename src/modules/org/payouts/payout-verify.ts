@@ -9,7 +9,7 @@ export type VerifyResult =
   | { ok: true }
   | { ok: false; code: 'tx_mismatch' | 'multisend_unknown'; field: string };
 
-/** Lowercase MultiSendCallOnly addresses of every Safe version on the chain ∪ the chain config's. Plain MultiSend is not in it. */
+/** Lowercase MultiSendCallOnly addresses of every Safe version on the chain; the chain config's only where safe-deployments has none. Plain MultiSend is not in it. */
 export function multiSendCallOnlySet(
   chainId: string,
   chainConfigAddress?: Address,
@@ -21,7 +21,9 @@ export function multiSendCallOnlySet(
       )
       .map((a) => a.toLowerCase()),
   );
-  if (chainConfigAddress) set.add(chainConfigAddress.toLowerCase());
+  // a wrong config entry must not widen a chain the deployments already cover
+  if (set.size === 0 && chainConfigAddress)
+    set.add(chainConfigAddress.toLowerCase());
   return set;
 }
 
