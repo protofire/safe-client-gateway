@@ -9,6 +9,8 @@ import { MailService } from '@/modules/org/mail/mail.service';
 import type { SecurityNotice } from '@/modules/org/mail/templates';
 import type { Permission } from '@/modules/org/permissions/permissions';
 
+type Recipient = { email: string; inOrg: boolean };
+
 /** Who counts as an admin for notices: holders of role assignment (permissions as data). */
 export const ADMIN_PERMISSION: Permission = 'roles.assign';
 
@@ -38,7 +40,7 @@ export class SecurityNotifier {
     affectedUserIds: Array<string> = [],
     adminOrgIds: Array<string> = [orgId],
   ): Promise<void> {
-    let recipients: Array<string>;
+    let recipients: Array<Recipient>;
     let orgName: string;
     try {
       ({ recipients, orgName } = await this.recipients(
@@ -51,8 +53,13 @@ export class SecurityNotifier {
       return;
     }
     const results = await Promise.allSettled(
-      recipients.map((to) =>
-        this.mail.sendSecurityNotice(to, { ...notice, orgName }),
+      recipients.map(({ email, inOrg }) =>
+        this.mail.sendSecurityNotice(email, {
+          ...notice,
+          orgName,
+          // a cross-org reset must not name the acting org to other orgs' admins
+          crossOrg: notice.kind === 'factors_reset' && !inOrg,
+        }),
       ),
     );
     for (const r of results) {
@@ -64,11 +71,14 @@ export class SecurityNotifier {
     orgId: string,
     affectedUserIds: Array<string>,
     adminOrgIds: Array<string>,
-  ): Promise<{ recipients: Array<string>; orgName: string }> {
+  ): Promise<{ recipients: Array<Recipient>; orgName: string }> {
     return this.tx.runInOrgTx(async (em) => {
       // first email identity per user; admins of an active user only
-      const rows: Array<{ email: string }> = await em.query(
-        `SELECT DISTINCT ON (i.user_id) i.email_encrypted AS email
+      const rows: Array<{ email: string; inOrg: boolean }> = await em.query(
+        `SELECT DISTINCT ON (i.user_id) i.email_encrypted AS email,
+                EXISTS (SELECT 1 FROM members om
+                        WHERE om.user_id = i.user_id AND om.org_id = $4
+                          AND om.status = 'active') AS "inOrg"
          FROM identities i
          WHERE i.kind = 'oidc' AND i.email_encrypted IS NOT NULL
            AND (i.user_id = ANY($1::uuid[]) OR i.user_id IN (
@@ -78,14 +88,17 @@ export class SecurityNotifier {
              JOIN roles r ON r.id = rb.role_id AND (r.org_id IS NULL OR r.org_id = m.org_id)
              WHERE m.org_id = ANY($3::uuid[]) AND m.status = 'active' AND $2 = ANY(r.permissions)))
          ORDER BY i.user_id, i.created_at, i.id`,
-        [affectedUserIds, ADMIN_PERMISSION, adminOrgIds],
+        [affectedUserIds, ADMIN_PERMISSION, adminOrgIds, orgId],
       );
       const [org]: Array<{ name: string }> = await em.query(
         `SELECT name FROM organizations WHERE id = $1`,
         [orgId],
       );
       return {
-        recipients: rows.map((r) => this.encryption.decrypt(r.email)),
+        recipients: rows.map((r) => ({
+          email: this.encryption.decrypt(r.email),
+          inOrg: r.inOrg,
+        })),
         orgName: org?.name ?? '',
       };
     });

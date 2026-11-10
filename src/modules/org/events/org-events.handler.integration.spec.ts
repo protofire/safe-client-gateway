@@ -505,8 +505,10 @@ describe('OrgEventsHandler', () => {
     });
 
     it('hourly purge deletes orphan snapshots no org links (round 2 item 8)', async () => {
-      // SAFE is linked by orgs A and B; OTHER by nobody
-      for (const address of [SAFE, OTHER]) {
+      // SAFE is linked by orgs A and B; OTHER by nobody (aged); FRESH by
+      // nobody but written just now, as a concurrent link would
+      const FRESH = `0x${'f'.repeat(40)}`;
+      for (const address of [SAFE, OTHER, FRESH]) {
         await sql.transaction((em) =>
           seedSnapshotIfAbsent(
             em,
@@ -516,14 +518,25 @@ describe('OrgEventsHandler', () => {
           ),
         );
       }
+      await sql.query(
+        `UPDATE linked_safe_snapshots SET updated_at = now() - interval '11 minutes'
+         WHERE address <> $1`,
+        [FRESH],
+      );
       await new PurgeProcessor(
         new OrgTransaction(sql),
         systemClock,
         logger as never,
       ).run();
       expect(
-        await sql.query(`SELECT address FROM linked_safe_snapshots`),
-      ).toEqual([{ address: SAFE }]);
+        await sql.query(
+          `SELECT address FROM linked_safe_snapshots ORDER BY address`,
+        ),
+      ).toEqual(
+        [{ address: SAFE }, { address: FRESH }].sort((a, b) =>
+          a.address.localeCompare(b.address),
+        ),
+      );
     });
 
     it('keeps the snapshot other orgs diff against when one more org links', async () => {

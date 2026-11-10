@@ -138,7 +138,8 @@ export class PurgeProcessor implements OnApplicationBootstrap, OnModuleDestroy {
 
   /**
    * Snapshots of Safes no org links (item 8), e.g. left by an unlink whose
-   * delete raced a diff; a later link starts from the current state.
+   * delete raced a diff; a later link starts from the current state. Rows
+   * younger than 10 minutes stay: a concurrent link may have just written one.
    */
   async purgeOrphanSnapshots(): Promise<number> {
     return this.tx.runInOrgTx(async (em) => {
@@ -146,7 +147,8 @@ export class PurgeProcessor implements OnApplicationBootstrap, OnModuleDestroy {
       const [, deleted]: [unknown, number] = await em.query(
         `DELETE FROM linked_safe_snapshots s
          WHERE NOT EXISTS (SELECT 1 FROM linked_safes l
-                           WHERE l.chain_id = s.chain_id AND l.address = s.address)`,
+                           WHERE l.chain_id = s.chain_id AND l.address = s.address)
+           AND s.updated_at < now() - interval '10 minutes'`,
       );
       return deleted;
     });

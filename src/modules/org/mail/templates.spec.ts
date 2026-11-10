@@ -17,7 +17,46 @@ describe('mail templates (item 2)', () => {
     ['a***@example.com', 'a***@example com'],
     ['x'.repeat(100), 'x'.repeat(64)],
   ])('plainName(%p) = %p', (input, expected) => {
-    expect(plainName(input)).toBe(expected);
+    expect(plainName(input, true)).toBe(expected);
+  });
+
+  it.each([
+    ['пример.рф', 'пример рф'],
+    ['é.com', 'é com'],
+  ])('neutralises non-ASCII bare domains: %p', (input, expected) => {
+    expect(plainName(input, true)).toBe(expected);
+  });
+
+  it('keeps a masked email intact in notices while neutralising an org name domain', () => {
+    const mail = securityNoticeTemplate({
+      kind: 'admin_removed',
+      orgName: 'evil-login.com',
+      target: 'j***@gmail.com',
+    });
+    expect(mail.text).toContain('j***@gmail.com');
+    expect(mail.text).toContain('evil-login com');
+    expect(mail.text).not.toContain('evil-login.com');
+    expect(
+      inviteTemplate({
+        orgName: 'Acme',
+        inviterLabel: 'j***@gmail.com',
+        acceptUrl: 'https://app.example.com/i#t',
+      }).text,
+    ).toContain('j***@gmail.com invited you');
+  });
+
+  it('cross-org factors_reset notice does not name the acting org', () => {
+    const mail = securityNoticeTemplate({
+      kind: 'factors_reset',
+      orgName: 'ActingOrg',
+      target: 'b***@example.com',
+      crossOrg: true,
+    });
+    const all = `${mail.subject}\n${mail.text}\n${mail.html}`;
+    expect(all).not.toContain('ActingOrg');
+    expect(mail.text).toContain(
+      'An administrator of another organization you share with b***@example.com reset their two-factor authentication.',
+    );
   });
 
   it('strips links from org and inviter names in invitations, keeps the accept URL', () => {

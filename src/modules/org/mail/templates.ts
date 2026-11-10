@@ -21,15 +21,20 @@ const MAX_NAME_LENGTH = 64;
  * Org and inviter names are user input: one line (no header injection), no
  * URLs, `http`/`www.` fragments or bare domains (a dot between word
  * characters becomes a space, so mail clients do not auto-link
- * `evil-login.com`), and at most 64 characters, so a name cannot pose as a
- * link in a mail we send (phishing through our domain).
+ * `evil-login.com`; org names only, `neutraliseDomains`: it would mangle a
+ * masked email), and at most 64 characters, so a name cannot pose as a link
+ * in a mail we send (phishing through our domain).
  */
-export function plainName(value: string): string {
-  return value
+export function plainName(value: string, neutraliseDomains = false): string {
+  const cleaned = value
     .replace(/[\r\n]+/g, ' ')
     .replace(/(?:https?:\/\/|www\.)\S*/gi, '')
-    .replace(/https?:?|www\./gi, '')
-    .replace(/(?<=\w)\.(?=\w)/g, ' ')
+    .replace(/https?:?|www\./gi, '');
+  return (
+    neutraliseDomains
+      ? cleaned.replace(/(?<=[\p{L}\p{N}_-])\.(?=[\p{L}\p{N}])/gu, ' ')
+      : cleaned
+  )
     .replace(/\s{2,}/g, ' ')
     .trim()
     .slice(0, MAX_NAME_LENGTH)
@@ -37,7 +42,7 @@ export function plainName(value: string): string {
 }
 
 export function inviteTemplate(mail: InviteMail): MailContent {
-  const orgName = plainName(mail.orgName) || 'an organization';
+  const orgName = plainName(mail.orgName, true) || 'an organization';
   const inviter = plainName(mail.inviterLabel) || 'An organization admin';
   return {
     subject: `You are invited to join ${orgName}`,
@@ -57,11 +62,13 @@ export type SecurityNotice = {
   orgName: string;
   /** Masked identity of the affected member; unused for org_deleted. */
   target?: string;
+  /** factors_reset only: the recipient is not a member of the acting org, so its name stays out. */
+  crossOrg?: boolean;
 };
 
 /** Security notices carry no links: nothing to click in a mail about an account change. */
 export function securityNoticeTemplate(notice: SecurityNotice): MailContent {
-  const org = plainName(notice.orgName) || 'your organization';
+  const org = plainName(notice.orgName, true) || 'your organization';
   const target = plainName(notice.target ?? '') || 'A member';
   const [subject, line] = {
     admin_removed: [
@@ -76,10 +83,15 @@ export function securityNoticeTemplate(notice: SecurityNotice): MailContent {
       `${org} was deleted`,
       `The organization "${org}" was deleted. An admin can restore it within 30 days.`,
     ],
-    factors_reset: [
-      `Two-factor authentication was reset in ${org}`,
-      `An admin of the organization "${org}" reset two-factor authentication for ${target}.`,
-    ],
+    factors_reset: notice.crossOrg
+      ? [
+          `Two-factor authentication was reset for ${target}`,
+          `An administrator of another organization you share with ${target} reset their two-factor authentication.`,
+        ]
+      : [
+          `Two-factor authentication was reset in ${org}`,
+          `An admin of the organization "${org}" reset two-factor authentication for ${target}.`,
+        ],
   }[notice.kind];
   const advice =
     'If you did not expect this, contact the other admins of the organization.';

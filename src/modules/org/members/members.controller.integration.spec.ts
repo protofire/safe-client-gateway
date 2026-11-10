@@ -1074,9 +1074,11 @@ describe('members and invitations (org)', () => {
       let inFlight = 0;
       let maxInFlight = 0;
       const sentTo: Array<string> = [];
+      const textTo = new Map<string, string>();
       t.mailPost.mockImplementation(
-        async (args: { data: { to: Array<string> } }) => {
+        async (args: { data: { to: Array<string>; text: string } }) => {
           sentTo.push(args.data.to[0]);
+          textTo.set(args.data.to[0], args.data.text);
           maxInFlight = Math.max(maxInFlight, ++inFlight);
           await new Promise((r) => setTimeout(r, 50));
           inFlight--;
@@ -1099,6 +1101,11 @@ describe('members and invitations (org)', () => {
       );
       // sent concurrently (Promise.allSettled), not one after another
       expect(maxInFlight).toBe(3);
+      // A and the target belong to org A and hear its name; C only admins B
+      expect(textTo.get(aEmail)).toContain('"A"');
+      expect(textTo.get(targetEmail)).toContain('"A"');
+      expect(textTo.get(cEmail)).toContain('another organization you share');
+      expect(textTo.get(cEmail)).not.toContain('"A"');
     });
   });
 });
