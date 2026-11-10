@@ -37,8 +37,7 @@ const policyBody = {
   name: z.string().trim().min(1).max(64),
   enabled: z.boolean(),
   scope: z.unknown(),
-  // four kinds, one rule each: anything longer is rejected by kind anyway
-  rules: z.array(z.unknown()).max(8),
+  rules: z.unknown(),
 };
 export const CreatePolicySchema = z.object(policyBody);
 export const UpdatePolicySchema = z.object({

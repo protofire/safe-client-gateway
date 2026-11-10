@@ -1,6 +1,7 @@
 import { isAddress, type Address } from 'viem';
 import { z } from 'zod';
 
+const MAX_SELECTORS_PER_RULE = 2000;
 const ChainIdSchema = z.string().regex(/^[1-9]\d{0,19}$/);
 // stored lowercase so evaluation and the config hash compare plain strings
 const LowerAddressSchema = z
@@ -52,7 +53,18 @@ export const CallAllowlistRuleSchema = z.object({
     )
     .min(1)
     .max(200)
-    .superRefine(unique((e) => `${e.chainId}:${e.target}`, 'call entry')),
+    .superRefine(unique((e) => `${e.chainId}:${e.target}`, 'call entry'))
+    .superRefine((entries, ctx) => {
+      const total = entries.reduce(
+        (n, e) => n + (e.selectors === 'any' ? 0 : e.selectors.length),
+        0,
+      );
+      if (total > MAX_SELECTORS_PER_RULE)
+        ctx.addIssue({
+          code: 'custom',
+          message: `At most ${MAX_SELECTORS_PER_RULE} selectors per rule`,
+        });
+    }),
 });
 
 export const AmountCapRuleSchema = z.object({

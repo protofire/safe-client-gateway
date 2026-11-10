@@ -148,4 +148,31 @@ describe('PolicyRuleSchema', () => {
       }).success,
     ).toBe(true);
   });
+
+  it('caps the selectors of one call_allowlist rule at 2000 in total', () => {
+    const entries = (n: number): Array<unknown> =>
+      Array.from({ length: n }, (_, i) => ({
+        chainId: '1',
+        target: `0x${(i + 1).toString(16).padStart(40, '0')}`,
+        selectors: Array.from(
+          { length: 200 },
+          (_, j) => `0x${(j + 1).toString(16).padStart(8, '0')}`,
+        ),
+      }));
+    expect(
+      PolicyRuleSchema.safeParse({
+        kind: 'call_allowlist',
+        entries: entries(10),
+      }).success,
+    ).toBe(true);
+    const over = PolicyRuleSchema.safeParse({
+      kind: 'call_allowlist',
+      entries: [
+        ...entries(10),
+        { chainId: '2', target: USDC, selectors: ['0xa9059cbb'] },
+      ],
+    });
+    expect(over.success).toBe(false);
+    expect(over.error?.issues[0].path).toEqual(['entries']);
+  });
 });

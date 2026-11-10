@@ -1,12 +1,16 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { _SAFE_DEPLOYMENTS } from '@safe-global/safe-deployments/dist/deployments';
 import type { EntityManager } from 'typeorm';
 import type { Address } from 'viem';
 import { z } from 'zod';
 import {
   getMultiSendCallOnlyDeployments,
   getMultiSendDeployments,
+  getSafeVersions,
 } from '@/domain/common/utils/deployments';
+import {
+  type ILoggingService,
+  LoggingService,
+} from '@/logging/logging.interface';
 import { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
 import type { EvalContext } from '@/modules/org/policies/evaluate';
 import {
@@ -31,11 +35,16 @@ export function inScope(
   );
 }
 
-/** What `evaluate` needs, read on the caller's transaction (RLS: `app.org_id` set). */
+/**
+ * What `evaluate` needs. `activePolicies` and `context` read on the caller's
+ * transaction (RLS: `app.org_id` set); `trustedMultiSend` does HTTP and must
+ * be called before the transaction opens.
+ */
 @Injectable()
 export class PolicyContextService {
   constructor(
     @Inject(IChainsRepository) private readonly chains: IChainsRepository,
+    @Inject(LoggingService) private readonly logger: ILoggingService,
   ) {}
 
   /** Active policies covering the Safe, at their latest version, in creation order. */
@@ -72,10 +81,12 @@ export class PolicyContextService {
       }));
   }
 
+  /** `trustedMultiSend`: the result of {@link trustedMultiSend}, read before the transaction. */
   async context(
     em: EntityManager,
     orgId: string,
     chainId: string,
+    trustedMultiSend: ReadonlySet<string>,
   ): Promise<EvalContext> {
     const contacts: Array<{ address: string }> = await em.query(
       `SELECT address::text AS address FROM contacts
@@ -85,24 +96,39 @@ export class PolicyContextService {
     return {
       chainId,
       allowedRecipients: new Set(contacts.map((c) => c.address.toLowerCase())),
-      trustedMultiSend: await this.trustedMultiSend(chainId),
+      trustedMultiSend,
     };
   }
 
-  /** MultiSend and MultiSendCallOnly of every released version, plus the chain's configured ones. */
-  private async trustedMultiSend(chainId: string): Promise<Set<string>> {
+  /**
+   * MultiSend and MultiSendCallOnly of every version, plus the chain's
+   * configured ones (lowercase). Throws if the chain config cannot be read:
+   * without it a custom MultiSend would raise false warnings.
+   */
+  async trustedMultiSend(chainId: string): Promise<ReadonlySet<string>> {
     const { contractAddresses } = await this.chains.getChain(chainId);
-    const addresses = _SAFE_DEPLOYMENTS
-      .flatMap(({ version }) => [
-        ...getMultiSendDeployments({ chainId, version }),
-        ...getMultiSendCallOnlyDeployments({ chainId, version }),
-      ])
-      .concat(
-        [
-          contractAddresses.multiSendAddress,
-          contractAddresses.multiSendCallOnlyAddress,
-        ].filter((a): a is Address => !!a),
-      );
-    return new Set(addresses.map((a) => a.toLowerCase()));
+    const official = new Set(
+      getSafeVersions()
+        .flatMap((version) => [
+          ...getMultiSendDeployments({ chainId, version }),
+          ...getMultiSendCallOnlyDeployments({ chainId, version }),
+        ])
+        .map((a) => a.toLowerCase()),
+    );
+    const trusted = new Set(official);
+    for (const a of [
+      contractAddresses.multiSendAddress,
+      contractAddresses.multiSendCallOnlyAddress,
+    ]) {
+      if (!a) continue;
+      if (!official.has(a.toLowerCase())) {
+        // kept (custom chains), but a wrong config entry would hide delegatecalls from policies
+        this.logger.error(
+          `Chain ${chainId} config MultiSend ${a} is not a safe-deployments address`,
+        );
+      }
+      trusted.add(a.toLowerCase());
+    }
+    return trusted;
   }
 }

@@ -38,7 +38,7 @@ import { PoliciesController } from '@/modules/org/policies/policies.controller';
 import { PoliciesService } from '@/modules/org/policies/policies.service';
 import { PolicyContextService } from '@/modules/org/policies/policy-context.service';
 import type { CompiledPolicy } from '@/modules/org/policies/policy-rules';
-import { ITokenRepository } from '@/modules/tokens/domain/token.repository.interface';
+import { ITransactionApiManager } from '@/domain/interfaces/transaction-api.manager.interface';
 import { ORG_APP_GUARDS } from '@/org-app.module';
 import { configureOrgApp } from '@/org-main';
 import { runOrgMigrations } from '@/org-migrate';
@@ -106,7 +106,9 @@ const CUSTOM_CALL_ONLY = addr(0x3518);
 
 // Gateway repositories are mocked: no network
 const chainsRepo = { getChain: jest.fn() };
-const tokenRepo = { getToken: jest.fn() };
+// raw tx-service token reads (the policy service checks decimals are present)
+const txService = { getToken: jest.fn() };
+const txApiManager = { getApi: jest.fn() };
 
 type User = { cookie: string; userId: string };
 type PolicyBody = {
@@ -280,7 +282,7 @@ describe('policies API and evaluation context', () => {
         PoliciesService,
         PolicyContextService,
         { provide: IChainsRepository, useValue: chainsRepo },
-        { provide: ITokenRepository, useValue: tokenRepo },
+        { provide: ITransactionApiManager, useValue: txApiManager },
         { provide: APP_FILTER, useClass: GlobalErrorFilter },
         { provide: APP_FILTER, useClass: ZodErrorFilter },
         ...ORG_APP_GUARDS,
@@ -343,17 +345,17 @@ describe('policies API and evaluation context', () => {
         multiSendCallOnlyAddress: CUSTOM_CALL_ONLY,
       },
     });
-    tokenRepo.getToken.mockImplementation(
-      ({ address }: { address: Address }) =>
-        address.toLowerCase() === USDC.toLowerCase()
-          ? Promise.resolve({
-              type: 'ERC20',
-              address: USDC,
-              decimals: 6,
-              symbol: 'USDC',
-              name: 'USD Coin',
-            })
-          : Promise.reject(new DataSourceError('Not found', 404)),
+    txApiManager.getApi.mockResolvedValue(txService);
+    txService.getToken.mockImplementation((address: Address) =>
+      address.toLowerCase() === USDC.toLowerCase()
+        ? Promise.resolve({
+            type: 'ERC20',
+            address: USDC,
+            decimals: 6,
+            symbol: 'USDC',
+            name: 'USD Coin',
+          })
+        : Promise.reject(new DataSourceError('Not found', 404)),
     );
   });
 
@@ -759,6 +761,130 @@ describe('policies API and evaluation context', () => {
     expect(res.body.code).toBe('version_conflict');
   });
 
+  it('answers 409 version_conflict to a second editor submitting the same change from v1', async () => {
+    const { id } = await create();
+    const change = { ...body({ name: 'Same' }), expectedVersion: 1 };
+    await write('put', `${orgA}/policies/${id}`, admin, change).expect(200);
+    const res = await write(
+      'put',
+      `${orgA}/policies/${id}`,
+      admin,
+      change,
+    ).expect(409);
+    expect(res.body.code).toBe('version_conflict');
+  });
+
+  it('reuses stored cap metadata, so rename and disable work while the token service is down', async () => {
+    const { id, configHash } = await create({ rules: [usdcCap('10')] });
+    txService.getToken.mockRejectedValue(new Error('tx-service down'));
+    const renamed = await write('put', `${orgA}/policies/${id}`, admin, {
+      ...body({ name: 'Renamed', rules: [usdcCap('10.0')] }),
+      expectedVersion: 1,
+    }).expect(200);
+    expect(renamed.body).toMatchObject({ version: 2, configHash });
+    await write('put', `${orgA}/policies/${id}`, admin, {
+      ...body({ name: 'Renamed', enabled: false, rules: [usdcCap('10')] }),
+      expectedVersion: 2,
+    }).expect(200);
+    // a changed cap needs the token again
+    await write('put', `${orgA}/policies/${id}`, admin, {
+      ...body({ name: 'Renamed', enabled: false, rules: [usdcCap('11')] }),
+      expectedVersion: 3,
+    }).expect(502);
+    // an upstream symbol change does not make a new version
+    txService.getToken.mockResolvedValue({
+      type: 'ERC20',
+      address: USDC,
+      decimals: 6,
+      symbol: 'USDC.e',
+      name: 'x',
+    });
+    const same = await write('put', `${orgA}/policies/${id}`, admin, {
+      ...body({ name: 'Renamed', enabled: false, rules: [usdcCap('10')] }),
+      expectedVersion: 3,
+    }).expect(200);
+    expect(same.body).toMatchObject({ version: 3, configHash });
+    expect(same.body.rules[0].caps[0].symbol).toBe('USDC');
+  });
+
+  it('answers 422 invalid_rules for a malformed or oversized rules array and unknown token decimals', async () => {
+    for (const rules of [
+      'x',
+      [],
+      Array.from({ length: 9 }, () => ({ kind: 'no_delegatecall' })),
+    ]) {
+      const res = await write('post', `${orgA}/policies`, admin, {
+        ...body(),
+        rules,
+      }).expect(422);
+      expect(res.body).toMatchObject({
+        code: 'invalid_rules',
+        errors: [expect.objectContaining({ path: 'rules' })],
+      });
+    }
+    txService.getToken.mockResolvedValue({
+      type: 'ERC20',
+      address: USDC,
+      decimals: null,
+      symbol: 'USDC',
+      name: 'x',
+    });
+    const res = await write(
+      'post',
+      `${orgA}/policies`,
+      admin,
+      body({ rules: [usdcCap('1')] }),
+    ).expect(422);
+    expect(res.body.errors).toEqual([
+      { path: 'rules.0.caps.0.token', reason: 'Token decimals unknown' },
+    ]);
+  });
+
+  it('answers 403 when the writer is demoted while waiting for the org lock', async () => {
+    const coAdmin = await signIn();
+    const orgC = await createOrg([
+      [admin, 'admin'],
+      [coAdmin, 'admin'],
+    ]);
+    const { body: created } = await write(
+      'post',
+      `${orgC}/policies`,
+      admin,
+      body(),
+    ).expect(201);
+    const runner = sql.createQueryRunner();
+    await runner.connect();
+    await runner.startTransaction();
+    try {
+      await runner.query(
+        `SELECT id FROM organizations WHERE id = $1 FOR UPDATE`,
+        [orgC],
+      );
+      const pending = write('put', `${orgC}/policies/${created.id}`, admin, {
+        ...body({ name: 'late' }),
+        expectedVersion: 1,
+      }).then((r) => r);
+      // wait until the PUT is queued behind the org row lock
+      for (let i = 0; i < 100; i++) {
+        const [{ n }] = await sql.query(
+          `SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`,
+        );
+        if (n > 0) break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      await runner.query(
+        `UPDATE role_bindings SET role_id = (SELECT id FROM roles WHERE org_id IS NULL AND key = 'member')
+          WHERE member_id = (SELECT id FROM members WHERE org_id = $1 AND user_id = $2)`,
+        [orgC, admin.userId],
+      );
+      await runner.commitTransaction();
+      expect((await pending).status).toBe(403);
+    } finally {
+      if (runner.isTransactionActive) await runner.rollbackTransaction();
+      await runner.release();
+    }
+  });
+
   it('lets exactly one of two concurrent PUTs with the same expectedVersion win', async () => {
     const { id } = await create();
     const [a, b] = await Promise.all([
@@ -783,7 +909,8 @@ describe('policies API and evaluation context', () => {
 
   it('builds trustedMultiSend from deployments and chain config', async () => {
     const ctx = await tx.runInOrgTx(
-      (em) => context.context(em, orgA, '1'),
+      async (em) =>
+        context.context(em, orgA, '1', await context.trustedMultiSend('1')),
       orgA,
     );
     const expected = ['1.1.1', '1.3.0', '1.4.1']
@@ -798,6 +925,25 @@ describe('policies API and evaluation context', () => {
     expect(ctx.trustedMultiSend.has(CUSTOM_CALL_ONLY.toLowerCase())).toBe(true);
     expect(ctx.chainId).toBe('1');
     expect(chainsRepo.getChain).toHaveBeenCalledWith('1');
+    // custom addresses are kept but logged: they are not official deployments
+    expect(logger.error).toHaveBeenCalledTimes(2);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining(CUSTOM_MULTISEND),
+    );
+
+    logger.error.mockClear();
+    chainsRepo.getChain.mockResolvedValue({
+      chainId: '1',
+      contractAddresses: {
+        multiSendAddress: getAddress(expected[0]),
+        multiSendCallOnlyAddress: null,
+      },
+    });
+    await context.trustedMultiSend('1');
+    expect(logger.error).not.toHaveBeenCalled();
+
+    chainsRepo.getChain.mockRejectedValue(new Error('config down'));
+    await expect(context.trustedMultiSend('1')).rejects.toThrow('config down');
   });
 
   it('includes only contacts tagged allowed on the Safe chain', async () => {
@@ -819,7 +965,8 @@ describe('policies API and evaluation context', () => {
     await seed(orgA, 'untagged', addr(3), ['1'], ['vendor']);
     await seed(orgB, 'other org', addr(4), ['1'], ['allowed']);
     const ctx = await tx.runInOrgTx(
-      (em) => context.context(em, orgA, '1'),
+      async (em) =>
+        context.context(em, orgA, '1', await context.trustedMultiSend('1')),
       orgA,
     );
     expect([...ctx.allowedRecipients]).toEqual([addr(1).toLowerCase()]);

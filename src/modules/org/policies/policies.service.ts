@@ -10,6 +10,7 @@ import type { EntityManager } from 'typeorm';
 import { getAddress } from 'viem';
 import { z } from 'zod';
 import { DataSourceError } from '@/domain/errors/data-source.error';
+import { ITransactionApiManager } from '@/domain/interfaces/transaction-api.manager.interface';
 import { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
 import { ActivityLog } from '@/modules/org/activity/activity-log.service';
 import {
@@ -42,7 +43,6 @@ import {
   type PolicyScope,
 } from '@/modules/org/policies/policy-rules';
 import { mapLimit } from '@/modules/org/safes/map-limit';
-import { ITokenRepository } from '@/modules/tokens/domain/token.repository.interface';
 
 type Row = {
   id: string;
@@ -69,6 +69,26 @@ const AMOUNT_REASONS: Record<AmountError['code'], string> = {
   overflow: 'Too large',
 };
 
+type StoredCap = Extract<PolicyRule, { kind: 'amount_cap' }>['caps'][number];
+// four kinds, one rule each; a longer array is rejected before any rule is read
+const MAX_RULES = 8;
+
+/** The input amount is the stored cap, read with the stored decimals. */
+function sameAmount(maxAmount: string, cap: StoredCap): boolean {
+  try {
+    return parseAmountStrict(maxAmount, cap.decimals).toString() === cap.maxRaw;
+  } catch {
+    return false;
+  }
+}
+
+// only what a cap needs from the raw tx-service token; decimals may be absent upstream
+const RawTokenSchema = z.object({
+  type: z.string(),
+  symbol: z.string(),
+  decimals: z.number().int().nullish(),
+});
+
 type Resolved = { scope: PolicyScope; rules: Array<PolicyRule> };
 
 function issues(prefix: string, error: z.ZodError): Array<RuleError> {
@@ -85,6 +105,13 @@ function invalidRules(errors: Array<RuleError>): UnprocessableEntityException {
     code: 'invalid_rules',
     errors: errors.slice(0, 100),
   });
+}
+
+function versionConflict(): ConflictException {
+  return conflict(
+    'version_conflict',
+    'The policy was changed meanwhile; reload and try again',
+  );
 }
 
 function toView(r: Row): Policy {
@@ -119,7 +146,8 @@ export class PoliciesService {
     private readonly log: ActivityLog,
     private readonly resolver: PermissionResolver,
     @Inject(IChainsRepository) private readonly chains: IChainsRepository,
-    @Inject(ITokenRepository) private readonly tokens: ITokenRepository,
+    @Inject(ITransactionApiManager)
+    private readonly transactionApis: ITransactionApiManager,
   ) {}
 
   list(orgId: string): Promise<Array<Policy>> {
@@ -178,12 +206,18 @@ export class PoliciesService {
     input: PolicyBody & { expectedVersion: number },
     actor: Actor,
   ): Promise<Policy> {
-    const { scope, rules } = await this.resolve(input);
+    // unchanged caps keep their stored token metadata: no token read, no new version on an upstream symbol change
+    const before = await this.tx.runInOrgTx(
+      (em) => this.find(em, orgId, id),
+      orgId,
+    );
+    const { scope, rules } = await this.resolve(input, before.rules);
     const hash = configHash(scope, rules);
     const status = input.enabled ? 'active' : 'disabled';
     return this.tx.runInOrgTx(async (em) => {
       await this.lock(em, orgId, actor.userId);
       const current = await this.find(em, orgId, id);
+      if (current.version !== input.expectedVersion) throw versionConflict();
       // Safes already in the stored scope may have been unlinked since: keeping them is not a new choice
       await this.assertLinked(em, orgId, scope, current.scope.safes);
       if (
@@ -204,12 +238,7 @@ export class PoliciesService {
             [orgId, id, input.name, status, input.expectedVersion],
           ),
         );
-      if (!row) {
-        throw conflict(
-          'version_conflict',
-          'The policy was changed meanwhile; reload and try again',
-        );
-      }
+      if (!row) throw versionConflict();
       const version = row.current_version;
       await this.insertVersion(
         em,
@@ -282,16 +311,23 @@ export class PoliciesService {
   }
 
   /** Validates scope and rules and resolves cap amounts to raw units; 422 `invalid_rules` with paths. */
-  private async resolve(input: PolicyBody): Promise<Resolved> {
-    const errors: Array<RuleError> = [];
+  private async resolve(
+    input: PolicyBody,
+    stored: Array<PolicyRuleView> = [],
+  ): Promise<Resolved> {
     const scope = PolicyScopeSchema.safeParse(input.scope);
-    if (!scope.success) errors.push(...issues('scope', scope.error));
     const parsed = z
       .array(PolicyRuleInputSchema)
       .min(1, 'A policy needs at least one rule')
+      .max(MAX_RULES, `At most ${MAX_RULES} rules (one of each kind)`)
       .safeParse(input.rules);
-    if (!parsed.success)
-      throw invalidRules([...errors, ...issues('rules', parsed.error)]);
+    if (!scope.success || !parsed.success) {
+      throw invalidRules([
+        ...(scope.success ? [] : issues('scope', scope.error)),
+        ...(parsed.success ? [] : issues('rules', parsed.error)),
+      ]);
+    }
+    const errors: Array<RuleError> = [];
     const kinds = new Set<string>();
     parsed.data.forEach((rule, i) => {
       if (kinds.has(rule.kind)) {
@@ -304,11 +340,18 @@ export class PoliciesService {
     });
     if (errors.length > 0) throw invalidRules(errors);
 
+    const known = new Map(
+      stored.flatMap((r) =>
+        r.kind === 'amount_cap'
+          ? r.caps.map((c) => [`${c.chainId}:${c.token}`, c] as const)
+          : [],
+      ),
+    );
     const resolved: Array<unknown> = [];
     for (const [i, rule] of parsed.data.entries()) {
-      resolved.push(await this.resolveRule(rule, i, errors));
+      resolved.push(await this.resolveRule(rule, i, known, errors));
     }
-    if (errors.length > 0 || !scope.success) throw invalidRules(errors);
+    if (errors.length > 0) throw invalidRules(errors);
     // the stored shape runs the B2 checks (duplicates, limits) on resolved values
     const rules = StoredRulesSchema.safeParse(resolved);
     if (!rules.success) throw invalidRules(issues('rules', rules.error));
@@ -318,6 +361,7 @@ export class PoliciesService {
   private async resolveRule(
     rule: PolicyRuleInput,
     i: number,
+    known: ReadonlyMap<string, StoredCap>,
     errors: Array<RuleError>,
   ): Promise<unknown> {
     if (rule.kind !== 'amount_cap') return rule;
@@ -325,6 +369,15 @@ export class PoliciesService {
       rule.caps.map((cap, j) => ({ cap, path: `rules.${i}.caps.${j}` })),
       5,
       async ({ cap: { maxAmount, ...cap }, path }) => {
+        const same = known.get(`${cap.chainId}:${cap.token}`);
+        if (same && sameAmount(maxAmount, same)) {
+          return {
+            ...cap,
+            maxRaw: same.maxRaw,
+            decimals: same.decimals,
+            symbol: same.symbol,
+          };
+        }
         const meta = await this.tokenMeta(cap.chainId, cap.token);
         if ('reason' in meta) {
           errors.push({ path: `${path}.${meta.field}`, reason: meta.reason });
@@ -361,12 +414,14 @@ export class PoliciesService {
           symbol: nativeCurrency.symbol,
         };
       }
-      const t = await this.tokens.getToken({
-        chainId,
-        address: getAddress(token),
-      });
+      const api = await this.transactionApis.getApi(chainId);
+      const t = RawTokenSchema.parse(await api.getToken(getAddress(token)));
       if (t.type !== 'ERC20') {
         return { field: 'token', reason: 'Not an ERC20 token' };
+      }
+      // the gateway token schema turns absent decimals into 0: a cap must not guess
+      if (t.decimals === null || t.decimals === undefined) {
+        return { field: 'token', reason: 'Token decimals unknown' };
       }
       return { decimals: t.decimals, symbol: t.symbol };
     } catch (error) {
