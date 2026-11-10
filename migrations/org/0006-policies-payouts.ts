@@ -19,6 +19,13 @@ const timestamps = `created_at timestamptz NOT NULL DEFAULT now(),
 const CURRENT_ORG = `NULLIF(current_setting('app.org_id', true), '')::uuid`;
 // a pin exists only while the run can still be paid at that nonce
 const PINNED = `('draft', 'proposing', 'proposed', 'verifying')`;
+// ::text: citext's ~ is case-insensitive
+const lowercaseAddress = (column: string): string =>
+  `CHECK (${column}::text ~ '^0x[0-9a-f]{40}$')`;
+const nonce = (column: string, nullable = false): string =>
+  `${column} numeric(78, 0)${nullable ? '' : ' NOT NULL'} CHECK (${column} >= 0)`;
+const TWO_TO_256 =
+  '115792089237316195423570985008687907853269984665640564039457584007913129639936';
 
 const RLS_TABLES = [
   'policies',
@@ -42,6 +49,11 @@ export class PoliciesPayouts1794614400000 implements MigrationInterface {
     const sql = (statement: string): Promise<unknown> =>
       queryRunner.query(statement);
 
+    // ADD CONSTRAINT takes an exclusive lock on linked_safes, which live traffic
+    // reads: fail fast instead of queueing every reader behind a long transaction.
+    // linked_safes is small, so a plain (non-concurrent) build is fine.
+    await sql(`SET LOCAL lock_timeout = '5s'`);
+    await sql(`SET LOCAL statement_timeout = '60s'`);
     await sql(
       `ALTER TABLE linked_safes ADD CONSTRAINT linked_safes_org_id_id_key UNIQUE (org_id, id)`,
     );
@@ -81,7 +93,7 @@ export class PoliciesPayouts1794614400000 implements MigrationInterface {
       chain_id text NOT NULL,
       safe_address citext NOT NULL,
       safe_tx_hash text NOT NULL,
-      nonce numeric(78, 0) NOT NULL,
+      ${nonce('nonce')},
       evaluation_hash text NOT NULL,
       violations jsonb NOT NULL,
       first_seen_at timestamptz NOT NULL DEFAULT now(),
@@ -91,16 +103,13 @@ export class PoliciesPayouts1794614400000 implements MigrationInterface {
       UNIQUE (org_id, linked_safe_id, safe_tx_hash),
       FOREIGN KEY (org_id, linked_safe_id) REFERENCES linked_safes(org_id, id) ON DELETE CASCADE
     )`);
-    await sql(
-      `CREATE INDEX policy_findings_linked_safe_id_idx ON policy_findings (linked_safe_id)`,
-    );
 
     // No linked_safe_id: bound to (chain_id, safe_address) so it still settles after an unlink
     await sql(`CREATE TABLE payout_runs (
       ${id},
       ${orgId},
       chain_id text NOT NULL,
-      safe_address citext NOT NULL,
+      safe_address citext NOT NULL ${lowercaseAddress('safe_address')},
       name text NOT NULL,
       status text NOT NULL DEFAULT 'draft' CHECK (status IN (
         'draft', 'proposing', 'proposed', 'verifying', 'executed',
@@ -111,9 +120,9 @@ export class PoliciesPayouts1794614400000 implements MigrationInterface {
       calls jsonb,
       est_gas bigint,
       evaluation jsonb,
-      pinned_nonce numeric(78, 0),
+      ${nonce('pinned_nonce', true)},
       safe_tx_hash text,
-      nonce numeric(78, 0),
+      ${nonce('nonce', true)},
       executed_tx_hash text,
       verifying_since timestamptz,
       delay_notified_at timestamptz,
@@ -129,6 +138,11 @@ export class PoliciesPayouts1794614400000 implements MigrationInterface {
     await sql(
       `CREATE INDEX payout_runs_org_safe_idx ON payout_runs (org_id, chain_id, safe_address)`,
     );
+    // backstop for "one open payout per Safe per org" (nonce_taken)
+    await sql(
+      `CREATE UNIQUE INDEX payout_runs_one_pin_per_safe_key ON payout_runs (org_id, chain_id, safe_address)
+       WHERE pinned_nonce IS NOT NULL`,
+    );
 
     // No item status: it is the run's status
     await sql(`CREATE TABLE payout_items (
@@ -136,11 +150,11 @@ export class PoliciesPayouts1794614400000 implements MigrationInterface {
       org_id uuid NOT NULL,
       run_id uuid NOT NULL,
       line_no integer NOT NULL,
-      recipient citext NOT NULL,
+      recipient citext NOT NULL ${lowercaseAddress('recipient')},
       token text NOT NULL CHECK (token = 'native' OR token ~ '^0x[0-9a-f]{40}$'),
       amount text NOT NULL CHECK (length(amount) <= 100),
-      amount_raw numeric(78, 0) NOT NULL CHECK (amount_raw > 0),
-      decimals smallint NOT NULL CHECK (decimals >= 0),
+      amount_raw numeric(78, 0) NOT NULL CHECK (amount_raw > 0 AND amount_raw < ${TWO_TO_256}),
+      decimals smallint NOT NULL CHECK (decimals BETWEEN 0 AND 255),
       symbol text NOT NULL,
       name text CHECK (length(name) <= 64),
       warnings text[] NOT NULL DEFAULT '{}',
@@ -148,7 +162,7 @@ export class PoliciesPayouts1794614400000 implements MigrationInterface {
       FOREIGN KEY (org_id, run_id) REFERENCES payout_runs(org_id, id) ON DELETE CASCADE
     )`);
     await sql(
-      `CREATE INDEX payout_items_run_id_idx ON payout_items (run_id, line_no)`,
+      `CREATE UNIQUE INDEX payout_items_run_line_key ON payout_items (run_id, line_no)`,
     );
 
     await sql(`CREATE TABLE payout_proposal_attempts (
@@ -156,7 +170,7 @@ export class PoliciesPayouts1794614400000 implements MigrationInterface {
       org_id uuid NOT NULL,
       run_id uuid NOT NULL,
       run_version integer NOT NULL,
-      nonce numeric(78, 0) NOT NULL,
+      ${nonce('nonce')},
       calls jsonb NOT NULL,
       status text NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'reported', 'released')),
       safe_tx_hash text,
@@ -174,6 +188,24 @@ export class PoliciesPayouts1794614400000 implements MigrationInterface {
     await sql(
       `CREATE INDEX payout_proposal_attempts_run_id_idx ON payout_proposal_attempts (run_id)`,
     );
+    // Attempt history is immutable: the app login may only update the columns
+    // in APP_GRANT_EXCEPTIONS (org-migrate.ts), along these transitions.
+    await sql(`CREATE FUNCTION payout_attempt_transition() RETURNS trigger
+      LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+      BEGIN
+        IF NEW.status IS DISTINCT FROM OLD.status AND (OLD.status, NEW.status) NOT IN (
+          ('open', 'reported'), ('open', 'released'),
+          ('reported', 'released'), ('released', 'reported')
+        ) THEN
+          RAISE EXCEPTION 'payout proposal attempt transition % -> % not allowed', OLD.status, NEW.status
+            USING ERRCODE = 'check_violation', CONSTRAINT = 'payout_attempt_transition';
+        END IF;
+        RETURN NEW;
+      END;
+      $$`);
+    await sql(`CREATE TRIGGER payout_attempt_transition
+      BEFORE UPDATE ON payout_proposal_attempts
+      FOR EACH ROW EXECUTE FUNCTION payout_attempt_transition()`);
 
     for (const table of RLS_TABLES) {
       await sql(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`);
@@ -188,7 +220,7 @@ export class PoliciesPayouts1794614400000 implements MigrationInterface {
       run_id uuid PRIMARY KEY,
       org_id uuid NOT NULL,
       chain_id text NOT NULL,
-      safe_address citext NOT NULL,
+      safe_address citext NOT NULL ${lowercaseAddress('safe_address')},
       FOREIGN KEY (org_id, run_id) REFERENCES payout_runs(org_id, id) ON DELETE CASCADE
     )`);
     await sql(
@@ -214,6 +246,9 @@ export class PoliciesPayouts1794614400000 implements MigrationInterface {
         [permissions, key],
       );
     }
+    // back to the session values for later migrations in the same transaction
+    await sql(`SET LOCAL lock_timeout = DEFAULT`);
+    await sql(`SET LOCAL statement_timeout = DEFAULT`);
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
@@ -228,6 +263,9 @@ export class PoliciesPayouts1794614400000 implements MigrationInterface {
     await queryRunner.query(`DROP TABLE IF EXISTS
       policy_scan_state, payout_watch, payout_proposal_attempts, payout_items,
       payout_runs, policy_findings, policy_versions, policies`);
+    await queryRunner.query(
+      `DROP FUNCTION IF EXISTS payout_attempt_transition()`,
+    );
     await queryRunner.query(
       `ALTER TABLE linked_safes DROP CONSTRAINT IF EXISTS linked_safes_org_id_id_key`,
     );

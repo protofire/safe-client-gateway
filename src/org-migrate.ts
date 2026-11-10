@@ -59,6 +59,13 @@ export const APP_GRANT_EXCEPTIONS: ReadonlyArray<{
     privileges: 'SELECT, INSERT, DELETE, UPDATE (ip_encrypted, user_agent)',
   },
   { table: 'processed_events', privileges: 'SELECT, INSERT, DELETE' },
+  // attempt history: no DELETE (the run's FK cascade runs as owner); the
+  // claim fields never change, transitions are checked by a trigger (0006)
+  {
+    table: 'payout_proposal_attempts',
+    privileges:
+      'SELECT, INSERT, UPDATE (status, safe_tx_hash, release_reason, reported_at, released_at, released_by, updated_at)',
+  },
 ];
 
 /**

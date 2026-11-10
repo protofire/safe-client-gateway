@@ -333,6 +333,7 @@ describe('org schema (through the app login)', () => {
 
   describe('policies and payouts (0006)', () => {
     const SAFE = '0x0000000000000000000000000000000000000a11';
+    const SAFE2 = '0x0000000000000000000000000000000000000a12';
     const RECIPIENT = '0x0000000000000000000000000000000000000b0b';
     const FK = /violates foreign key constraint/;
     const CHECK = /violates check constraint/;
@@ -350,11 +351,12 @@ describe('org schema (through the app login)', () => {
       orgId: string,
       status: string,
       pinnedNonce: number | null,
+      safe = SAFE,
     ): Promise<Array<{ id: string }>> {
       return em.query(
         `INSERT INTO payout_runs (org_id, chain_id, safe_address, name, status, pinned_nonce)
          VALUES ($1, '1', $2, 'run', $3, $4) RETURNING id`,
-        [orgId, SAFE, status, pinnedNonce],
+        [orgId, safe, status, pinnedNonce],
       );
     }
 
@@ -363,11 +365,12 @@ describe('org schema (through the app login)', () => {
       orgId: string,
       runId: string,
       amountRaw = '1000000',
+      { lineNo = 2, recipient = RECIPIENT, decimals = 6 } = {},
     ): Promise<unknown> {
       return em.query(
         `INSERT INTO payout_items (org_id, run_id, line_no, recipient, token, amount, amount_raw, decimals, symbol)
-         VALUES ($1, $2, 2, $3, 'native', '1', $4, 6, 'ETH')`,
-        [orgId, runId, RECIPIENT, amountRaw],
+         VALUES ($1, $2, $3, $4, 'native', '1', $5, $6, 'ETH')`,
+        [orgId, runId, lineNo, recipient, amountRaw, decimals],
       );
     }
 
@@ -443,7 +446,11 @@ describe('org schema (through the app login)', () => {
 
     it('rejects a payout item, policy version and finding of org A that points at a parent of org B', async () => {
       await expect(
-        tx.runInOrgTx((em) => insertItem(em, a.orgId, b.runId), a.orgId),
+        tx.runInOrgTx(
+          // a fresh line: the unique (run_id, line_no) would fire before the FK
+          (em) => insertItem(em, a.orgId, b.runId, '1', { lineNo: 99 }),
+          a.orgId,
+        ),
       ).rejects.toThrow(FK);
       await expect(
         tx.runInOrgTx(
@@ -495,13 +502,16 @@ describe('org schema (through the app login)', () => {
       ).rejects.toThrow(CHECK);
       // a draft may hold a pin (it survives release)
       await expect(
-        tx.runInOrgTx((em) => insertRun(em, a.orgId, 'draft', 7), a.orgId),
+        tx.runInOrgTx(
+          (em) => insertRun(em, a.orgId, 'draft', 7, SAFE2),
+          a.orgId,
+        ),
       ).resolves.toHaveLength(1);
     });
 
     it('rejects a watch row whose run belongs to another org', async () => {
       const [{ id: runId }] = await tx.runInOrgTx(
-        (em) => insertRun(em, b.orgId, 'draft', 9),
+        (em) => insertRun(em, b.orgId, 'draft', 9, SAFE2),
         b.orgId,
       );
 
@@ -517,6 +527,155 @@ describe('org schema (through the app login)', () => {
       await expect(
         tx.runInOrgTx((em) => insertItem(em, a.orgId, a.runId, '0'), a.orgId),
       ).rejects.toThrow(CHECK);
+    });
+
+    it('rejects out-of-range item values, a repeated line and non-lowercase addresses', async () => {
+      const item = (
+        amountRaw: string,
+        options: Parameters<typeof insertItem>[4],
+      ): Promise<unknown> =>
+        tx.runInOrgTx(
+          (em) => insertItem(em, a.orgId, a.runId, amountRaw, options),
+          a.orgId,
+        );
+      const twoTo256 = (1n << 256n).toString();
+
+      await expect(item(twoTo256, { lineNo: 3 })).rejects.toThrow(CHECK);
+      await expect(
+        item((1n << 256n) - 1n + '', { lineNo: 3 }),
+      ).resolves.toBeDefined();
+      await expect(item('1', { lineNo: 4, decimals: 256 })).rejects.toThrow(
+        CHECK,
+      );
+      await expect(
+        item('1', { lineNo: 4, recipient: RECIPIENT.replace('b0b', 'B0B') }),
+      ).rejects.toThrow(CHECK);
+      await expect(item('1', { lineNo: 2 })).rejects.toThrow(/duplicate key/);
+      await expect(
+        tx.runInOrgTx(
+          (em) =>
+            insertRun(
+              em,
+              a.orgId,
+              'draft',
+              null,
+              SAFE.toUpperCase().replace('0X', '0x'),
+            ),
+          a.orgId,
+        ),
+      ).rejects.toThrow(CHECK);
+      await expect(
+        tx.runInOrgTx(
+          (em) =>
+            insertRun(em, a.orgId, 'draft', -1, SAFE2.replace('a12', 'a13')),
+          a.orgId,
+        ),
+      ).rejects.toThrow(CHECK);
+    });
+
+    it('allows one pinned run per Safe per org', async () => {
+      // org A already holds a pin on SAFE (proposing at 7)
+      await expect(
+        tx.runInOrgTx((em) => insertRun(em, a.orgId, 'draft', 8), a.orgId),
+      ).rejects.toThrow(/duplicate key/);
+      await expect(
+        tx.runInOrgTx((em) => insertRun(em, a.orgId, 'draft', null), a.orgId),
+      ).resolves.toHaveLength(1);
+    });
+
+    describe('proposal attempt history (app login)', () => {
+      let runId: string;
+      let attemptId: string;
+      const inA = <T>(fn: (em: EntityManager) => Promise<T>): Promise<T> =>
+        tx.runInOrgTx(fn, a.orgId);
+      const setStatus = (status: string): Promise<unknown> =>
+        inA((em) =>
+          em.query(
+            `UPDATE payout_proposal_attempts SET status = $1, updated_at = now() WHERE id = $2`,
+            [status, attemptId],
+          ),
+        );
+
+      beforeEach(async () => {
+        [{ id: runId }] = await inA((em) =>
+          insertRun(em, a.orgId, 'draft', null, SAFE2),
+        );
+        [{ id: attemptId }] = await inA((em) =>
+          em.query(
+            `INSERT INTO payout_proposal_attempts (org_id, run_id, run_version, nonce, calls)
+             VALUES ($1, $2, 1, 7, '[]') RETURNING id`,
+            [a.orgId, runId],
+          ),
+        );
+      });
+
+      it('denies changing nonce or calls and deleting an attempt', async () => {
+        await expect(
+          inA((em) =>
+            em.query(
+              `UPDATE payout_proposal_attempts SET nonce = 8 WHERE id = $1`,
+              [attemptId],
+            ),
+          ),
+        ).rejects.toThrow(/permission denied/);
+        await expect(
+          inA((em) =>
+            em.query(
+              `UPDATE payout_proposal_attempts SET calls = '[1]' WHERE id = $1`,
+              [attemptId],
+            ),
+          ),
+        ).rejects.toThrow(/permission denied/);
+        await expect(
+          inA((em) =>
+            em.query(`DELETE FROM payout_proposal_attempts WHERE id = $1`, [
+              attemptId,
+            ]),
+          ),
+        ).rejects.toThrow(/permission denied/);
+      });
+
+      it('allows only open→reported→released→reported and open→released', async () => {
+        await expect(
+          inA((em) =>
+            em.query(
+              `UPDATE payout_proposal_attempts
+               SET status = 'reported', safe_tx_hash = '0x03', reported_at = now() WHERE id = $1`,
+              [attemptId],
+            ),
+          ),
+        ).resolves.toBeDefined();
+        await expect(setStatus('open')).rejects.toThrow(/transition/);
+        await expect(
+          inA((em) =>
+            em.query(
+              `UPDATE payout_proposal_attempts
+               SET status = 'released', release_reason = 'released', released_at = now() WHERE id = $1`,
+              [attemptId],
+            ),
+          ),
+        ).resolves.toBeDefined();
+        await expect(setStatus('open')).rejects.toThrow(/transition/);
+        await expect(setStatus('released')).resolves.toBeDefined();
+        await expect(setStatus('reported')).resolves.toBeDefined();
+      });
+
+      it('allows open→released', async () => {
+        await expect(setStatus('released')).resolves.toBeDefined();
+      });
+
+      it('still deletes attempts with their run', async () => {
+        await inA((em) =>
+          em.query(`DELETE FROM payout_runs WHERE id = $1`, [runId]),
+        );
+
+        const left = await inA((em) =>
+          em.query(`SELECT 1 FROM payout_proposal_attempts WHERE id = $1`, [
+            attemptId,
+          ]),
+        );
+        expect(left).toEqual([]);
+      });
     });
   });
 
@@ -572,6 +731,16 @@ describe('org schema (through the app login)', () => {
 
       ds = migrator([...before, PoliciesPayouts1794614400000]);
       await ds.initialize();
+      // a long reader on linked_safes: 0006 gives up instead of queueing live traffic
+      const reader = ds.createQueryRunner();
+      try {
+        await reader.startTransaction();
+        await reader.query(`LOCK TABLE linked_safes IN ACCESS SHARE MODE`);
+        await expect(ds.runMigrations()).rejects.toThrow(/lock timeout/);
+      } finally {
+        await reader.rollbackTransaction();
+        await reader.release();
+      }
       expect((await ds.runMigrations()).map((m) => m.name)).toEqual([
         'PoliciesPayouts1794614400000',
       ]);
