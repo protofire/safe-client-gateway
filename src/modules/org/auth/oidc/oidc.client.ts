@@ -43,6 +43,8 @@ export class OidcClient {
     connection: OidcConnection;
     /** `login`: the IdP must re-authenticate, not reuse its own session. */
     prompt?: 'login';
+    /** `0`: the ID token must carry `auth_time` of a fresh authentication. */
+    maxAge?: 0;
   }): string {
     const url = new URL('authorize', this.issuer);
     url.search = new URLSearchParams({
@@ -56,16 +58,20 @@ export class OidcClient {
       code_challenge_method: 'S256',
       connection: args.connection,
       ...(args.prompt ? { prompt: args.prompt } : {}),
+      ...(args.maxAge !== undefined ? { max_age: String(args.maxAge) } : {}),
     }).toString();
     return url.toString();
   }
 
-  /** Code → verified identity. Requires `email_verified === true`. */
+  /**
+   * Code → verified identity. Requires `email_verified === true`.
+   * `authTime`: the `auth_time` claim (seconds), when a number.
+   */
   async signIn(
     code: string,
     verifier: string,
     nonce: string,
-  ): Promise<{ subject: string; email: string }> {
+  ): Promise<{ subject: string; email: string; authTime?: number }> {
     const res = await fetch(new URL('oauth/token', this.issuer), {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -99,6 +105,12 @@ export class OidcClient {
     ) {
       throw new Error('ID token claims rejected');
     }
-    return { subject: payload.sub, email: payload.email };
+    return {
+      subject: payload.sub,
+      email: payload.email,
+      ...(typeof payload.auth_time === 'number'
+        ? { authTime: payload.auth_time }
+        : {}),
+    };
   }
 }

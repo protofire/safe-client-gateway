@@ -42,6 +42,8 @@ type Grant = {
   nonce: string | null;
   email: string;
   connection: string;
+  /** `max_age` was requested: the ID token carries `auth_time` (OIDC Core 3.1.2.1). */
+  maxAge: boolean;
 };
 
 const KID = 'mock-1';
@@ -108,6 +110,7 @@ export async function startOidcMock(opts: {
         nonce: q.get('nonce'),
         email: q.get('login_hint') ?? 'dev@example.com',
         connection: q.get('connection') ?? 'email',
+        maxAge: q.has('max_age'),
       });
       const back = new URL(redirectUri);
       back.searchParams.set('code', code);
@@ -146,6 +149,7 @@ export async function startOidcMock(opts: {
         iat: now,
         exp: now + 600,
         ...(grant.nonce ? { nonce: grant.nonce } : {}),
+        ...(grant.maxAge ? { auth_time: now } : {}),
         ...overrides,
       };
       const idToken = await signIdToken(claims);

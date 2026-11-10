@@ -35,6 +35,8 @@ const AUTHORIZE_PER_IP = 30;
 const CALLBACK_PER_IP = 10;
 const WINDOW_SECONDS = 60;
 const UNIQUE_VIOLATION = '23505';
+/** Link flows: the IdP authentication must be at most this old (item 7). */
+const LINK_MAX_AUTH_AGE_SECONDS = 300;
 /** Auth0 subjects of the connections we offer: passwordless email and Google. */
 const SUPPORTED_SUBJECT = /^(?:email|google-oauth2)\|./;
 
@@ -135,8 +137,11 @@ export class OidcService {
       nonce,
       codeChallenge: createHash('sha256').update(verifier).digest('base64url'),
       connection: args.connection,
-      // linking (item 4): never attach whoever is signed in at the IdP already
-      ...(args.sessionId ? { prompt: 'login' as const } : {}),
+      // linking (item 4): never attach whoever is signed in at the IdP
+      // already; max_age=0 makes the IdP report when it authenticated
+      ...(args.sessionId
+        ? { prompt: 'login' as const, maxAge: 0 as const }
+        : {}),
     });
     return { redirectUrl, tx };
   }
@@ -206,7 +211,7 @@ export class OidcService {
       throw new CallbackError('failed');
     }
 
-    let identity: { subject: string; email: string };
+    let identity: { subject: string; email: string; authTime?: number };
     try {
       identity = await this.client.signIn(
         args.code,
@@ -226,6 +231,14 @@ export class OidcService {
       this.postLoginRedirect,
     ).toString();
     if (linkUserId !== undefined) {
+      // prompt=login is only a request: require proof of a fresh login
+      const age =
+        identity.authTime === undefined
+          ? Infinity
+          : this.clock.now().getTime() / 1000 - identity.authTime;
+      if (!(age <= LINK_MAX_AUTH_AGE_SECONDS)) {
+        throw new CallbackError('reauth_required');
+      }
       await this.link(linkUserId, record.sessionId!, identity, args);
       return { token: null, redirectUrl };
     }
@@ -379,6 +392,7 @@ export type OidcErrorCode =
   | 'failed'
   | 'identity_taken'
   | 'rate_limited'
+  | 'reauth_required'
   | 'unsupported_identity';
 
 /** An expected callback failure, answered with `?orgAuthError=<code>`. */

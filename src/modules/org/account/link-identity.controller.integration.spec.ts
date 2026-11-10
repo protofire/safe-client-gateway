@@ -243,6 +243,8 @@ describe('identity linking (org)', () => {
       const authorizeUrl = new URL(res.body.redirectUrl as string);
       // item 4: the IdP must re-authenticate, never reuse its own session
       expect(authorizeUrl.searchParams.get('prompt')).toBe('login');
+      // round 2 item 7: and report when it did (auth_time), checked below
+      expect(authorizeUrl.searchParams.get('max_age')).toBe('0');
       authorizeUrl.searchParams.set('login_hint', email);
       const idp = await fetch(authorizeUrl, { redirect: 'manual' });
       const back = new URL(idp.headers.get('location')!);
@@ -327,6 +329,26 @@ describe('identity linking (org)', () => {
         },
       ]);
     });
+
+    it.each([
+      ['without auth_time', { auth_time: undefined }],
+      [
+        'with auth_time over 5 minutes old',
+        { auth_time: Math.floor(Date.now() / 1000) - 301 },
+      ],
+    ])(
+      'refuses a link whose ID token comes %s with reauth_required (round 2 item 7)',
+      async (_, claims) => {
+        const u = await user({ wallet: true });
+        const s = await startLink(u);
+        mock.setClaims(claims);
+        await failsWith(
+          callback(s, [s.txCookie, u.cookie]),
+          'reauth_required',
+        );
+        expect(await identities(u)).toHaveLength(1);
+      },
+    );
 
     async function countUsers(): Promise<number> {
       return (await t.sql.query(`SELECT count(*)::int AS n FROM users`))[0].n;
