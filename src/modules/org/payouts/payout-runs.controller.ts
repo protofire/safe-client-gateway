@@ -40,13 +40,20 @@ import {
 import { PayoutRunsService } from '@/modules/org/payouts/payout-runs.service';
 import {
   BuildPayoutRunSchema,
+  CreatePayoutRunDocSchema,
   CreatePayoutRunSchema,
   ImportPayoutRunSchema,
   ListPayoutRunsSchema,
   type PayoutRunDetail,
   type PayoutRunListItem,
+  UpdatePayoutRunDocSchema,
   UpdatePayoutRunSchema,
 } from '@/modules/org/payouts/payout.schemas';
+import {
+  OrgApiBody,
+  OrgApiFile,
+  OrgApiQuery,
+} from '@/modules/org/common/org-api-body.decorator';
 
 function uuid(raw: string): string {
   if (!z.uuid().safeParse(raw).success) throw new NotFoundException();
@@ -65,6 +72,7 @@ export class PayoutRunsController {
   ) {}
 
   @Get('payout-runs')
+  @OrgApiQuery(ListPayoutRunsSchema)
   @RequirePermission('payouts.view')
   list(
     @Param('orgId') orgId: string,
@@ -75,6 +83,7 @@ export class PayoutRunsController {
   }
 
   @Post('payout-runs')
+  @OrgApiBody(CreatePayoutRunDocSchema)
   @RequirePermission('payouts.prepare')
   create(
     @Req() req: Request,
@@ -90,6 +99,7 @@ export class PayoutRunsController {
   }
 
   @Post('payout-runs/import')
+  @OrgApiFile(ImportPayoutRunSchema)
   @RequirePermission('payouts.prepare')
   @UseInterceptors(FileInterceptor('file', { limits: CSV_UPLOAD_LIMITS }))
   import(
@@ -121,6 +131,7 @@ export class PayoutRunsController {
   }
 
   @Patch('payout-runs/:runId')
+  @OrgApiBody(UpdatePayoutRunDocSchema)
   @RequirePermission('payouts.prepare')
   update(
     @Req() req: Request,
@@ -150,6 +161,7 @@ export class PayoutRunsController {
   }
 
   @Post('payout-runs/:runId/build')
+  @OrgApiBody(BuildPayoutRunSchema)
   @HttpCode(200)
   @RequirePermission('payouts.prepare')
   build(
@@ -169,6 +181,7 @@ export class PayoutRunsController {
 
   /** Claim before the signing flow opens; the UI signs at the returned nonce. */
   @Post('payout-runs/:runId/proposal-attempts')
+  @OrgApiBody(ClaimProposalSchema)
   @RequirePermission('payouts.prepare')
   claim(
     @Req() req: Request,
@@ -186,6 +199,7 @@ export class PayoutRunsController {
   }
 
   @Post('payout-runs/:runId/proposed')
+  @OrgApiBody(ReportProposalSchema)
   @HttpCode(200)
   @RequirePermission('payouts.prepare')
   report(

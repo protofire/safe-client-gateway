@@ -13,6 +13,7 @@ import {
 } from '@/modules/org/auth/session.guard';
 import { client } from '@/modules/org/orgs/parse';
 import { ValidationPipe } from '@/validation/pipes/validation.pipe';
+import { OrgApiQuery } from '@/modules/org/common/org-api-body.decorator';
 
 export const OIDC_TX_COOKIE = 'org_oidc_tx';
 const OIDC_TX_COOKIE_OPTIONS = {
@@ -43,6 +44,7 @@ export class OidcController {
 
   @Public()
   @Get('authorize')
+  @OrgApiQuery(AuthorizeQuerySchema)
   async authorize(
     @Query(new ValidationPipe(AuthorizeQuerySchema)) query: AuthorizeQuery,
     @Req() req: Request,

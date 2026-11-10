@@ -24,6 +24,7 @@ import {
 } from '@/modules/org/auth/siwe-auth.controller';
 import { client } from '@/modules/org/orgs/parse';
 import { ValidationPipe } from '@/validation/pipes/validation.pipe';
+import { OrgApiBody } from '@/modules/org/common/org-api-body.decorator';
 
 /**
  * Task 12 / A6: adding or removing a sign-in method needs fresh strong auth
@@ -39,6 +40,7 @@ export class LinkIdentityController {
 
   /** 409 `identity_taken` if the wallet belongs to another user. */
   @Post('link/siwe')
+  @OrgApiBody(SiweBodySchema)
   @HttpCode(200)
   @RequireStrongAuth()
   async linkSiwe(
@@ -56,6 +58,7 @@ export class LinkIdentityController {
    * open, since it creates the state record and sets `org_oidc_tx`.
    */
   @Post('link/oidc/authorize')
+  @OrgApiBody(AuthorizeQuerySchema)
   @HttpCode(200)
   @RequireStrongAuth()
   async linkOidc(

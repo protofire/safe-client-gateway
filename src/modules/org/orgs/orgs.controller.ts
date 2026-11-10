@@ -23,6 +23,10 @@ import {
   AllowDeletedOrg,
   RequirePermission,
 } from '@/modules/org/permissions/require-permission.decorator';
+import {
+  OrgApiBody,
+  OrgApiQuery,
+} from '@/modules/org/common/org-api-body.decorator';
 
 const NameSchema = z.object({ name: z.string().trim().min(1).max(64) });
 const ListQuerySchema = z.object({
@@ -34,6 +38,7 @@ export class OrgsController {
   constructor(private readonly orgs: OrgsService) {}
 
   @Post()
+  @OrgApiBody(NameSchema)
   create(
     @Req() req: Request,
     @OrgSession() session: OrgSession,
@@ -44,6 +49,7 @@ export class OrgsController {
   }
 
   @Get()
+  @OrgApiQuery(ListQuerySchema)
   list(
     @OrgSession() session: OrgSession,
     @Query() query: unknown,
@@ -71,6 +77,7 @@ export class OrgsController {
   }
 
   @Patch(':orgId')
+  @OrgApiBody(NameSchema)
   @RequirePermission('org.update')
   @RequireStrongAuth()
   rename(

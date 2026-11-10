@@ -142,3 +142,11 @@ export type PayoutRunDetail = {
   items: Array<PayoutItemView>;
   runWarnings: Array<PayoutRunWarning>;
 };
+
+/** OpenAPI only: the runtime schemas keep rows loose so a bad row is a per-line 422, not a 400. */
+export const CreatePayoutRunDocSchema = CreatePayoutRunSchema.extend({
+  rows: z.array(PayoutRowInputSchema),
+});
+export const UpdatePayoutRunDocSchema = UpdatePayoutRunSchema.extend({
+  rows: z.array(PayoutRowInputSchema).optional(),
+});

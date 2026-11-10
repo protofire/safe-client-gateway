@@ -5,8 +5,12 @@ import {
   ControlsService,
   type ControlsSafe,
 } from '@/modules/org/controls/controls.service';
-import { OrgTransactionsExportService } from '@/modules/org/controls/org-transactions-export.service';
+import {
+  OrgTransactionsExportService,
+  RangeSchema,
+} from '@/modules/org/controls/org-transactions-export.service';
 import { RequirePermission } from '@/modules/org/permissions/require-permission.decorator';
+import { OrgApiQuery } from '@/modules/org/common/org-api-body.decorator';
 
 @Controller({ path: 'orgs/:orgId', version: '1' })
 export class ControlsController {
@@ -22,6 +26,7 @@ export class ControlsController {
   }
 
   @Get('transactions.csv')
+  @OrgApiQuery(RangeSchema)
   @RequirePermission('exports.read')
   exportCsv(
     @Req() req: Request,

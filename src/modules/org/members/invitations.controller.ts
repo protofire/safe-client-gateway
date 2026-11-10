@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { OrgSession } from '@/modules/org/auth/decorators';
 import { InvitationsService } from '@/modules/org/members/invitations.service';
 import { actor, parse } from '@/modules/org/orgs/parse';
+import { OrgApiBody } from '@/modules/org/common/org-api-body.decorator';
 
 const TokenSchema = z.object({ token: z.string().min(16).max(128) });
 
@@ -26,6 +27,7 @@ export class InvitationsController {
   constructor(private readonly invitations: InvitationsService) {}
 
   @Post('invitations/accept')
+  @OrgApiBody(TokenSchema)
   @HttpCode(200)
   accept(
     @Req() req: Request,
@@ -37,6 +39,7 @@ export class InvitationsController {
   }
 
   @Post('invitations/decline')
+  @OrgApiBody(TokenSchema)
   @HttpCode(200)
   decline(
     @Req() req: Request,

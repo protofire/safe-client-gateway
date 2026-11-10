@@ -21,6 +21,7 @@ import {
   type Policy,
   UpdatePolicySchema,
 } from '@/modules/org/policies/policies.schemas';
+import { OrgApiBody } from '@/modules/org/common/org-api-body.decorator';
 
 function uuid(raw: string): string {
   if (!z.uuid().safeParse(raw).success) throw new NotFoundException();
@@ -39,6 +40,7 @@ export class PoliciesController {
   }
 
   @Post('policies')
+  @OrgApiBody(CreatePolicySchema)
   @RequirePermission('policies.write')
   @RequireStrongAuth()
   create(
@@ -55,6 +57,7 @@ export class PoliciesController {
   }
 
   @Put('policies/:policyId')
+  @OrgApiBody(UpdatePolicySchema)
   @RequirePermission('policies.write')
   @RequireStrongAuth()
   update(

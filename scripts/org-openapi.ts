@@ -7,10 +7,13 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Test } from '@nestjs/testing';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import {
+  DocumentBuilder,
+  SwaggerModule,
+  type OpenAPIObject,
+} from '@nestjs/swagger';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { getDataSourceToken } from '@nestjs/typeorm';
-import { format, resolveConfig } from 'prettier';
 import { ORG_REDIS } from '@/modules/org/auth/nonce.store';
 import { ORG_DATA_SOURCE } from '@/modules/org/db/org-database.module';
 import { OrgAppModule } from '@/org-app.module';
@@ -54,7 +57,7 @@ function isOrgPath(path: string): boolean {
   );
 }
 
-async function main(): Promise<void> {
+export async function buildOrgOpenApiDocument(): Promise<OpenAPIObject> {
   // never the real environment: the document must not depend on it
   for (const key of Object.keys(process.env)) {
     if (key.startsWith('ORG_') || key.startsWith('BLOCKLIST_')) {
@@ -94,6 +97,14 @@ async function main(): Promise<void> {
       .sort(([a], [b]) => a.localeCompare(b)),
   );
 
+  await moduleRef.close();
+  return document;
+}
+
+async function main(): Promise<void> {
+  // loaded here: prettier's dynamic import does not load under jest
+  const { format, resolveConfig } = await import('prettier');
+  const document = await buildOrgOpenApiDocument();
   const out = join(__dirname, '..', 'org-openapi.json');
   // formatted like the rest of the repo, so `yarn format-check` passes
   writeFileSync(
@@ -110,10 +121,11 @@ async function main(): Promise<void> {
   console.log(
     `${out}: ${Object.keys(document.paths).length} paths, ${operations} operations`,
   );
-  await moduleRef.close();
 }
 
-main().catch((error: unknown) => {
-  console.error(error);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error: unknown) => {
+    console.error(error);
+    process.exit(1);
+  });
+}

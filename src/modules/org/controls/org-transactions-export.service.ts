@@ -35,7 +35,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_RANGE_DAYS = 366;
 
 const DateOrInstant = z.union([z.iso.date(), z.iso.datetime()]);
-const RangeSchema = z.object({
+export const RangeSchema = z.object({
   executedFrom: DateOrInstant,
   executedTo: DateOrInstant,
 });

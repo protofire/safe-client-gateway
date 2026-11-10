@@ -26,6 +26,10 @@ import {
   OverviewService,
   type Overview,
 } from '@/modules/org/safes/overview.service';
+import {
+  OrgApiBody,
+  OrgApiQuery,
+} from '@/modules/org/common/org-api-body.decorator';
 
 const LinkSchema = z.object({
   chainId: z.string().regex(/^[1-9]\d{0,19}$/),
@@ -50,6 +54,7 @@ export class LinkedSafesController {
   ) {}
 
   @Post('safes')
+  @OrgApiBody(LinkSchema)
   @RequirePermission('safes.link')
   @RequireStrongAuth()
   link(
@@ -94,6 +99,7 @@ export class LinkedSafesController {
   }
 
   @Get('overview')
+  @OrgApiQuery(OverviewQuerySchema)
   @RequirePermission('safes.view')
   async getOverview(
     @Req() req: Request,

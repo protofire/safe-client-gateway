@@ -10,6 +10,7 @@ import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import { parse } from '@/modules/org/orgs/parse';
 import { RequirePermission } from '@/modules/org/permissions/require-permission.decorator';
 import type { Violation } from '@/modules/org/policies/evaluate';
+import { OrgApiQuery } from '@/modules/org/common/org-api-body.decorator';
 
 const FindingsQuerySchema = z.object({
   linkedSafeId: z.uuid().optional(),
@@ -39,6 +40,7 @@ export class FindingsController {
   constructor(private readonly tx: OrgTransaction) {}
 
   @Get('policy-findings')
+  @OrgApiQuery(FindingsQuerySchema)
   @RequirePermission('policies.view')
   list(
     @Param('orgId') orgId: string,

@@ -26,6 +26,7 @@ import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.se
 import { parse } from '@/modules/org/orgs/parse';
 import { ORG_DATA_SOURCE } from '@/modules/org/db/org-data-source';
 import { RequirePermission } from '@/modules/org/permissions/require-permission.decorator';
+import { OrgApiQuery } from '@/modules/org/common/org-api-body.decorator';
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -87,6 +88,7 @@ export class ActivityController {
   ) {}
 
   @Get('activity')
+  @OrgApiQuery(ListQuerySchema)
   @RequirePermission('activity.view')
   async list(
     @Req() req: Request,
@@ -112,6 +114,7 @@ export class ActivityController {
   }
 
   @Get('activity.csv')
+  @OrgApiQuery(FilterSchema)
   @RequirePermission('exports.read')
   async exportCsv(
     @Req() req: Request,

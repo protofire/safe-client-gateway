@@ -44,6 +44,11 @@ import {
 import { RateLimiter } from '@/modules/org/common/rate-limiter';
 import { actor, parse } from '@/modules/org/orgs/parse';
 import { RequirePermission } from '@/modules/org/permissions/require-permission.decorator';
+import {
+  OrgApiBody,
+  OrgApiFile,
+  OrgApiQuery,
+} from '@/modules/org/common/org-api-body.decorator';
 
 const EXPORT_PAGE = 500;
 
@@ -63,6 +68,7 @@ export class ContactsController {
   ) {}
 
   @Get('contacts')
+  @OrgApiQuery(ListQuerySchema)
   @RequirePermission('addressbook.view')
   list(
     @Param('orgId') orgId: string,
@@ -131,6 +137,7 @@ export class ContactsController {
   }
 
   @Post('contacts')
+  @OrgApiBody(ContactSchema)
   @RequirePermission('addressbook.write')
   @RequireStrongAuth()
   create(
@@ -147,6 +154,7 @@ export class ContactsController {
   }
 
   @Post('contacts/import')
+  @OrgApiFile()
   @HttpCode(200)
   @RequirePermission('addressbook.write')
   @RequireStrongAuth()
@@ -166,6 +174,7 @@ export class ContactsController {
   }
 
   @Patch('contacts/:contactId')
+  @OrgApiBody(ContactPatchSchema)
   @RequirePermission('addressbook.write')
   @RequireStrongAuth()
   update(
@@ -201,6 +210,7 @@ export class ContactsController {
   }
 
   @Get('contact-requests')
+  @OrgApiQuery(RequestsQuerySchema)
   @RequirePermission('addressbook.view')
   listRequests(
     @Param('orgId') orgId: string,
@@ -210,6 +220,7 @@ export class ContactsController {
   }
 
   @Post('contact-requests')
+  @OrgApiBody(CreateRequestSchema)
   @RequirePermission('addressbook.request')
   createRequest(
     @Req() req: Request,

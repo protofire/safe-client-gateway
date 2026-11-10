@@ -25,6 +25,7 @@ import {
   INVITATION_ROLE_KEY,
   SYSTEM_ROLE_KEYS,
 } from '@/modules/org/permissions/role-keys';
+import { OrgApiBody } from '@/modules/org/common/org-api-body.decorator';
 
 const InviteSchema = z
   .object({
@@ -66,6 +67,7 @@ export class MembersController {
   }
 
   @Post('invite')
+  @OrgApiBody(InviteSchema)
   @RequirePermission('members.invite')
   @RequireStrongAuth()
   invite(
@@ -110,6 +112,7 @@ export class MembersController {
   }
 
   @Patch(':memberId/role')
+  @OrgApiBody(RoleSchema)
   @HttpCode(204)
   @RequirePermission('roles.assign')
   @RequireStrongAuth()

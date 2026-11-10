@@ -15,6 +15,7 @@ import { setSessionCookie } from '@/modules/org/auth/session.guard';
 import { FactorsService } from '@/modules/org/auth/totp/factors.service';
 import { client } from '@/modules/org/orgs/parse';
 import { ValidationPipe } from '@/validation/pipes/validation.pipe';
+import { OrgApiBody } from '@/modules/org/common/org-api-body.decorator';
 
 const CodeSchema = z.object({ code: z.string().min(1).max(16) });
 const StepUpSchema = z
@@ -42,6 +43,7 @@ export class TotpController {
   }
 
   @Post('totp/confirm')
+  @OrgApiBody(CodeSchema)
   @HttpCode(200)
   async confirm(
     @OrgSession() session: OrgSession,
@@ -59,6 +61,7 @@ export class TotpController {
   }
 
   @Post('step-up/totp')
+  @OrgApiBody(StepUpSchema)
   @HttpCode(200)
   async stepUp(
     @OrgSession() session: OrgSession,

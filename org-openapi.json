@@ -5,12 +5,33 @@
       "post": {
         "operationId": "OrgsController_create_v1",
         "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1, "maxLength": 64 }
+                },
+                "required": ["name"]
+              }
+            }
+          }
+        },
         "responses": { "201": { "description": "" } },
         "tags": ["Orgs"]
       },
       "get": {
         "operationId": "OrgsController_list_v1",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "includeDeleted",
+            "required": false,
+            "in": "query",
+            "schema": { "type": "string", "enum": ["true", "false"] }
+          }
+        ],
         "responses": { "200": { "description": "" } },
         "tags": ["Orgs"]
       }
@@ -55,6 +76,20 @@
       "patch": {
         "operationId": "OrgsController_rename_v1",
         "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1, "maxLength": 64 }
+                },
+                "required": ["name"]
+              }
+            }
+          }
+        },
         "responses": { "200": { "description": "" } },
         "tags": ["Orgs"]
       },
@@ -68,7 +103,89 @@
     "/v1/orgs/{orgId}/activity": {
       "get": {
         "operationId": "ActivityController_list_v1",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "type",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "org.created",
+                "org.renamed",
+                "org.deleted",
+                "org.restored",
+                "member.invited",
+                "member.invite_renewed",
+                "member.invite_revoked",
+                "member.joined",
+                "member.declined",
+                "member.role_changed",
+                "member.removed",
+                "member.left",
+                "member.factors_reset",
+                "safe.linked",
+                "safe.unlinked",
+                "contact.created",
+                "contact.updated",
+                "contact.deleted",
+                "contact.imported",
+                "contact_request.created",
+                "contact_request.approved",
+                "contact_request.rejected",
+                "export.downloaded",
+                "security.signed_in",
+                "security.step_up",
+                "security.totp_enrolled",
+                "security.totp_removed",
+                "onchain.owners_changed",
+                "onchain.threshold_changed",
+                "onchain.module_changed",
+                "onchain.guard_changed",
+                "policy.created",
+                "policy.updated",
+                "policy.deleted",
+                "policy.violation_found",
+                "payout_run.created",
+                "payout_run.updated",
+                "payout_run.deleted",
+                "payout_run.proposal_claimed",
+                "payout_run.proposal_released",
+                "payout_run.proposed",
+                "payout_run.verification_delayed",
+                "payout_run.stray_detected",
+                "payout_run.settled"
+              ]
+            }
+          },
+          {
+            "name": "actor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": { "type": "string", "minLength": 1 }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": 50,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
         "responses": { "200": { "description": "" } },
         "tags": ["Activity"]
       }
@@ -76,7 +193,72 @@
     "/v1/orgs/{orgId}/activity.csv": {
       "get": {
         "operationId": "ActivityController_exportCsv_v1",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "type",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "org.created",
+                "org.renamed",
+                "org.deleted",
+                "org.restored",
+                "member.invited",
+                "member.invite_renewed",
+                "member.invite_revoked",
+                "member.joined",
+                "member.declined",
+                "member.role_changed",
+                "member.removed",
+                "member.left",
+                "member.factors_reset",
+                "safe.linked",
+                "safe.unlinked",
+                "contact.created",
+                "contact.updated",
+                "contact.deleted",
+                "contact.imported",
+                "contact_request.created",
+                "contact_request.approved",
+                "contact_request.rejected",
+                "export.downloaded",
+                "security.signed_in",
+                "security.step_up",
+                "security.totp_enrolled",
+                "security.totp_removed",
+                "onchain.owners_changed",
+                "onchain.threshold_changed",
+                "onchain.module_changed",
+                "onchain.guard_changed",
+                "policy.created",
+                "policy.updated",
+                "policy.deleted",
+                "policy.violation_found",
+                "payout_run.created",
+                "payout_run.updated",
+                "payout_run.deleted",
+                "payout_run.proposal_claimed",
+                "payout_run.proposal_released",
+                "payout_run.proposed",
+                "payout_run.verification_delayed",
+                "payout_run.stray_detected",
+                "payout_run.settled"
+              ]
+            }
+          },
+          {
+            "name": "actor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
         "responses": { "200": { "description": "" } },
         "tags": ["Activity"]
       }
@@ -90,6 +272,33 @@
             "required": true,
             "in": "path",
             "schema": { "type": "string" }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": "pending",
+              "type": "string",
+              "enum": ["pending", "approved", "rejected", "all"]
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": { "type": "string", "minLength": 1 }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": 50,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
           }
         ],
         "responses": { "200": { "description": "" } },
@@ -105,6 +314,108 @@
             "schema": { "type": "string" }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": { "type": "string", "const": "create" },
+                      "payload": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "address": { "type": "string" },
+                          "chainIds": {
+                            "minItems": 1,
+                            "maxItems": 100,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "pattern": "^[1-9]\\d{0,17}$"
+                            }
+                          },
+                          "tags": {
+                            "maxItems": 10,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 32
+                            }
+                          }
+                        },
+                        "required": ["name", "address", "chainIds"]
+                      }
+                    },
+                    "required": ["action", "payload"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": { "type": "string", "const": "update" },
+                      "contactId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "payload": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "address": { "type": "string" },
+                          "chainIds": {
+                            "minItems": 1,
+                            "maxItems": 100,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "pattern": "^[1-9]\\d{0,17}$"
+                            }
+                          },
+                          "tags": {
+                            "maxItems": 10,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 32
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "required": ["action", "contactId", "payload"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": { "type": "string", "const": "delete" },
+                      "contactId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "payload": { "type": "object", "properties": {} }
+                    },
+                    "required": ["action", "contactId"]
+                  }
+                ]
+              }
+            }
+          }
+        },
         "responses": { "201": { "description": "" } },
         "tags": ["Contacts"]
       }
@@ -160,6 +471,24 @@
             "required": true,
             "in": "path",
             "schema": { "type": "string" }
+          },
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 100 }
+          },
+          {
+            "name": "tag",
+            "required": false,
+            "in": "query",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 32 }
+          },
+          {
+            "name": "chainId",
+            "required": false,
+            "in": "query",
+            "schema": { "type": "string", "pattern": "^[1-9]\\d{0,17}$" }
           }
         ],
         "responses": { "200": { "description": "" } },
@@ -175,6 +504,36 @@
             "schema": { "type": "string" }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+                  "address": { "type": "string" },
+                  "chainIds": {
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "type": "array",
+                    "items": { "type": "string", "pattern": "^[1-9]\\d{0,17}$" }
+                  },
+                  "tags": {
+                    "maxItems": 10,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 32
+                    }
+                  }
+                },
+                "required": ["name", "address", "chainIds"]
+              }
+            }
+          }
+        },
         "responses": { "201": { "description": "" } },
         "tags": ["Contacts"]
       }
@@ -211,6 +570,35 @@
             "schema": { "type": "string" }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+                  "address": { "type": "string" },
+                  "chainIds": {
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "type": "array",
+                    "items": { "type": "string", "pattern": "^[1-9]\\d{0,17}$" }
+                  },
+                  "tags": {
+                    "maxItems": 10,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 32
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": { "200": { "description": "" } },
         "tags": ["Contacts"]
       },
@@ -245,8 +633,37 @@
             "schema": { "type": "string" }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": { "type": "string", "format": "binary" }
+                },
+                "required": ["file"]
+              }
+            }
+          }
+        },
         "responses": { "200": { "description": "" } },
         "tags": ["Contacts"]
+      }
+    },
+    "/v1/orgs/{orgId}/controls": {
+      "get": {
+        "operationId": "ControlsController_list_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Controls"]
       }
     },
     "/v1/orgs/{orgId}/me": {
@@ -321,6 +738,20 @@
             "schema": { "type": "string" }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "role": { "type": "string", "enum": ["admin", "member"] }
+                },
+                "required": ["role"]
+              }
+            }
+          }
+        },
         "responses": { "204": { "description": "" } },
         "tags": ["Members"]
       }
@@ -329,6 +760,26 @@
       "post": {
         "operationId": "MembersController_invite_v1",
         "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "wallet": { "type": "string" },
+                  "email": {
+                    "type": "string",
+                    "maxLength": 254,
+                    "format": "email",
+                    "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+                  },
+                  "role": { "type": "string", "const": "member" }
+                }
+              }
+            }
+          }
+        },
         "responses": { "201": { "description": "" } },
         "tags": ["Members"]
       }
@@ -344,9 +795,548 @@
     "/v1/orgs/{orgId}/overview": {
       "get": {
         "operationId": "LinkedSafesController_getOverview_v1",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "fiat",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": "USD",
+              "type": "string",
+              "pattern": "^[a-zA-Z]{2,5}$"
+            }
+          }
+        ],
         "responses": { "200": { "description": "" } },
         "tags": ["LinkedSafes"]
+      }
+    },
+    "/v1/orgs/{orgId}/payout-runs": {
+      "get": {
+        "operationId": "PayoutRunsController_list_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "linkedSafeId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["PayoutRuns"]
+      },
+      "post": {
+        "operationId": "PayoutRunsController_create_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "linkedSafeId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+                  "rows": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "address": { "type": "string" },
+                        "amount": { "type": "string" },
+                        "token": { "type": "string" },
+                        "name": { "type": "string" }
+                      },
+                      "required": ["address", "amount", "token"]
+                    }
+                  }
+                },
+                "required": ["linkedSafeId", "name", "rows"]
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "" } },
+        "tags": ["PayoutRuns"]
+      }
+    },
+    "/v1/orgs/{orgId}/payout-runs/{runId}": {
+      "get": {
+        "operationId": "PayoutRunsController_get_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "runId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["PayoutRuns"]
+      },
+      "patch": {
+        "operationId": "PayoutRunsController_update_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "runId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedVersion": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+                  "rows": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "address": { "type": "string" },
+                        "amount": { "type": "string" },
+                        "token": { "type": "string" },
+                        "name": { "type": "string" }
+                      },
+                      "required": ["address", "amount", "token"]
+                    }
+                  }
+                },
+                "required": ["expectedVersion"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["PayoutRuns"]
+      },
+      "delete": {
+        "operationId": "PayoutRunsController_remove_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "runId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "204": { "description": "" } },
+        "tags": ["PayoutRuns"]
+      }
+    },
+    "/v1/orgs/{orgId}/payout-runs/{runId}/build": {
+      "post": {
+        "operationId": "PayoutRunsController_build_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "runId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedVersion": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": ["expectedVersion"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["PayoutRuns"]
+      }
+    },
+    "/v1/orgs/{orgId}/payout-runs/{runId}/export.csv": {
+      "get": {
+        "operationId": "PayoutRunsController_exportCsv_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "runId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["PayoutRuns"]
+      }
+    },
+    "/v1/orgs/{orgId}/payout-runs/{runId}/proposal-attempts": {
+      "post": {
+        "operationId": "PayoutRunsController_claim_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "runId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedVersion": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "nonce": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      { "type": "string", "pattern": "^\\d{1,78}$" }
+                    ]
+                  }
+                },
+                "required": ["expectedVersion", "nonce"]
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "" } },
+        "tags": ["PayoutRuns"]
+      }
+    },
+    "/v1/orgs/{orgId}/payout-runs/{runId}/proposal-attempts/{attemptId}/release": {
+      "post": {
+        "operationId": "PayoutRunsController_release_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "runId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "attemptId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["PayoutRuns"]
+      }
+    },
+    "/v1/orgs/{orgId}/payout-runs/{runId}/proposed": {
+      "post": {
+        "operationId": "PayoutRunsController_report_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "runId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "attemptId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "expectedVersion": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "safeTxHash": {
+                    "type": "string",
+                    "pattern": "^0x[0-9a-fA-F]{64}$"
+                  }
+                },
+                "required": ["attemptId", "safeTxHash"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["PayoutRuns"]
+      }
+    },
+    "/v1/orgs/{orgId}/payout-runs/import": {
+      "post": {
+        "operationId": "PayoutRunsController_import_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": { "type": "string", "format": "binary" },
+                  "linkedSafeId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "name": { "type": "string", "minLength": 1, "maxLength": 64 }
+                },
+                "required": ["file", "linkedSafeId", "name"]
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "" } },
+        "tags": ["PayoutRuns"]
+      }
+    },
+    "/v1/orgs/{orgId}/policies": {
+      "get": {
+        "operationId": "PoliciesController_list_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Policies"]
+      },
+      "post": {
+        "operationId": "PoliciesController_create_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+                  "enabled": { "type": "boolean" },
+                  "scope": {},
+                  "rules": {}
+                },
+                "required": ["name", "enabled", "scope", "rules"]
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "" } },
+        "tags": ["Policies"]
+      }
+    },
+    "/v1/orgs/{orgId}/policies/{policyId}": {
+      "put": {
+        "operationId": "PoliciesController_update_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "policyId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+                  "enabled": { "type": "boolean" },
+                  "scope": {},
+                  "rules": {},
+                  "expectedVersion": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "name",
+                  "enabled",
+                  "scope",
+                  "rules",
+                  "expectedVersion"
+                ]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["Policies"]
+      },
+      "delete": {
+        "operationId": "PoliciesController_remove_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "policyId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "204": { "description": "" } },
+        "tags": ["Policies"]
+      }
+    },
+    "/v1/orgs/{orgId}/policy-findings": {
+      "get": {
+        "operationId": "FindingsController_list_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "linkedSafeId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": "open",
+              "type": "string",
+              "enum": ["open", "all"]
+            }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Findings"]
       }
     },
     "/v1/orgs/{orgId}/restore": {
@@ -361,6 +1351,25 @@
       "post": {
         "operationId": "LinkedSafesController_link_v1",
         "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "chainId": {
+                    "type": "string",
+                    "pattern": "^[1-9]\\d{0,19}$"
+                  },
+                  "address": { "type": "string" },
+                  "label": { "type": "string", "minLength": 1, "maxLength": 64 }
+                },
+                "required": ["chainId", "address"]
+              }
+            }
+          }
+        },
         "responses": { "201": { "description": "" } },
         "tags": ["LinkedSafes"]
       },
@@ -384,6 +1393,53 @@
         ],
         "responses": { "204": { "description": "" } },
         "tags": ["LinkedSafes"]
+      }
+    },
+    "/v1/orgs/{orgId}/transactions.csv": {
+      "get": {
+        "operationId": "ControlsController_exportCsv_v1",
+        "parameters": [
+          {
+            "name": "executedFrom",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                },
+                {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                }
+              ]
+            }
+          },
+          {
+            "name": "executedTo",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                },
+                {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                }
+              ]
+            }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Controls"]
       }
     },
     "/v1/orgs/account": {
@@ -413,6 +1469,24 @@
       "post": {
         "operationId": "LinkIdentityController_linkOidc_v1",
         "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "connection": {
+                    "type": "string",
+                    "enum": ["email", "google-oauth2"]
+                  },
+                  "returnTo": { "type": "string" }
+                },
+                "required": ["connection"]
+              }
+            }
+          }
+        },
         "responses": { "200": { "description": "" } },
         "tags": ["LinkIdentity"]
       }
@@ -421,6 +1495,28 @@
       "post": {
         "operationId": "LinkIdentityController_linkSiwe_v1",
         "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "message": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "signature": {
+                    "type": "string",
+                    "pattern": "^0x[0-9a-fA-F]+$"
+                  }
+                },
+                "required": ["message", "signature"]
+              }
+            }
+          }
+        },
         "responses": { "200": { "description": "" } },
         "tags": ["LinkIdentity"]
       }
@@ -452,7 +1548,20 @@
     "/v1/orgs/auth/oidc/authorize": {
       "get": {
         "operationId": "OidcController_authorize_v1",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "connection",
+            "required": true,
+            "in": "query",
+            "schema": { "type": "string", "enum": ["email", "google-oauth2"] }
+          },
+          {
+            "name": "returnTo",
+            "required": false,
+            "in": "query",
+            "schema": { "type": "string" }
+          }
+        ],
         "responses": { "200": { "description": "" } },
         "tags": ["Oidc"]
       }
@@ -469,6 +1578,28 @@
       "post": {
         "operationId": "SiweAuthController_signIn_v1",
         "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "message": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "signature": {
+                    "type": "string",
+                    "pattern": "^0x[0-9a-fA-F]+$"
+                  }
+                },
+                "required": ["message", "signature"]
+              }
+            }
+          }
+        },
         "responses": { "200": { "description": "" } },
         "tags": ["SiweAuth"]
       }
@@ -477,6 +1608,28 @@
       "post": {
         "operationId": "SiweAuthController_stepUp_v1",
         "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "message": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "signature": {
+                    "type": "string",
+                    "pattern": "^0x[0-9a-fA-F]+$"
+                  }
+                },
+                "required": ["message", "signature"]
+              }
+            }
+          }
+        },
         "responses": { "200": { "description": "" } },
         "tags": ["SiweAuth"]
       }
@@ -485,6 +1638,24 @@
       "post": {
         "operationId": "TotpController_stepUp_v1",
         "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "code": { "type": "string", "minLength": 1, "maxLength": 16 },
+                  "recoveryCode": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": { "200": { "description": "" } },
         "tags": ["Totp"]
       }
@@ -501,6 +1672,20 @@
       "post": {
         "operationId": "TotpController_confirm_v1",
         "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "code": { "type": "string", "minLength": 1, "maxLength": 16 }
+                },
+                "required": ["code"]
+              }
+            }
+          }
+        },
         "responses": { "200": { "description": "" } },
         "tags": ["Totp"]
       }
@@ -517,6 +1702,24 @@
       "post": {
         "operationId": "InvitationsController_accept_v1",
         "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "minLength": 16,
+                    "maxLength": 128
+                  }
+                },
+                "required": ["token"]
+              }
+            }
+          }
+        },
         "responses": { "200": { "description": "" } },
         "tags": ["Invitations"]
       }
@@ -525,6 +1728,24 @@
       "post": {
         "operationId": "InvitationsController_decline_v1",
         "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "minLength": 16,
+                    "maxLength": 128
+                  }
+                },
+                "required": ["token"]
+              }
+            }
+          }
+        },
         "responses": { "200": { "description": "" } },
         "tags": ["Invitations"]
       }

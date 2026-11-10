@@ -18,6 +18,7 @@ import {
 } from '@/modules/org/auth/session.guard';
 import { client } from '@/modules/org/orgs/parse';
 import { ValidationPipe } from '@/validation/pipes/validation.pipe';
+import { OrgApiBody } from '@/modules/org/common/org-api-body.decorator';
 
 export const SiweBodySchema = z.object({
   message: z.string().min(1).max(4096),
@@ -37,6 +38,7 @@ export class SiweAuthController {
 
   @Public()
   @Post('siwe')
+  @OrgApiBody(SiweBodySchema)
   @HttpCode(200)
   async signIn(
     @Body(new ValidationPipe(SiweBodySchema)) body: SiweBody,
@@ -53,6 +55,7 @@ export class SiweAuthController {
   }
 
   @Post('step-up/siwe')
+  @OrgApiBody(SiweBodySchema)
   @HttpCode(200)
   async stepUp(
     @OrgSession() session: OrgSession,
