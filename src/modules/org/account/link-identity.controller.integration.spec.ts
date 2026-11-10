@@ -342,10 +342,7 @@ describe('identity linking (org)', () => {
         const u = await user({ wallet: true });
         const s = await startLink(u);
         mock.setClaims(claims);
-        await failsWith(
-          callback(s, [s.txCookie, u.cookie]),
-          'reauth_required',
-        );
+        await failsWith(callback(s, [s.txCookie, u.cookie]), 'reauth_required');
         expect(await identities(u)).toHaveLength(1);
       },
     );
