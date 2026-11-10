@@ -11,6 +11,7 @@ import type {
 import type { Permission } from '@/modules/org/permissions/permissions';
 
 const DEADLOCK = '40P01';
+const LOCK_NOT_AVAILABLE = '55P03';
 const CHECK_VIOLATION = '23514';
 const KEEP_ONE_ADMIN = 'members_keep_one_admin';
 
@@ -66,7 +67,11 @@ export function lastAdminConflict(): ConflictException {
   });
 }
 
-/** Maps the trigger's check_violation and lock deadlocks to 409 last_admin. */
+/**
+ * The trigger's check_violation → 409 `last_admin`; lock deadlocks and lock
+ * timeouts → 409 `retry` (nothing was decided, the client may try again).
+ * Anything else is rethrown.
+ */
 export function mapLastAdmin(error: unknown): never {
   const e = error as {
     code?: string;
@@ -75,11 +80,11 @@ export function mapLastAdmin(error: unknown): never {
   };
   const code = e.code ?? e.driverError?.code;
   const constraint = e.constraint ?? e.driverError?.constraint;
-  if (
-    code === DEADLOCK ||
-    (code === CHECK_VIOLATION && constraint === KEEP_ONE_ADMIN)
-  ) {
+  if (code === CHECK_VIOLATION && constraint === KEEP_ONE_ADMIN) {
     throw lastAdminConflict();
+  }
+  if (code === DEADLOCK || code === LOCK_NOT_AVAILABLE) {
+    throw conflict('retry', 'Concurrent change; try again');
   }
   throw error;
 }
