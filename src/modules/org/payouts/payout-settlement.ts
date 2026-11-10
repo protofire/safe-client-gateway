@@ -15,7 +15,8 @@ export type ReviewReason =
   | 'missing_transfers'
   | 'partial_overlap'
   | 'undecodable'
-  | 'indirect_unproven';
+  | 'indirect_unproven'
+  | 'stray_proposal';
 
 export type Settlement = {
   status:
@@ -27,7 +28,13 @@ export type Settlement = {
     | 'verifying'
     | 'pending';
   executedTxHash?: Hex;
-  review?: { reason: ReviewReason; lines?: Array<number> };
+  review?: {
+    reason: ReviewReason;
+    lines?: Array<number>;
+    /** `stray_proposal`: the queued copy owners must reject (absent if the queue could not be read whole). */
+    nonce?: string;
+    safeTxHash?: string;
+  };
 };
 
 export type SettlementItem = {

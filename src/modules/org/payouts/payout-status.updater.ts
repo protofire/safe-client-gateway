@@ -29,6 +29,7 @@ import {
 } from '@/modules/org/payouts/payout-settlement';
 import {
   callsEqual,
+  callsMismatch,
   multiSendCallOnlySet,
   reorgMarginMs,
   verifyProposedTx,
@@ -65,6 +66,8 @@ export type NonceEvidence = {
   queued: Array<MultisigTransaction>;
   /** Taken before any read: evidence older than a run's `verifying_since` cannot roll it back. */
   readAt: Date;
+  /** Every queued tx (signed or not) from the current nonce on, for the stray rule; `complete` false = truncated. */
+  queueView: { txs: Array<MultisigTransaction>; complete: boolean };
   /** ERC20/native transfers of the tx executed at N, as far as they could be read. */
   transfers: Array<Transfer>;
   callOnly: ReadonlySet<string>;
@@ -219,6 +222,10 @@ export class PayoutStatusUpdater
       }),
       this.readQueued(chainId, safeAddress, { nonce: nonce.toString() }),
     ]);
+    const queueView = await this.readQueued(chainId, safeAddress, {
+      nonceGte: currentNonce,
+      trusted: false,
+    });
     const executed =
       executedPage.results.find(
         (t) =>
@@ -240,6 +247,7 @@ export class PayoutStatusUpdater
       // adoption on a capped read just sees fewer candidates
       queued: queued.txs.filter((t) => BigInt(t.nonce) === nonce),
       readAt,
+      queueView,
       transfers,
       callOnly,
       trusted,
@@ -426,6 +434,18 @@ export class PayoutStatusUpdater
             .map((a) => lower(a.safe_tx_hash!))
         : [],
     );
+    // the stray rule of claim/report: no adoption while the run's calls are queued at another nonce
+    if (
+      !consumed &&
+      (!ev.queueView.complete ||
+        findStray(
+          ev.queueView.txs,
+          ev.nonce,
+          await knownCalls(em, run),
+          ev.callOnly,
+        ))
+    )
+      return run;
     const executedAtN = ev.executed ? [ev.executed] : [];
     const candidates = consumed ? executedAtN : ev.queued;
     const match = candidates.find(
@@ -503,6 +523,41 @@ export class PayoutStatusUpdater
               ...(executedTxHash && { executedTxHash }),
             }
           : { status: 'verifying', ...(executedTxHash && { executedTxHash }) };
+    }
+    if (outcome.status === 'executed') {
+      // a copy of the paid calls still queued later could pay a second time
+      const executedTxHash = outcome.executedTxHash;
+      const stray = ev.queueView.complete
+        ? findStray(
+            ev.queueView.txs,
+            null,
+            await knownCalls(em, run),
+            ev.callOnly,
+          )
+        : undefined;
+      if (!ev.queueView.complete) {
+        outcome =
+          deadline !== null && now >= deadline
+            ? {
+                status: 'needs_review',
+                review: { reason: 'stray_proposal' },
+                ...(executedTxHash && { executedTxHash }),
+              }
+            : {
+                status: 'verifying',
+                ...(executedTxHash && { executedTxHash }),
+              };
+      } else if (stray) {
+        outcome = {
+          status: 'needs_review',
+          review: {
+            reason: 'stray_proposal',
+            nonce: String(stray.nonce),
+            safeTxHash: stray.safeTxHash,
+          },
+          ...(executedTxHash && { executedTxHash }),
+        };
+      }
     }
     if (outcome.status === 'verifying')
       return this.markVerifying(em, run, outcome, now, executed);
@@ -715,4 +770,33 @@ const sameCalls = (
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** The run's current calls and every attempt's calls: what a stray copy would carry. */
+export async function knownCalls(
+  em: EntityManager,
+  run: Pick<PayoutRunRow, 'org_id' | 'id' | 'calls'>,
+): Promise<Array<Array<SafeCall>>> {
+  const attempts: Array<{ calls: Array<StoredCall> }> = await em.query(
+    `SELECT calls FROM payout_proposal_attempts WHERE org_id = $1 AND run_id = $2`,
+    [run.org_id, run.id],
+  );
+  return [
+    ...(run.calls ? [run.calls] : []),
+    ...attempts.map((a) => a.calls),
+  ].map(fromStoredCalls);
+}
+
+/** A queued tx at another nonce than `nonce` (null: any) carrying one of `known`'s call lists. */
+export function findStray(
+  queued: ReadonlyArray<MultisigTransaction>,
+  nonce: bigint | null,
+  known: ReadonlyArray<ReadonlyArray<SafeCall>>,
+  callOnly: ReadonlySet<string>,
+): MultisigTransaction | undefined {
+  return queued.find(
+    (t) =>
+      (nonce === null || BigInt(t.nonce) !== nonce) &&
+      known.some((calls) => callsMismatch(t, calls, callOnly) === null),
+  );
 }

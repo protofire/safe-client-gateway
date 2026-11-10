@@ -65,8 +65,12 @@ export type PayoutReview = {
     | 'missing_transfers'
     | 'partial_overlap'
     | 'undecodable'
-    | 'indirect_unproven';
+    | 'indirect_unproven'
+    | 'stray_proposal';
   lines?: Array<number>;
+  /** `stray_proposal`: the queued copy of the run owners must reject. */
+  nonce?: string;
+  safeTxHash?: string;
 };
 
 export type PayoutRunListItem = {

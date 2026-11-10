@@ -655,6 +655,69 @@ describe('PayoutStatusUpdater', () => {
     expect(res.body.code).toBe('tx_service_unavailable');
   });
 
+  it('does not adopt a matching tx at N while the run calls are also queued at another nonce, and adopts it once that is gone', async () => {
+    const c = await claimed();
+    const stray = p.chain.propose(SAFE_A, 6, c.calls);
+    const atN = p.chain.propose(SAFE_A, 5, c.calls);
+    const res = await p
+      .report(orgA, c.runId, member, {
+        attemptId: c.attemptId,
+        expectedVersion: c.version,
+        safeTxHash: atN.safeTxHash,
+      })
+      .expect(409);
+    expect(res.body.code).toBe('stray_proposal');
+    await p.updater.run();
+    expect(await status(c.runId)).toBe('proposing');
+    p.chain.txs = p.chain.txs.filter((t) => t !== stray);
+    await p.updater.run();
+    expect(await p.runRow(orgA, c.runId)).toMatchObject({
+      status: 'proposed',
+      safe_tx_hash: atN.safeTxHash,
+    });
+  });
+
+  it('does not adopt for a pinned draft while a stray copy is queued', async () => {
+    const c = await claimed();
+    await p.release(orgA, c.runId, c.attemptId, member).expect(200);
+    p.chain.propose(SAFE_A, 6, c.calls, { trusted: false });
+    p.chain.propose(SAFE_A, 5, c.calls);
+    await p.updater.run();
+    expect(await p.runRow(orgA, c.runId)).toMatchObject({
+      status: 'draft',
+      safe_tx_hash: null,
+    });
+  });
+
+  it('settles an executed run needs_review stray_proposal while its calls are still queued at a later nonce', async () => {
+    const r = await proposed();
+    const stray = p.chain.propose(SAFE_A, 6, r.calls, { trusted: false });
+    p.chain.indexTransfers(SAFE_A, p.chain.execute(r.tx), r.items);
+    await p.updater.run();
+    expect(await p.runRow(orgA, r.runId)).toMatchObject({
+      status: 'needs_review',
+      review: {
+        reason: 'stray_proposal',
+        nonce: '6',
+        safeTxHash: stray.safeTxHash,
+      },
+      pinned_nonce: null,
+    });
+  });
+
+  it('keeps an executed run verifying while the queue cannot be read whole', async () => {
+    const r = await proposed();
+    p.chain.indexTransfers(SAFE_A, p.chain.execute(r.tx), r.items);
+    p.chain.txPageSize = 1;
+    for (let i = 0; i < 6; i++)
+      p.chain.propose(SAFE_A, 6 + i, [native(STRANGER, BigInt(i + 1))]);
+    await p.updater.run();
+    expect(await p.runRow(orgA, r.runId)).toMatchObject({
+      status: 'verifying',
+      pinned_nonce: '5',
+    });
+  });
+
   it('returns null from run while another replica holds the lock', async () => {
     const runner = p.t.sql.createQueryRunner();
     await runner.connect();

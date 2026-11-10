@@ -25,18 +25,16 @@ import {
 } from '@/modules/org/payouts/payout-runs.service';
 import { PayoutRunsService } from '@/modules/org/payouts/payout-runs.service';
 import {
+  findStray,
+  knownCalls,
   PayoutStatusUpdater,
   type NonceEvidence,
 } from '@/modules/org/payouts/payout-status.updater';
-import {
-  callsMismatch,
-  verifyProposedTx,
-} from '@/modules/org/payouts/payout-verify';
+import { verifyProposedTx } from '@/modules/org/payouts/payout-verify';
 import {
   EDITABLE_STATUSES,
   type PayoutRunDetail,
   type PayoutRunStatus,
-  type StoredCall,
 } from '@/modules/org/payouts/payout.schemas';
 import type { MultisigTransaction } from '@/modules/safe/domain/entities/multisig-transaction.entity';
 import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
@@ -596,18 +594,11 @@ async function assertNoStray(
   queued: ReadonlyArray<MultisigTransaction>,
   callOnly: ReadonlySet<string>,
 ): Promise<void> {
-  const attempts: Array<{ calls: Array<StoredCall> }> = await em.query(
-    `SELECT calls FROM payout_proposal_attempts WHERE org_id = $1 AND run_id = $2`,
-    [run.org_id, run.id],
-  );
-  const known = [
-    ...(run.calls ? [run.calls] : []),
-    ...attempts.map((a) => a.calls),
-  ].map(fromStoredCalls);
-  const stray = queued.find(
-    (t) =>
-      BigInt(t.nonce) !== BigInt(nonce) &&
-      known.some((calls) => callsMismatch(t, calls, callOnly) === null),
+  const stray = findStray(
+    queued,
+    BigInt(nonce),
+    await knownCalls(em, run),
+    callOnly,
   );
   if (stray) {
     throw conflictWith('stray_proposal', {
