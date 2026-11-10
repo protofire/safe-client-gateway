@@ -15,17 +15,24 @@ function escapeHtml(value: string): string {
 
 export type MailContent = { subject: string; text: string; html: string };
 
+const MAX_NAME_LENGTH = 64;
+
 /**
- * Org and inviter names are user input: one line (no header injection), and
- * no URLs or `http`/`www.` fragments, so a name cannot pose as a link in a
- * mail we send (phishing through our domain).
+ * Org and inviter names are user input: one line (no header injection), no
+ * URLs, `http`/`www.` fragments or bare domains (a dot between word
+ * characters becomes a space, so mail clients do not auto-link
+ * `evil-login.com`), and at most 64 characters, so a name cannot pose as a
+ * link in a mail we send (phishing through our domain).
  */
 export function plainName(value: string): string {
   return value
     .replace(/[\r\n]+/g, ' ')
     .replace(/(?:https?:\/\/|www\.)\S*/gi, '')
     .replace(/https?:?|www\./gi, '')
+    .replace(/(?<=\w)\.(?=\w)/g, ' ')
     .replace(/\s{2,}/g, ' ')
+    .trim()
+    .slice(0, MAX_NAME_LENGTH)
     .trim();
 }
 

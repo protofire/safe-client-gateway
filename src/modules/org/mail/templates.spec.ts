@@ -12,6 +12,10 @@ describe('mail templates (item 2)', () => {
     ['hxxp http: and https', 'hxxp and'],
     ['Line\r\nBreak', 'Line Break'],
     ['Plain Org', 'Plain Org'],
+    ['Pay at evil-login.com/acct', 'Pay at evil-login com/acct'],
+    ['EVIL-LOGIN.COM', 'EVIL-LOGIN COM'],
+    ['a***@example.com', 'a***@example com'],
+    ['x'.repeat(100), 'x'.repeat(64)],
   ])('plainName(%p) = %p', (input, expected) => {
     expect(plainName(input)).toBe(expected);
   });
