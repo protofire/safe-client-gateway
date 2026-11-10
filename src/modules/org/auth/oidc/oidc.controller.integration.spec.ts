@@ -185,7 +185,7 @@ describe('OIDC sign-in (org)', () => {
     });
   });
 
-  it('signs the same identity into the same user; another subject with the same verified email joins that user (item 6)', async () => {
+  it('signs the same identity into the same user; the same verified email under a new subject is a new user, the existing one untouched', async () => {
     const a = await callback(...withCookie(await start())).expect(302);
     const b = await callback(...withCookie(await start())).expect(302);
     const idOf = async (res: request.Response): Promise<string> =>
@@ -195,39 +195,31 @@ describe('OIDC sign-in (org)', () => {
           .get('/v1/orgs/auth/me')
           .set('Cookie', cookieFrom(res, 'org_session'))
       ).body.user.id;
-    expect(await idOf(b)).toBe(await idOf(a));
+    const alice = await idOf(a);
+    expect(await idOf(b)).toBe(alice);
+    const identitiesOf = (userId: string): Promise<Array<unknown>> =>
+      t.sql.query(
+        `SELECT id, oidc_subject, email_hash FROM identities WHERE user_id = $1 ORDER BY id`,
+        [userId],
+      );
+    const eventsOf = (userId: string): Promise<Array<unknown>> =>
+      t.sql.query(
+        `SELECT type, payload FROM user_security_events WHERE user_id = $1 ORDER BY created_at`,
+        [userId],
+      );
+    const aliceIdentities = await identitiesOf(alice);
+    const aliceEvents = await eventsOf(alice);
 
-    // same verified email, other subject (Google instead of the email code)
+    // same verified email, other subject: never attached implicitly
     mock.setClaims({ sub: 'google-oauth2|other' });
     const c = await callback(...withCookie(await start())).expect(302);
-    expect(await idOf(c)).toBe(await idOf(a));
-    const identities = await t.sql.query(
-      `SELECT oidc_subject FROM identities WHERE user_id = $1 ORDER BY created_at`,
-      [await idOf(a)],
-    );
-    expect(identities).toHaveLength(2);
-    expect(identities[1].oidc_subject).toBe('google-oauth2|other');
-    const [linked] = await t.sql.query(
-      `SELECT payload FROM user_security_events WHERE user_id = $1 AND type = 'security.identity_linked'`,
-      [await idOf(a)],
-    );
-    expect(linked.payload).toEqual({ kind: 'oidc', via: 'sign_in' });
-
-    // another email: a new user
-    mock.setClaims({});
-    const d = await callback(
-      ...withCookie(await start('connection=email', 'bob@example.com')),
-    ).expect(302);
-    expect(await idOf(d)).not.toBe(await idOf(a));
-  });
-
-  it('never attaches by an unverified email (item 6)', async () => {
-    const a = await callback(...withCookie(await start())).expect(302);
-    const before = await t.sql.query(`SELECT id FROM identities`);
-    mock.setClaims({ sub: 'google-oauth2|other', email_verified: false });
-    await failsWith(callback(...withCookie(await start())), 'failed');
-    expect(await t.sql.query(`SELECT id FROM identities`)).toEqual(before);
-    expect(cookieFrom(a, 'org_session')).toMatch(/^org_session=/);
+    const other = await idOf(c);
+    expect(other).not.toBe(alice);
+    expect(await identitiesOf(other)).toEqual([
+      expect.objectContaining({ oidc_subject: 'google-oauth2|other' }),
+    ]);
+    expect(await identitiesOf(alice)).toEqual(aliceIdentities);
+    expect(await eventsOf(alice)).toEqual(aliceEvents);
   });
 
   it.each(['github|123', 'auth0|123', 'samlp|x', 'email', 'google-oauth2'])(

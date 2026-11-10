@@ -230,7 +230,7 @@ export class OidcService {
       return { token: null, redirectUrl };
     }
 
-    const userId = await this.findOrCreateUser(identity, args);
+    const userId = await this.findOrCreateUser(identity);
     const { token } = await this.sessions.create({
       userId,
       amr: ['oidc'],
@@ -300,16 +300,15 @@ export class OidcService {
   }
 
   /**
-   * Identity by (issuer, subject). A new subject joins the one active user
-   * holding an identity of the same issuer with the same email (item 6: the
-   * same person via Google and the email code). Every stored OIDC identity
-   * and this one are `email_verified` (OidcClient), so an unverified address
-   * never gets here. No or several matches: a new user.
+   * Identity by (issuer, subject); a new subject is always a new user. Never
+   * attach by email: mailbox access or a recycled address would take over
+   * the account (decision reversed 2026-11-10); linking is explicit, while
+   * signed in (link flow).
    */
-  private async findOrCreateUser(
-    identity: { subject: string; email: string },
-    client: { ip: string; userAgent: string | null },
-  ): Promise<string> {
+  private async findOrCreateUser(identity: {
+    subject: string;
+    email: string;
+  }): Promise<string> {
     const issuer = this.client.issuerId;
     const { subject } = identity;
     const emailEncrypted = this.encryption.encrypt(identity.email);
@@ -342,38 +341,17 @@ export class OidcService {
     const existing = await find();
     if (existing) return known(existing);
     try {
-      const { userId, attached } = await this.db.transaction(async (em) => {
-        const owners: Array<{ userId: string }> = await em.query(
-          `SELECT DISTINCT i.user_id AS "userId" FROM identities i
-           JOIN users u ON u.id = i.user_id AND u.status = 'active'
-           WHERE i.kind = 'oidc' AND i.oidc_issuer = $1 AND i.email_hash = $2`,
-          [issuer, emailHash],
+      return await this.db.transaction(async (em) => {
+        const [{ id }] = await em.query(
+          `INSERT INTO users DEFAULT VALUES RETURNING id`,
         );
-        let id: string;
-        if (owners.length === 1) {
-          id = owners[0].userId;
-        } else {
-          [{ id }] = await em.query(
-            `INSERT INTO users DEFAULT VALUES RETURNING id`,
-          );
-        }
         await em.query(
           `INSERT INTO identities (user_id, kind, oidc_issuer, oidc_subject, email_encrypted, email_hash)
            VALUES ($1, 'oidc', $2, $3, $4, $5)`,
           [id, issuer, subject, emailEncrypted, emailHash],
         );
-        return { userId: id, attached: owners.length === 1 };
+        return id as string;
       });
-      if (attached) {
-        await this.securityEvents.record(
-          userId,
-          'security.identity_linked',
-          { kind: 'oidc', via: 'sign_in' },
-          client.ip,
-          client.userAgent,
-        );
-      }
-      return userId;
     } catch (error) {
       // a concurrent first sign-in of the same identity won the unique index
       const winner =
