@@ -112,6 +112,19 @@ describe('PayoutStatusUpdater', () => {
   const status = async (runId: string, org = orgA): Promise<unknown> =>
     (await p.runRow(org, runId)).status;
 
+  /** A stray review as stored before `strayExecuted` existed. */
+  const asStray = (runId: string, safeTxHash: string): Promise<unknown> =>
+    p.t.sql.transaction(async (em) => {
+      await em.query(`SELECT set_config('app.org_id', $1, true)`, [orgA]);
+      await em.query(
+        `UPDATE payout_runs SET review = $2::jsonb WHERE id = $1`,
+        [
+          runId,
+          JSON.stringify({ reason: 'stray_proposal', nonce: '6', safeTxHash }),
+        ],
+      );
+    });
+
   it('marks the run executed after a successful execution with all transfers', async () => {
     const r = await proposed();
     const hash = p.chain.execute(r.tx);
@@ -451,9 +464,11 @@ describe('PayoutStatusUpdater', () => {
     });
   });
 
-  it('marks the run replaced when an unrelated plain transfer executed at N and lets the next claim take a fresh nonce', async () => {
+  it('marks the run replaced when an unrelated tx at N reverted and lets the next claim take a fresh nonce', async () => {
     const r = await proposed();
-    p.chain.execute(p.chain.propose(SAFE_A, 5, [native(STRANGER)]));
+    p.chain.execute(p.chain.propose(SAFE_A, 5, [native(STRANGER)]), {
+      success: false,
+    });
     await p.updater.run();
     expect(await p.runRow(orgA, r.runId)).toMatchObject({
       status: 'replaced',
@@ -511,7 +526,9 @@ describe('PayoutStatusUpdater', () => {
 
   it('settles a never-proposed proposing run replaced when N goes to another tx', async () => {
     const c = await claimed();
-    p.chain.execute(p.chain.propose(SAFE_A, 5, [native(STRANGER)]));
+    p.chain.execute(p.chain.propose(SAFE_A, 5, [native(STRANGER)]), {
+      success: false,
+    });
     await p.updater.run();
     expect(await p.runRow(orgA, c.runId)).toMatchObject({
       status: 'replaced',
@@ -531,7 +548,9 @@ describe('PayoutStatusUpdater', () => {
   it('N consumed by an outside tx clears the pin of a never-proposed draft', async () => {
     const c = await claimed();
     await p.release(orgA, c.runId, c.attemptId, member).expect(200);
-    p.chain.execute(p.chain.propose(SAFE_A, 5, [native(STRANGER)]));
+    p.chain.execute(p.chain.propose(SAFE_A, 5, [native(STRANGER)]), {
+      success: false,
+    });
     await p.updater.run();
     expect(await p.runRow(orgA, c.runId)).toMatchObject({
       status: 'draft',
@@ -594,7 +613,9 @@ describe('PayoutStatusUpdater', () => {
 
     // rebuild after replaced works
     const other = await claimed(ROWS, orgA, safeA, member, 6);
-    p.chain.execute(p.chain.propose(SAFE_A, 6, [native(STRANGER)]));
+    p.chain.execute(p.chain.propose(SAFE_A, 6, [native(STRANGER)]), {
+      success: false,
+    });
     await p.updater.run();
     expect(await status(other.runId)).toBe('replaced');
     const rebuilt = await p.build(orgA, other.runId, member);
@@ -636,7 +657,7 @@ describe('PayoutStatusUpdater', () => {
     expect(await status(r.runId)).toBe('executed');
   });
 
-  it('settles runs of two orgs that pinned the same N with different recipients: one executed, the other replaced', async () => {
+  it('settles runs of two orgs that pinned the same N with different recipients: one executed, the other unproven', async () => {
     const a = await claimed([{ address: ALICE, amount: '1', token: 'native' }]);
     const safeInB = await p.linkSafe(orgB, SAFE_A);
     const b = await claimed(
@@ -648,7 +669,8 @@ describe('PayoutStatusUpdater', () => {
     p.chain.execute(p.chain.propose(SAFE_A, 5, a.calls));
     await p.updater.run();
     expect(await status(a.runId)).toBe('executed');
-    expect(await status(b.runId, orgB)).toBe('replaced');
+    // B cannot prove where A's payment went: never replaced
+    expect(await status(b.runId, orgB)).toBe('verifying');
   });
 
   it('settles a tx executed at N that the tx-service lists beyond the first page', async () => {
@@ -878,7 +900,9 @@ describe('PayoutStatusUpdater', () => {
         safeTxHash: wrong.safeTxHash,
       })
       .expect(422);
-    p.chain.execute(p.chain.propose(SAFE_A, 5, [native(STRANGER)]));
+    p.chain.execute(p.chain.propose(SAFE_A, 5, [native(STRANGER)]), {
+      success: false,
+    });
     await p.updater.run();
     expect(await p.runRow(orgA, c.runId)).toMatchObject({
       status: 'needs_review',
@@ -1092,6 +1116,72 @@ describe('PayoutStatusUpdater', () => {
       review: null,
     });
     expect(await p.events('payout_run.stray_detected')).toHaveLength(1);
+  });
+
+  it('re-emits the stray warning a released pinned draft keeps when the queued copy executes', async () => {
+    p.chain.propose(SAFE_A, 5, [native(STRANGER, 1n)]);
+    p.chain.propose(SAFE_A, 6, [native(STRANGER, 2n)]);
+    const c = await claimed(ROWS, orgA, safeA, member, 7);
+    const tx = p.chain.propose(SAFE_A, 7, c.calls);
+    await p
+      .report(orgA, c.runId, member, {
+        attemptId: c.attemptId,
+        expectedVersion: c.version,
+        safeTxHash: tx.safeTxHash,
+      })
+      .expect(200);
+    const copy = p.chain.propose(SAFE_A, 5, c.calls, { trusted: false });
+    await p.updater.run();
+    await p.release(orgA, c.runId, c.attemptId, member).expect(200);
+    expect(await p.runRow(orgA, c.runId)).toMatchObject({
+      status: 'draft',
+      pinned_nonce: '7',
+      review: { reason: 'stray_proposal', strayExecuted: false },
+    });
+    p.chain.execute(copy, { ago: 1000 });
+    await p.updater.run();
+    expect((await p.runRow(orgA, c.runId)).review).toMatchObject({
+      reason: 'stray_proposal',
+      safeTxHash: copy.safeTxHash,
+      strayExecuted: true,
+    });
+    expect(await p.events('payout_run.stray_detected')).toHaveLength(2);
+  });
+
+  it('warns on a proposing run and clears the warning when owners reject the queued copy', async () => {
+    p.chain.propose(SAFE_A, 5, [native(STRANGER, 1n)]);
+    p.chain.propose(SAFE_A, 6, [native(STRANGER, 2n)]);
+    const c = await claimed(ROWS, orgA, safeA, member, 7);
+    const copy = p.chain.propose(SAFE_A, 5, c.calls, { trusted: false });
+    await p.updater.run();
+    expect(await p.runRow(orgA, c.runId)).toMatchObject({
+      status: 'proposing',
+      review: {
+        reason: 'stray_proposal',
+        safeTxHash: copy.safeTxHash,
+        strayExecuted: false,
+      },
+    });
+    // an on-chain rejection takes the copy's nonce 5; the run's 7 stays unused
+    p.chain.execute(
+      p.chain.propose(SAFE_A, 5, [
+        { to: SAFE_A, value: 0n, data: '0x', operation: 0 },
+      ]),
+      { ago: 1000 },
+    );
+    await p.updater.run();
+    expect(await p.runRow(orgA, c.runId)).toMatchObject({
+      status: 'proposing',
+      review: null,
+    });
+  });
+
+  it('does not re-emit a stored stray warning that lacks strayExecuted', async () => {
+    const r = await proposed();
+    const copy = p.chain.propose(SAFE_A, 6, r.calls, { trusted: false });
+    await asStray(r.runId, copy.safeTxHash);
+    await p.updater.run();
+    expect(await p.events('payout_run.stray_detected')).toEqual([]);
   });
 
   it('does not treat the recorded tx of another run of the org with identical rows as a copy', async () => {

@@ -268,7 +268,7 @@ export function settlementOutcome(input: SettlementInput): Settlement {
       targets.erc20.has(pairKey(payment.token, payment.recipient))
     );
   });
-  // any sender: a contract called at N may forward the Safe's money to a run recipient
+  // the Safe's own transfer records (the only ones read) in this execution
   const transferOverlaps = transfers.some(
     (t) =>
       (t.type === 'ERC20_TRANSFER' &&
@@ -278,9 +278,18 @@ export function settlementOutcome(input: SettlementInput): Settlement {
   if (callOverlaps || transferOverlaps)
     return settle('needs_review', { reason: 'partial_overlap' });
 
-  // shortcut: forwarding the tx-service does not index (internal calls it misses, non-standard tokens without Transfer events) is not seen; a plain send to a contract is trusted by its decoded shape, add trace inspection if that matters
-  const plain = flat.calls.every(
-    (c) => c.data === '0x' || (c.value === 0n && decodePayment(c) !== null),
-  );
-  return plain && !refund ? settle('replaced') : unproven();
+  // `replaced` only if no call moves the Safe's money: a recipient may forward it to a run recipient, which the Safe's transfers never show
+  // shortcut: only the Safe itself counts as a harmless receiver, so almost any real payment at N ends verifying → indirect_unproven; add trace inspection to prove more
+  const self = lower(safe);
+  const movesNothing = flat.calls.every((c) => {
+    if (c.value > 0n && lower(c.to) !== self) return false;
+    if (c.data === '0x') return true;
+    const payment = decodePayment(c);
+    return (
+      c.value === 0n &&
+      payment !== null &&
+      (payment.amount === 0n || payment.recipient === self)
+    );
+  });
+  return movesNothing && !refund ? settle('replaced') : unproven();
 }

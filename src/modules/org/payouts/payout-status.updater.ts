@@ -208,8 +208,7 @@ export class PayoutStatusUpdater
       (em) =>
         em.query(
           `SELECT chain_id, safe_address::text AS safe_address, status, pinned_nonce::text AS pinned_nonce,
-                  (SELECT min(a.created_at) FROM payout_proposal_attempts a
-                    WHERE a.org_id = r.org_id AND a.run_id = r.id AND a.nonce = r.pinned_nonce) AS first_attempt_at,
+                  ${strayWindowStart('r.org_id', 'r.id', 'r.pinned_nonce')} AS first_attempt_at,
                   EXISTS (SELECT 1 FROM payout_proposal_attempts a
                     WHERE a.org_id = r.org_id AND a.run_id = r.id AND a.nonce = r.pinned_nonce
                       AND a.status = 'released' AND a.safe_tx_hash IS NULL) AS adoptable
@@ -417,8 +416,13 @@ export class PayoutStatusUpdater
       const stale =
         run.verifying_since !== null && run.verifying_since > ev.readAt;
       if (run.status === 'verifying' && !stale) await this.unverify(em, run);
-      // periodic check of a proposed run: a copy elsewhere could pay besides N
-      if (run.status === 'proposed' && ev.strayView.complete) {
+      // periodic check while N is pinned and unused: a copy elsewhere could pay besides N
+      if (
+        (run.status === 'draft' ||
+          run.status === 'proposing' ||
+          run.status === 'proposed') &&
+        ev.strayView.complete
+      ) {
         const stray = findStray(
           ev.strayView.txs,
           ev.nonce,
@@ -745,7 +749,7 @@ export class PayoutStatusUpdater
     if (
       run.review?.reason === review.reason &&
       run.review.safeTxHash === review.safeTxHash &&
-      run.review.strayExecuted === review.strayExecuted
+      (run.review.strayExecuted ?? false) === review.strayExecuted
     )
       return;
     await em.query(
@@ -1050,16 +1054,23 @@ const strayReview = (stray: MultisigTransaction): Settlement => ({
 });
 
 /**
- * When the run's first proposal attempt at its current pin was claimed; null:
- * unpinned or none yet. Earlier pins were checked when they settled.
+ * SQL for when the run's first proposal attempt at its pin was claimed; when
+ * unpinned (settled or lost pin), at the nonce of its most recent attempt, so
+ * a copy executed after that pin was cleared is still found. NULL: no attempt.
  */
+const strayWindowStart = (org: string, run: string, pin: string): string =>
+  `(SELECT min(a.created_at) FROM payout_proposal_attempts a
+     WHERE a.org_id = ${org} AND a.run_id = ${run}
+       AND a.nonce = COALESCE(${pin}, (SELECT l.nonce FROM payout_proposal_attempts l
+         WHERE l.org_id = ${org} AND l.run_id = ${run} ORDER BY l.created_at DESC, l.id DESC LIMIT 1)))`;
+
+/** Start of the stray view's executed window: see {@link strayWindowStart}. */
 export async function firstAttemptAt(
   em: EntityManager,
   run: Pick<PayoutRunRow, 'org_id' | 'id' | 'pinned_nonce'>,
 ): Promise<Date | null> {
-  if (run.pinned_nonce === null) return null;
   const [{ first }]: Array<{ first: Date | null }> = await em.query(
-    `SELECT min(created_at) AS first FROM payout_proposal_attempts WHERE org_id = $1 AND run_id = $2 AND nonce = $3`,
+    `SELECT ${strayWindowStart('$1', '$2', '$3::numeric')} AS first`,
     [run.org_id, run.id, run.pinned_nonce],
   );
   return first;

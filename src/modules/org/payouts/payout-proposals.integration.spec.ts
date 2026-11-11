@@ -13,6 +13,7 @@ import {
   type User,
 } from '@/modules/org/payouts/__tests__/payout-test-app';
 import { toCall } from '@/modules/org/payouts/payout-calls';
+import { firstAttemptAt } from '@/modules/org/payouts/payout-status.updater';
 import { getSafeTxHash } from '@/domain/common/utils/safe';
 import type { Safe } from '@/modules/safe/domain/entities/safe.entity';
 
@@ -317,28 +318,28 @@ describe('payout proposals API', () => {
       });
     });
 
-    it('looks for executed copies only from the first attempt at the current pin, so a run rebuilt after settlement does not fail closed', async () => {
+    it('reads executed history only from the most recent pin, so older history does not fail closed', async () => {
       const c = await claimed();
       await p.release(orgA, c.runId, c.attemptId, member).expect(200);
-      // N goes to an unrelated tx: the draft loses its pin
+      // N goes to an unrelated tx that moved nothing: the draft loses its pin
       p.chain.execute(
         p.chain.propose(SAFE_A, 5, [
           toCall({ recipient: CAROL, token: 'native', amountRaw: 1n }),
         ]),
+        { success: false },
       );
       await p.updater.run();
       expect(await p.runRow(orgA, c.runId)).toMatchObject({
         status: 'draft',
         pinned_nonce: null,
       });
-      // more executed history since the old attempt than one read may page through
+      // more executed history, all before the attempt at 5, than one read may page through
       p.chain.txPageSize = 1;
       for (let i = 6; i < 12; i++)
         p.chain.execute(
           p.chain.propose(SAFE_A, i, [
             toCall({ recipient: CAROL, token: 'native', amountRaw: BigInt(i) }),
           ]),
-          { ago: 1000 },
         );
       const { run } = await p.detail(orgA, c.runId, member);
       await p
@@ -347,6 +348,53 @@ describe('payout proposals API', () => {
           nonce: 12,
         })
         .expect(201);
+    });
+
+    it('answers 409 stray_proposal executed for a copy executed after the run pin was cleared', async () => {
+      const c = await claimed();
+      await p.release(orgA, c.runId, c.attemptId, member).expect(200);
+      p.chain.execute(
+        p.chain.propose(SAFE_A, 5, [
+          toCall({ recipient: CAROL, token: 'native', amountRaw: 1n }),
+        ]),
+        { success: false },
+      );
+      await p.updater.run();
+      expect(await p.runRow(orgA, c.runId)).toMatchObject({
+        status: 'draft',
+        pinned_nonce: null,
+      });
+      // the window stays anchored at the attempt at 5 however late the re-claim comes
+      const [attempt] = await p.asOrg(orgA, (em) =>
+        em.query(
+          `SELECT created_at FROM payout_proposal_attempts WHERE run_id = $1`,
+          [c.runId],
+        ),
+      );
+      expect(
+        await p.asOrg(orgA, (em) =>
+          firstAttemptAt(em, {
+            org_id: orgA,
+            id: c.runId,
+            pinned_nonce: null,
+          }),
+        ),
+      ).toEqual(attempt.created_at);
+      const copy = p.chain.propose(SAFE_A, 6, c.calls, { trusted: false });
+      p.chain.execute(copy, { ago: 1000 });
+      const { run } = await p.detail(orgA, c.runId, member);
+      const res = await p
+        .claim(orgA, c.runId, member, {
+          expectedVersion: run.version,
+          nonce: 7,
+        })
+        .expect(409);
+      expect(res.body).toMatchObject({
+        code: 'stray_proposal',
+        nonce: '6',
+        safeTxHash: copy.safeTxHash,
+        executed: true,
+      });
     });
 
     it('answers 409 proposal_open to a second claim from another tab', async () => {
@@ -1156,6 +1204,7 @@ describe('payout proposals API', () => {
         p.chain.propose(SAFE_A, 5, [
           toCall({ recipient: CAROL, token: 'native', amountRaw: 1n }),
         ]),
+        { success: false },
       );
       const res = await p
         .claim(orgA, c.runId, member, {
@@ -1368,6 +1417,7 @@ describe('payout proposals API', () => {
           p.chain.propose(SAFE_A, 5, [
             toCall({ recipient: CAROL, token: 'native', amountRaw: 1n }),
           ]),
+          { success: false },
         );
         await p.updater.onExecuted('1', SAFE_A, `0x${'1'.repeat(64)}`);
         expect(await p.runRow(orgA, runId)).toMatchObject({
@@ -1467,6 +1517,7 @@ describe('payout proposals API', () => {
         p.chain.propose(SAFE_A, 5, [
           toCall({ recipient: CAROL, token: 'native', amountRaw: 1n }),
         ]),
+        { success: false },
       );
       await p.updater.run();
       expect(await p.runRow(orgA, c.runId)).toMatchObject({

@@ -295,24 +295,47 @@ describe('settlementOutcome', () => {
     });
   });
 
-  it('returns replaced at once for an unrelated plain transfer at N after the reorg margin', () => {
-    const tx = executed(erc20('transfer', USDC, STRANGER, 5n));
-    expect(
-      settlementOutcome(input({ executedAtNonce: tx, transfers: [] })),
-    ).toEqual({
-      status: 'replaced',
-      executedTxHash: TX_HASH,
-    });
-    const native = executed({
-      to: STRANGER,
-      value: 1n,
-      data: '0x',
-      operation: 0,
-    });
-    expect(
-      settlementOutcome(input({ executedAtNonce: native, transfers: [] }))
-        .status,
-    ).toBe('replaced');
+  it('never settles replaced for a send of value or tokens to an address it cannot prove harmless: verifying, then indirect_unproven', () => {
+    // the Safe's transfers endpoint cannot show a recipient forwarding the money on
+    for (const call of [
+      erc20('transfer', USDC, STRANGER, 5n),
+      { to: STRANGER, value: 1n, data: '0x' as Hex, operation: 0 as const },
+      {
+        to: SOME_CONTRACT,
+        value: 1n,
+        data: '0x' as Hex,
+        operation: 0 as const,
+      },
+      erc20('approve', USDC, SOME_CONTRACT, 5n),
+    ]) {
+      const tx = executed(call);
+      expect(
+        settlementOutcome(input({ executedAtNonce: tx, transfers: [] })),
+      ).toEqual({ status: 'verifying', executedTxHash: TX_HASH });
+      expect(
+        settlementOutcome(
+          input({ executedAtNonce: tx, transfers: [], now: DEADLINE }),
+        ),
+      ).toEqual({
+        status: 'needs_review',
+        executedTxHash: TX_HASH,
+        review: { reason: 'indirect_unproven' },
+      });
+    }
+  });
+
+  it('returns replaced at once for a tx at N that moves nothing out of the Safe', () => {
+    for (const call of [
+      erc20('transfer', USDC, STRANGER, 0n),
+      erc20('transfer', USDC, SAFE, 5n),
+      { to: SAFE, value: 1n, data: '0x' as Hex, operation: 0 as const },
+      { to: STRANGER, value: 0n, data: '0x' as Hex, operation: 0 as const },
+    ])
+      expect(
+        settlementOutcome(
+          input({ executedAtNonce: executed(call), transfers: [] }),
+        ),
+      ).toEqual({ status: 'replaced', executedTxHash: TX_HASH });
   });
 
   it('returns needs_review partial_overlap for a different-amount ERC20 transfer to a run recipient at N', () => {
@@ -441,8 +464,10 @@ describe('settlementOutcome', () => {
       executedTxHash: TX_HASH,
       review: { reason: 'partial_overlap' },
     });
-    edited.executedAtNonce = executed(erc20('transfer', USDC, STRANGER, 5n));
+    edited.executedAtNonce = executed(erc20('approve', USDC, STRANGER, 0n));
     expect(settlementOutcome(edited).status).toBe('replaced');
+    edited.executedAtNonce = executed(erc20('transfer', USDC, STRANGER, 5n));
+    expect(settlementOutcome(edited).status).toBe('verifying');
   });
 
   it('compares null data as 0x, value as bigint and to case-insensitively in the direct-call branch', () => {
@@ -471,7 +496,7 @@ describe('settlementOutcome', () => {
       executor: STRANGER,
     } satisfies Partial<MultisigTransaction>;
     const unrelated = (o: Partial<MultisigTransaction>): MultisigTransaction =>
-      executed(erc20('transfer', USDC, STRANGER, 5n), o);
+      executed(erc20('approve', USDC, STRANGER, 0n), o);
 
     it('A: never replaced; verifying, then indirect_unproven at the deadline', () => {
       const tx = unrelated(refund);
@@ -636,34 +661,21 @@ describe('settlementOutcome', () => {
     ).toEqual({ reason: 'partial_overlap' });
   });
 
-  it('returns partial_overlap for a plain native send to a contract that forwards to a run recipient (transfer not from the Safe)', () => {
+  it('never settles replaced for a plain native send to a contract: a forwarding hop is not in the Safe transfers', () => {
     const tx = executed({
       to: SOME_CONTRACT,
       value: 1n,
       data: '0x',
       operation: 0,
     });
-    const native = {
-      ...nativeTokenTransferBuilder()
-        .with('from', SOME_CONTRACT)
-        .with('to', ALICE)
-        .with('value', '1')
-        .with('transactionHash', TX_HASH)
-        .build(),
-    } as Transfer;
-    const token = transferOf(ITEMS[1], {
-      from: SOME_CONTRACT,
-      value: '1',
-    } as Partial<Transfer>);
-    for (const record of [native, token]) {
-      expect(
-        settlementOutcome(input({ executedAtNonce: tx, transfers: [record] })),
-      ).toEqual({
-        status: 'needs_review',
-        executedTxHash: TX_HASH,
-        review: { reason: 'partial_overlap' },
-      });
-    }
+    expect(
+      settlementOutcome(input({ executedAtNonce: tx, transfers: [] })),
+    ).toEqual({ status: 'verifying', executedTxHash: TX_HASH });
+    expect(
+      settlementOutcome(
+        input({ executedAtNonce: tx, transfers: [], now: DEADLINE }),
+      ).review,
+    ).toEqual({ reason: 'indirect_unproven' });
   });
 
   it('makes no decision when tx-service numbers are not integers', () => {
