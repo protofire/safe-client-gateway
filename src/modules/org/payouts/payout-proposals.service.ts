@@ -562,9 +562,9 @@ export class PayoutProposalsService {
     // fail closed: a copy could hide in the part not read
     throw new ServiceUnavailableException({
       statusCode: 503,
-      code: 'tx_service_unavailable',
+      code: 'stray_history_too_long',
       message:
-        'Too much transaction history to check this payout for copies; contact support',
+        'This Safe account has too much history since this run was first proposed to check it for copies. Check on-chain that it was not paid, then create a new run from its CSV.',
     });
   }
 

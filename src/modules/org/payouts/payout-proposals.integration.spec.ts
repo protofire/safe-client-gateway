@@ -312,9 +312,11 @@ describe('payout proposals API', () => {
       const res = await p
         .claim(orgA, b.runId, member, { expectedVersion: b.version, nonce: 11 })
         .expect(503);
-      expect(res.body).toMatchObject({
-        code: 'tx_service_unavailable',
-        message: expect.stringContaining('contact support'),
+      expect(res.body).toEqual({
+        statusCode: 503,
+        code: 'stray_history_too_long',
+        message:
+          'This Safe account has too much history since this run was first proposed to check it for copies. Check on-chain that it was not paid, then create a new run from its CSV.',
       });
     });
 
