@@ -166,6 +166,7 @@ describe('OIDC sign-in (org)', () => {
       ],
       hasTotp: false,
       lastStrongAuthAt: null,
+      canCreateOrganization: true,
     });
     const [row] = await t.sql.query(
       `SELECT s.amr, s.last_strong_auth_at, i.email_encrypted, i.email_hash

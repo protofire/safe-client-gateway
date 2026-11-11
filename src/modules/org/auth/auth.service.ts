@@ -23,6 +23,7 @@ import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
 import { Clock, type IClock } from '@/modules/org/common/clock';
 import { ipBucket, RateLimiter } from '@/modules/org/common/rate-limiter';
 import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
+import { hmacEmail } from '@/modules/org/crypto/hashing';
 import { ORG_DATA_SOURCE } from '@/modules/org/db/org-data-source';
 
 // spec §8: SIWE verify 10/min per IP. No per-account limit: the account is
@@ -41,6 +42,7 @@ export type MeDto = {
   >;
   hasTotp: boolean;
   lastStrongAuthAt: string | null;
+  canCreateOrganization: boolean;
 };
 
 type Attempt = { message: string; signature: Hex; ip: string };
@@ -52,6 +54,11 @@ export class AuthService {
   private readonly nonceTtlSeconds: number;
   private readonly idleTtlSeconds: number;
   private readonly absoluteTtlSeconds: number;
+  // ORG_CREATE_ALLOWLIST; null = anyone may create
+  private readonly createAllowlist: {
+    wallets: Array<string>;
+    emailHashes: Array<string>;
+  } | null;
 
   constructor(
     @InjectDataSource(ORG_DATA_SOURCE) private readonly db: DataSource,
@@ -73,6 +80,20 @@ export class AuthService {
     this.absoluteTtlSeconds = config.getOrThrow<number>(
       'org.session.absoluteTtlSeconds',
     );
+    // absent (test configs) or empty: no gate
+    const { wallets = [], emails = [] } =
+      config.get<{ wallets: Array<string>; emails: Array<string> }>(
+        'org.createAllowlist',
+      ) ?? {};
+    const emailHashKey = (): Buffer =>
+      Buffer.from(config.getOrThrow<string>('org.emailHashKey'), 'base64');
+    this.createAllowlist =
+      wallets.length + emails.length === 0
+        ? null
+        : {
+            wallets,
+            emailHashes: emails.map((e) => hmacEmail(e, emailHashKey())),
+          };
   }
 
   get sessionMaxAgeSeconds(): number {
@@ -219,7 +240,19 @@ export class AuthService {
       ),
       hasTotp: await this.hasConfirmedTotp(session.userId),
       lastStrongAuthAt: session.lastStrongAuthAt?.toISOString() ?? null,
+      canCreateOrganization: await this.canCreateOrganization(session.userId),
     };
+  }
+
+  /** Beta gate: a linked wallet or (IdP-verified) email identity on the allowlist. */
+  async canCreateOrganization(userId: string): Promise<boolean> {
+    if (!this.createAllowlist) return true;
+    const [{ allowed }] = await this.db.query(
+      `SELECT EXISTS (SELECT 1 FROM identities WHERE user_id = $1
+         AND (lower(wallet_address) = ANY($2::text[]) OR email_hash = ANY($3::text[]))) AS allowed`,
+      [userId, this.createAllowlist.wallets, this.createAllowlist.emailHashes],
+    );
+    return allowed;
   }
 
   /** Strong factors the user can step up with; empty means TOTP must be enrolled. */

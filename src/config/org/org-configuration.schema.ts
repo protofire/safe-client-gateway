@@ -44,6 +44,40 @@ const encryptionKeys = z.string().superRefine((value, ctx) => {
   }
 });
 
+const ADDRESS = /^0x[0-9a-f]{40}$/;
+const isEmail = (v: string): boolean => z.email().safeParse(v).success;
+
+const allowlistEntries = (raw: string | undefined): Array<string> =>
+  (raw ?? '')
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+
+/** ORG_CREATE_ALLOWLIST: comma-separated wallets and emails, trimmed and lowercased; unset = empty. */
+export function parseCreateAllowlist(raw: string | undefined): {
+  wallets: Array<string>;
+  emails: Array<string>;
+} {
+  const entries = allowlistEntries(raw);
+  return {
+    wallets: entries.filter((e) => e.startsWith('0x')),
+    emails: entries.filter((e) => !e.startsWith('0x')),
+  };
+}
+
+// reports positions, not values: entries are emails
+const createAllowlist = z.string().superRefine((value, ctx) => {
+  const invalid = allowlistEntries(value)
+    .map((e, i) => (ADDRESS.test(e) || isEmail(e) ? 0 : i + 1))
+    .filter(Boolean);
+  if (invalid.length > 0) {
+    ctx.addIssue({
+      code: 'custom',
+      message: `Each entry must be a 0x wallet address or an email; invalid entry number(s): ${invalid.join(', ')}`,
+    });
+  }
+});
+
 const port = z.coerce.number().int().min(1).max(65535);
 const seconds = z.coerce.number().int().min(1).optional();
 const url = z.url();
@@ -104,6 +138,9 @@ export const OrgConfigurationSchema = z
     ORG_ENCRYPTION_KEYS: encryptionKeys,
     // HMAC key for email lookup hashes (amendment A14)
     ORG_EMAIL_HASH_KEY: keyBytes,
+
+    // Beta gate on POST /v1/orgs; unset or empty = anyone signed in may create
+    ORG_CREATE_ALLOWLIST: createAllowlist.optional(),
 
     ORG_OIDC_ISSUER: httpsUrl,
     ORG_OIDC_CLIENT_ID: z.string().min(1),

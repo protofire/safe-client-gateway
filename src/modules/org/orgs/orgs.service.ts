@@ -1,6 +1,12 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import type { EntityManager } from 'typeorm';
 import { ActivityLog } from '@/modules/org/activity/activity-log.service';
+import { AuthService } from '@/modules/org/auth/auth.service';
 import { Clock, type IClock } from '@/modules/org/common/clock';
 import { RateLimiter } from '@/modules/org/common/rate-limiter';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
@@ -74,10 +80,20 @@ export class OrgsService {
     private readonly resolver: PermissionResolver,
     private readonly notifier: SecurityNotifier,
     private readonly rateLimiter: RateLimiter,
+    private readonly auth: AuthService,
     @Inject(Clock) private readonly clock: IClock,
   ) {}
 
   async create(name: string, by: Actor): Promise<OrgView> {
+    // before any side effect, the rate-limit counter included
+    if (!(await this.auth.canCreateOrganization(by.userId))) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        code: 'org_create_not_allowed',
+        message:
+          'Creating organizations is limited during the beta. Ask an existing organization to invite you, or contact Protofire to get access.',
+      });
+    }
     await this.rateLimiter.enforce(
       `orgs:create:user:${by.userId}`,
       ORG_CREATES_PER_USER_PER_HOUR,

@@ -1,4 +1,7 @@
-import { OrgConfigurationSchema } from '@/config/org/org-configuration.schema';
+import {
+  OrgConfigurationSchema,
+  parseCreateAllowlist,
+} from '@/config/org/org-configuration.schema';
 
 const key = (fill: number): string => Buffer.alloc(32, fill).toString('base64');
 
@@ -184,4 +187,34 @@ describe('OrgConfigurationSchema', () => {
     expect(Object.keys(env).some((k) => k.includes('MIGRATOR'))).toBe(false);
     expect(OrgConfigurationSchema.safeParse(env).success).toBe(true);
   });
+  it('parses ORG_CREATE_ALLOWLIST into lowercase wallets and emails, unset as empty', () => {
+    const wallet = '0x' + 'aB'.repeat(20);
+
+    expect(parseCreateAllowlist(` ${wallet} , Alice@Example.com,, `)).toEqual({
+      wallets: [wallet.toLowerCase()],
+      emails: ['alice@example.com'],
+    });
+    expect(parseCreateAllowlist(undefined)).toEqual({
+      wallets: [],
+      emails: [],
+    });
+    expect(
+      OrgConfigurationSchema.safeParse({
+        ...validEnv(),
+        ORG_CREATE_ALLOWLIST: `${wallet.toUpperCase().replace('0X', '0x')}, bob@example.com`,
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each(['0x1234', 'not-an-entry', 'alice@', '0x' + 'g'.repeat(40)])(
+    'rejects an ORG_CREATE_ALLOWLIST entry that is neither an address nor an email: %s',
+    (entry) => {
+      const result = OrgConfigurationSchema.safeParse({
+        ...validEnv(),
+        ORG_CREATE_ALLOWLIST: `bob@example.com,${entry}`,
+      });
+
+      expect(result.success).toBe(false);
+    },
+  );
 });

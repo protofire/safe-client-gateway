@@ -243,6 +243,7 @@ describe('SIWE auth (org)', () => {
       ],
       hasTotp: false,
       lastStrongAuthAt: expect.any(String),
+      canCreateOrganization: true,
     });
   });
 

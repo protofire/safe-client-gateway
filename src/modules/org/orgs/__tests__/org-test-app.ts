@@ -58,7 +58,10 @@ export type TestUser = {
 const EMAIL_HASH_KEY = randomBytes(32).toString('base64');
 
 /** Org feature modules on a fresh org DB, Resend stubbed, mail key set. */
-export async function createOrgTestApp(redisDb: number): Promise<OrgTestApp> {
+export async function createOrgTestApp(
+  redisDb: number,
+  config: Record<string, unknown> = {},
+): Promise<OrgTestApp> {
   // a small pool: a path that needs a second connection while holding the
   // org lock exhausts it under the parallel tests (gate B F1)
   const mailPost = jest.fn().mockResolvedValue({ status: 200, data: {} });
@@ -77,6 +80,7 @@ export async function createOrgTestApp(redisDb: number): Promise<OrgTestApp> {
       'org.mail.apiKey': 'test-mail-key',
       'org.mail.from': 'noreply@example.com',
       'org.mail.baseUrl': 'https://mail.example.com',
+      ...config,
     },
     dataSource: { extra: { ...ORG_PG_POOL, max: 5 } },
     imports: [

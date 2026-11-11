@@ -1,3 +1,5 @@
+import { parseCreateAllowlist } from '@/config/org/org-configuration.schema';
+
 const int = (value: string | undefined, fallback: number): number =>
   value === undefined || value === '' ? fallback : parseInt(value);
 
@@ -54,6 +56,7 @@ export default () => ({
     },
     encryption: { keys: process.env.ORG_ENCRYPTION_KEYS },
     emailHashKey: process.env.ORG_EMAIL_HASH_KEY,
+    createAllowlist: parseCreateAllowlist(process.env.ORG_CREATE_ALLOWLIST),
     oidc: {
       issuer: process.env.ORG_OIDC_ISSUER,
       clientId: process.env.ORG_OIDC_CLIENT_ID,
