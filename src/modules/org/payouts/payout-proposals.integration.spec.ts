@@ -298,7 +298,7 @@ describe('payout proposals API', () => {
       });
     });
 
-    it('fails closed with 503 when the queued read hits its page cap', async () => {
+    it('answers 503 tx_service_unavailable (retryable) when the queued read hits its page cap', async () => {
       const b = await built();
       p.chain.txPageSize = 1;
       for (let i = 0; i < 6; i++)
@@ -314,9 +314,42 @@ describe('payout proposals API', () => {
         .expect(503);
       expect(res.body).toEqual({
         statusCode: 503,
+        code: 'tx_service_unavailable',
+        message: 'The transaction service could not be read; try again',
+      });
+    });
+
+    it('fails closed with 503 stray_history_too_long when the executed history since the first attempt hits its page cap', async () => {
+      const c = await claimed();
+      await p.release(orgA, c.runId, c.attemptId, member).expect(200);
+      p.chain.execute(
+        p.chain.propose(SAFE_A, 5, [
+          toCall({ recipient: CAROL, token: 'native', amountRaw: 1n }),
+        ]),
+        { success: false },
+      );
+      await p.updater.run();
+      // more executed history after the attempt at 5 than one read may page through
+      p.chain.txPageSize = 1;
+      for (let i = 6; i < 12; i++)
+        p.chain.execute(
+          p.chain.propose(SAFE_A, i, [
+            toCall({ recipient: CAROL, token: 'native', amountRaw: BigInt(i) }),
+          ]),
+          { ago: 1000 },
+        );
+      const { run } = await p.detail(orgA, c.runId, member);
+      const res = await p
+        .claim(orgA, c.runId, member, {
+          expectedVersion: run.version,
+          nonce: 12,
+        })
+        .expect(503);
+      expect(res.body).toEqual({
+        statusCode: 503,
         code: 'stray_history_too_long',
         message:
-          'This Safe account has too much history since this run was first proposed to check it for copies. Check on-chain that it was not paid, then create a new run from its CSV.',
+          'This Safe account has too much history since this run was first proposed to check it for copies. Use Cancel reservation on this run and wait for it to settle, check on-chain that it was not paid, then create a new run from its CSV.',
       });
     });
 

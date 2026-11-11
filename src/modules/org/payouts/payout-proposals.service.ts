@@ -556,15 +556,17 @@ export class PayoutProposalsService {
         this.updater.callOnly(run.chain_id),
       ]);
       if (view.complete) return { queued: view.txs, callOnly, since };
+      // a capped queue read is transient (the queue drains): retryable
+      if (view.historyComplete) throw unavailable();
     } catch {
       throw unavailable();
     }
-    // fail closed: a copy could hide in the part not read
+    // fail closed: a copy could hide in the executed history not read, and that history only grows
     throw new ServiceUnavailableException({
       statusCode: 503,
       code: 'stray_history_too_long',
       message:
-        'This Safe account has too much history since this run was first proposed to check it for copies. Check on-chain that it was not paid, then create a new run from its CSV.',
+        'This Safe account has too much history since this run was first proposed to check it for copies. Use Cancel reservation on this run and wait for it to settle, check on-chain that it was not paid, then create a new run from its CSV.',
     });
   }
 

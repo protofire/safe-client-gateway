@@ -84,6 +84,8 @@ const lower = (a: string): string => a.toLowerCase();
 export type StrayView = {
   txs: Array<MultisigTransaction>;
   complete: boolean;
+  /** false: the executed-history read was capped (a capped queue read only is transient) */
+  historyComplete: boolean;
 };
 
 /**
@@ -337,6 +339,7 @@ export class PayoutStatusUpdater
     return {
       txs: [...queued.txs, ...executed.txs],
       complete: queued.complete && executed.complete,
+      historyComplete: executed.complete,
     };
   }
 
