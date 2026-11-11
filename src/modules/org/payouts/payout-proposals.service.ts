@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { getSafeTxHash } from '@/domain/common/utils/safe';
 import { DataSourceError } from '@/domain/errors/data-source.error';
 import { ActivityLog } from '@/modules/org/activity/activity-log.service';
+import { RateLimiter } from '@/modules/org/common/rate-limiter';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import { lockSafe } from '@/modules/org/events/safe-snapshot';
 import { conflict } from '@/modules/org/orgs/org-lock';
@@ -20,6 +21,7 @@ import type { Actor } from '@/modules/org/orgs/parse';
 import { PermissionResolver } from '@/modules/org/permissions/permission.resolver';
 import {
   fromStoredCalls,
+  lockOrgFor,
   lockRun,
   readItems,
   type PayoutRunRow,
@@ -64,6 +66,12 @@ export const ReportProposalSchema = z.object({
 export type ClaimProposal = z.infer<typeof ClaimProposalSchema>;
 export type ReportProposal = z.infer<typeof ReportProposalSchema>;
 export type ClaimResult = { attemptId: string; version: number; nonce: string };
+
+// abuse limits (milestone P): each claim and report reads the tx-service several times
+const CLAIMS_PER_USER_PER_MINUTE = 30;
+const REPORTS_PER_USER_PER_MINUTE = 30;
+/** Runs of one org holding a nonce at once (one per Safe besides). */
+export const MAX_PINNED_RUNS_PER_ORG = 50;
 
 /** A claim is refused with `proposal_open` while the run holds an active proposal. */
 const OPEN_STATUSES: ReadonlyArray<PayoutRunStatus> = [
@@ -110,6 +118,7 @@ export class PayoutProposalsService {
     private readonly resolver: PermissionResolver,
     private readonly runs: PayoutRunsService,
     private readonly updater: PayoutStatusUpdater,
+    private readonly rateLimiter: RateLimiter,
     @Inject(ISafeRepository) private readonly safes: ISafeRepository,
   ) {}
 
@@ -123,8 +132,18 @@ export class PayoutProposalsService {
     body: ClaimProposal,
     actor: Actor,
   ): Promise<ClaimResult> {
+    await this.rateLimiter.enforce(
+      `payouts:claim:user:${actor.userId}`,
+      CLAIMS_PER_USER_PER_MINUTE,
+      60,
+    );
     let before = await this.peek(orgId, runId);
     assertClaimable(before, body.expectedVersion);
+    // everything the DB alone decides, before any tx-service read or cache clear
+    await this.tx.runInOrgTx(
+      (em) => assertClaimSlot(em, before, body.nonce),
+      orgId,
+    );
     const safeAddress = getAddress(before.safe_address);
     let nonces = await this.nonces(before.chain_id, safeAddress);
     if (
@@ -153,24 +172,18 @@ export class PayoutProposalsService {
     );
 
     return this.tx.runInOrgTx(async (em) => {
+      await lockOrgFor(
+        this.resolver,
+        em,
+        orgId,
+        actor.userId,
+        'payouts.prepare',
+      );
       const run = await lockRun(em, orgId, runId);
       await lockSafe(em, run.chain_id, run.safe_address);
       assertClaimable(run, body.expectedVersion);
       await assertLinked(em, run);
-      const [other]: Array<{ id: string; name: string }> = await em.query(
-        `SELECT id, name FROM payout_runs
-          WHERE org_id = $1 AND chain_id = $2 AND safe_address = $3
-            AND pinned_nonce IS NOT NULL AND id <> $4
-          LIMIT 1`,
-        [orgId, run.chain_id, run.safe_address, run.id],
-      );
-      if (other) {
-        throw conflictWith('nonce_taken', {
-          message: `Run "${other.name}" holds a nonce on this Safe; finish or settle it first`,
-          runId: other.id,
-          name: other.name,
-        });
-      }
+      await assertClaimSlot(em, run, body.nonce);
       const expected = run.pinned_nonce ?? String(nonces.recommendedNonce);
       if (BigInt(body.nonce) !== BigInt(expected)) {
         throw conflictWith('nonce_mismatch', {
@@ -241,6 +254,11 @@ export class PayoutProposalsService {
     body: ReportProposal,
     actor: Actor,
   ): Promise<PayoutRunDetail> {
+    await this.rateLimiter.enforce(
+      `payouts:report:user:${actor.userId}`,
+      REPORTS_PER_USER_PER_MINUTE,
+      60,
+    );
     const before = await this.peek(orgId, runId);
     if (before.safe_tx_hash === body.safeTxHash)
       return this.runs.get(orgId, runId, actor.userId);
@@ -249,7 +267,11 @@ export class PayoutProposalsService {
       (em) => this.lockAttempt(em, before, body.attemptId),
       orgId,
     );
-    assertReportable(before, early);
+    if (
+      assertReportable(before, early) === 'normal' &&
+      body.expectedVersion !== before.version
+    )
+      throw versionConflict();
     const N = BigInt(before.pinned_nonce!);
 
     let tx: MultisigTransaction;
@@ -300,6 +322,13 @@ export class PayoutProposalsService {
     }
 
     await this.tx.runInOrgTx(async (em) => {
+      await lockOrgFor(
+        this.resolver,
+        em,
+        orgId,
+        actor.userId,
+        'payouts.prepare',
+      );
       const run = await lockRun(em, orgId, runId);
       await lockSafe(em, run.chain_id, run.safe_address);
       if (run.safe_tx_hash === body.safeTxHash) return;
@@ -382,6 +411,13 @@ export class PayoutProposalsService {
     actor: Actor,
   ): Promise<PayoutRunDetail> {
     await this.tx.runInOrgTx(async (em) => {
+      const caller = await lockOrgFor(
+        this.resolver,
+        em,
+        orgId,
+        actor.userId,
+        'payouts.prepare',
+      );
       const run = await lockRun(em, orgId, runId);
       const attempt = await this.lockAttempt(em, run, attemptId);
       const active =
@@ -391,12 +427,7 @@ export class PayoutProposalsService {
           attempt.safe_tx_hash === run.safe_tx_hash);
       if (!active) throw proposalClosed();
       if (attempt.created_by !== actor.userId) {
-        const effective = await this.resolver.effective(
-          orgId,
-          actor.userId,
-          em,
-        );
-        if (!effective?.permissions.includes('payouts.manage')) {
+        if (!caller.permissions.includes('payouts.manage')) {
           throw new ForbiddenException({
             statusCode: 403,
             code: 'forbidden',
@@ -634,6 +665,53 @@ async function assertNoStray(
       nonce: String(stray.nonce),
       safeTxHash: stray.safeTxHash,
     });
+  }
+}
+
+/**
+ * DB-only claim checks, run before any tx-service read and again under the
+ * locks: no other run of the org pinned on this Safe (`nonce_taken`), a
+ * pinned run is claimed at its pin (`nonce_mismatch`), and the org holds
+ * fewer than {@link MAX_PINNED_RUNS_PER_ORG} pins (`pin_limit`).
+ */
+async function assertClaimSlot(
+  em: EntityManager,
+  run: PayoutRunRow,
+  nonce: string | number,
+): Promise<void> {
+  const [other]: Array<{ id: string; name: string }> = await em.query(
+    `SELECT id, name FROM payout_runs
+      WHERE org_id = $1 AND chain_id = $2 AND safe_address = $3
+        AND pinned_nonce IS NOT NULL AND id <> $4
+      LIMIT 1`,
+    [run.org_id, run.chain_id, run.safe_address, run.id],
+  );
+  if (other) {
+    throw conflictWith('nonce_taken', {
+      message: `Run "${other.name}" holds a nonce on this Safe; finish or settle it first`,
+      runId: other.id,
+      name: other.name,
+    });
+  }
+  if (run.pinned_nonce !== null) {
+    if (BigInt(nonce) !== BigInt(run.pinned_nonce)) {
+      throw conflictWith('nonce_mismatch', {
+        message: `The payout must be signed at nonce ${run.pinned_nonce}`,
+        expectedNonce: run.pinned_nonce,
+      });
+    }
+    return; // keeps its pin: not a new one
+  }
+  const [{ pinned }]: Array<{ pinned: number }> = await em.query(
+    `SELECT count(*)::int AS pinned FROM payout_runs
+      WHERE org_id = $1 AND pinned_nonce IS NOT NULL`,
+    [run.org_id],
+  );
+  if (pinned >= MAX_PINNED_RUNS_PER_ORG) {
+    throw conflict(
+      'pin_limit',
+      `The organization has ${MAX_PINNED_RUNS_PER_ORG} payout runs holding a nonce; settle some first`,
+    );
   }
 }
 

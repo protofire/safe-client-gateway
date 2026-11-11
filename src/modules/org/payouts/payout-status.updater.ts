@@ -55,6 +55,8 @@ const STRAY_SKEW_MS = 10 * MINUTE;
 const MAX_QUEUED_PAGES = 5;
 const MAX_TRANSFER_PAGES = 10;
 const SAFE_CONCURRENCY = 5;
+/** Periodic polls of a pinned draft that never had a reported tx: nothing of ours is queued at N. */
+const IDLE_POLL_MS = 30 * MINUTE;
 // two-int4 advisory key space: never collides with the per-Safe bigint locks
 const RUN_LOCK = [0x6f7267, 3] as const;
 
@@ -100,8 +102,11 @@ export class PayoutStatusUpdater
   /** Per run: the handling in progress, and whether another was asked for meanwhile. */
   private readonly inFlight = new Map<
     string,
-    { done: Promise<void>; again: boolean }
+    { done: Promise<void>; again: boolean; idleBackoff: boolean }
   >();
+  /** Run id → last periodic poll of it as an idle pinned draft. */
+  // shortcut: per process; after a replica switch an idle draft is polled once early
+  private readonly idlePolledAt = new Map<string, number>();
 
   constructor(
     @InjectDataSource(ORG_DATA_SOURCE) private readonly db: DataSource,
@@ -151,7 +156,8 @@ export class PayoutStatusUpdater
         for (const r of rows)
           bySafe.set(r.safe, [...(bySafe.get(r.safe) ?? []), r]);
         await mapLimit([...bySafe.values()], SAFE_CONCURRENCY, async (runs) => {
-          for (const r of runs) await this.handleSafely(r.org_id, r.run_id);
+          for (const r of runs)
+            await this.handleSafely(r.org_id, r.run_id, { idleBackoff: true });
         });
         return rows.length;
       } finally {
@@ -176,29 +182,49 @@ export class PayoutStatusUpdater
         ),
       );
     for (const r of rows) {
-      await this.handleSafely(r.org_id, r.run_id, safeTxHash);
+      await this.handleSafely(r.org_id, r.run_id, { safeTxHash });
     }
   }
 
-  /** One run: evidence read without a DB connection, then applied under the locks. */
-  async handle(orgId: string, runId: string): Promise<void> {
+  /**
+   * One run: evidence read without a DB connection, then applied under the
+   * locks. `idleBackoff` (periodic pass): a pinned draft that never had a
+   * reported tx is read at most every {@link IDLE_POLL_MS}.
+   */
+  async handle(
+    orgId: string,
+    runId: string,
+    opts: { idleBackoff?: boolean } = {},
+  ): Promise<void> {
     const [peek]: Array<{
       chain_id: string;
       safe_address: string;
+      status: PayoutRunStatus;
       pinned_nonce: string | null;
       first_attempt_at: Date | null;
+      ever_reported: boolean;
     }> = await this.tx.runInOrgTx(
       (em) =>
         em.query(
-          `SELECT chain_id, safe_address::text AS safe_address, pinned_nonce::text AS pinned_nonce,
+          `SELECT chain_id, safe_address::text AS safe_address, status, pinned_nonce::text AS pinned_nonce,
                   (SELECT min(a.created_at) FROM payout_proposal_attempts a
-                    WHERE a.org_id = r.org_id AND a.run_id = r.id) AS first_attempt_at
+                    WHERE a.org_id = r.org_id AND a.run_id = r.id) AS first_attempt_at,
+                  EXISTS (SELECT 1 FROM payout_proposal_attempts a
+                    WHERE a.org_id = r.org_id AND a.run_id = r.id AND a.reported_at IS NOT NULL) AS ever_reported
              FROM payout_runs r WHERE org_id = $1 AND id = $2`,
           [orgId, runId],
         ),
       orgId,
     );
     if (!peek || peek.pinned_nonce === null) return;
+    if (opts.idleBackoff && peek.status === 'draft' && !peek.ever_reported) {
+      const now = this.clock.now().getTime();
+      const last = this.idlePolledAt.get(runId);
+      if (last !== undefined && now - last < IDLE_POLL_MS) return;
+      this.idlePolledAt.set(runId, now);
+    } else {
+      this.idlePolledAt.delete(runId);
+    }
     const evidence = await this.readEvidence(
       peek.chain_id,
       peek.safe_address,
@@ -445,19 +471,24 @@ export class PayoutStatusUpdater
   private handleSafely(
     orgId: string,
     runId: string,
-    safeTxHash?: string,
+    opts: { safeTxHash?: string; idleBackoff?: boolean } = {},
   ): Promise<void> {
+    const idleBackoff = opts.idleBackoff ?? false;
     const current = this.inFlight.get(runId);
     if (current) {
       current.again = true;
+      // an event among the coalesced requests is never backed off
+      current.idleBackoff &&= idleBackoff;
       return current.done;
     }
-    const entry = { done: Promise.resolve(), again: false };
+    const entry = { done: Promise.resolve(), again: false, idleBackoff };
     entry.done = (async (): Promise<void> => {
       try {
         do {
+          const backoff = entry.idleBackoff;
           entry.again = false;
-          await this.handleOnce(orgId, runId, safeTxHash);
+          entry.idleBackoff = true;
+          await this.handleOnce(orgId, runId, opts.safeTxHash, backoff);
         } while (entry.again);
       } finally {
         this.inFlight.delete(runId);
@@ -470,10 +501,11 @@ export class PayoutStatusUpdater
   private async handleOnce(
     orgId: string,
     runId: string,
-    safeTxHash?: string,
+    safeTxHash: string | undefined,
+    idleBackoff: boolean,
   ): Promise<void> {
     try {
-      await this.handle(orgId, runId);
+      await this.handle(orgId, runId, { idleBackoff });
     } catch (error) {
       this.logger.warn({
         type: 'payout_status_run_failed',

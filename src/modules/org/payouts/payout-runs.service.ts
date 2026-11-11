@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   BadGatewayException,
   BadRequestException,
+  ForbiddenException,
   Inject,
   Injectable,
   NotFoundException,
@@ -31,9 +32,18 @@ import {
 import type { SafeCall } from '@/modules/org/common/multisend';
 import { tokenMeta, type TokenMeta } from '@/modules/org/common/token-meta';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
-import { conflict } from '@/modules/org/orgs/org-lock';
+import { RateLimiter } from '@/modules/org/common/rate-limiter';
+import {
+  conflict,
+  lockOrgs,
+  recheckPermission,
+} from '@/modules/org/orgs/org-lock';
 import type { Actor } from '@/modules/org/orgs/parse';
-import { PermissionResolver } from '@/modules/org/permissions/permission.resolver';
+import {
+  PermissionResolver,
+  type EffectivePermissions,
+} from '@/modules/org/permissions/permission.resolver';
+import type { Permission } from '@/modules/org/permissions/permissions';
 import { evaluate, type Evaluation } from '@/modules/org/policies/evaluate';
 import { PolicyContextService } from '@/modules/org/policies/policy-context.service';
 import {
@@ -108,6 +118,29 @@ const RUN_COLUMNS = `id, org_id, chain_id, safe_address::text AS safe_address, n
   created_by, calls, est_gas::text AS est_gas, evaluation, pinned_nonce::text AS pinned_nonce,
   safe_tx_hash, nonce::text AS nonce, executed_tx_hash, verifying_since, delay_notified_at,
   review, created_at`;
+
+// abuse limits (milestone P): creation is cheap to call and costly to serve
+const CREATES_PER_USER_PER_HOUR = 60;
+const CREATES_PER_ORG_PER_HOUR = 300;
+/** Runs not settled yet (`draft | proposing | proposed | verifying`) an org may hold. */
+export const MAX_OPEN_RUNS_PER_ORG = 500;
+
+/**
+ * Org lock, then the caller's membership and permission again (org not
+ * deleted): the guard checked them before any wait or external read. Runs
+ * first in every committing transaction of a run mutation; lock order
+ * org → run → Safe.
+ */
+export async function lockOrgFor(
+  resolver: PermissionResolver,
+  em: EntityManager,
+  orgId: string,
+  userId: string,
+  permission: Permission,
+): Promise<EffectivePermissions> {
+  await lockOrgs(em, [orgId]);
+  return recheckPermission(resolver, em, orgId, userId, permission);
+}
 
 /** Every run mutation starts here: the run row lock (404 if the run is not this org's). */
 export async function lockRun(
@@ -351,6 +384,7 @@ export class PayoutRunsService {
     private readonly log: ActivityLog,
     private readonly resolver: PermissionResolver,
     private readonly policies: PolicyContextService,
+    private readonly rateLimiter: RateLimiter,
     @Inject(IChainsRepository) private readonly chains: IChainsRepository,
     @Inject(ITransactionApiManager)
     private readonly transactionApis: ITransactionApiManager,
@@ -471,6 +505,7 @@ export class PayoutRunsService {
       ? await this.prepare(before.chain_id, checkJsonRows(input.rows))
       : null;
     await this.tx.runInOrgTx(async (em) => {
+      await this.lockOrg(em, orgId, actor);
       const run = await this.lockEditable(
         em,
         orgId,
@@ -504,6 +539,7 @@ export class PayoutRunsService {
 
   remove(orgId: string, runId: string, actor: Actor): Promise<void> {
     return this.tx.runInOrgTx(async (em) => {
+      const caller = await this.lockOrg(em, orgId, actor);
       const run = await lockRun(em, orgId, runId);
       this.assertEditable(run);
       if (run.pinned_nonce !== null) {
@@ -511,6 +547,21 @@ export class PayoutRunsService {
           'run_pinned',
           `The run holds nonce ${run.pinned_nonce}; it can be deleted once a transaction at that nonce executes`,
         );
+      }
+      if (!caller.permissions.includes('payouts.manage')) {
+        // its proposal history (signed attempts) is evidence: only payouts.manage removes it
+        const attempts: Array<unknown> = await em.query(
+          `SELECT 1 FROM payout_proposal_attempts WHERE org_id = $1 AND run_id = $2 LIMIT 1`,
+          [orgId, runId],
+        );
+        if (attempts.length > 0) {
+          throw new ForbiddenException({
+            statusCode: 403,
+            code: 'forbidden',
+            message:
+              'This run was proposed before; only an admin can delete it',
+          });
+        }
       }
       await this.event(em, 'payout_run.deleted', run, actor);
       await em.query(`DELETE FROM payout_runs WHERE org_id = $1 AND id = $2`, [
@@ -528,6 +579,7 @@ export class PayoutRunsService {
     actor: Actor,
   ): Promise<PayoutRunDetail> {
     await this.tx.runInOrgTx(async (em) => {
+      await this.lockOrg(em, orgId, actor);
       const run = await this.lockEditable(em, orgId, runId, expectedVersion);
       const calls = itemCalls(await readItems(em, orgId, runId));
       const estimatedGas = assertRunSize(calls);
@@ -562,6 +614,16 @@ export class PayoutRunsService {
     checked: { rows: Array<PayoutCsvRow>; errors: Array<PayoutCsvError> },
     actor: Actor,
   ): Promise<PayoutRunDetail> {
+    await this.rateLimiter.enforce(
+      `payouts:create:user:${actor.userId}`,
+      CREATES_PER_USER_PER_HOUR,
+      3600,
+    );
+    await this.rateLimiter.enforce(
+      `payouts:create:org:${orgId}`,
+      CREATES_PER_ORG_PER_HOUR,
+      3600,
+    );
     const safe = await this.tx.runInOrgTx(
       (em) => this.linkedSafe(em, orgId, input.linkedSafeId),
       orgId,
@@ -569,8 +631,21 @@ export class PayoutRunsService {
     // token and chain reads before the transaction: no DB connection held during HTTP
     const prepared = await this.prepare(safe.chainId, checked);
     const runId = await this.tx.runInOrgTx(async (em) => {
+      await this.lockOrg(em, orgId, actor);
       // the Safe may have been unlinked meanwhile
       await this.linkedSafe(em, orgId, input.linkedSafeId);
+      // counted under the org lock
+      const [{ open }]: Array<{ open: number }> = await em.query(
+        `SELECT count(*)::int AS open FROM payout_runs
+          WHERE org_id = $1 AND status IN ('draft', 'proposing', 'proposed', 'verifying')`,
+        [orgId],
+      );
+      if (open >= MAX_OPEN_RUNS_PER_ORG) {
+        throw conflict(
+          'run_limit',
+          `The organization has ${MAX_OPEN_RUNS_PER_ORG} open payout runs; settle or delete some first`,
+        );
+      }
       const [run]: Array<PayoutRunRow> = await em.query(
         `INSERT INTO payout_runs (org_id, chain_id, safe_address, name, created_by)
          VALUES ($1, $2, $3, $4, $5) RETURNING ${RUN_COLUMNS}`,
@@ -892,6 +967,20 @@ export class PayoutRunsService {
       createdAt: a.created_at.toISOString(),
       releasable,
     };
+  }
+
+  private lockOrg(
+    em: EntityManager,
+    orgId: string,
+    actor: Actor,
+  ): Promise<EffectivePermissions> {
+    return lockOrgFor(
+      this.resolver,
+      em,
+      orgId,
+      actor.userId,
+      'payouts.prepare',
+    );
   }
 
   /** Unlocked read for fast 409s before any HTTP; the mutation re-checks under the lock. */

@@ -39,13 +39,14 @@ describe('PayoutStatusUpdater', () => {
   let p: PayoutTestApp;
   let orgA: string;
   let orgB: string;
+  let admin: User;
   let member: User;
   let adminB: User;
   let safeA: string;
 
   beforeAll(async () => {
     p = await createPayoutTestApp(2);
-    const admin = await p.user();
+    admin = await p.user();
     member = await p.user();
     adminB = await p.user();
     orgA = await p.createOrg([
@@ -469,8 +470,12 @@ describe('PayoutStatusUpdater', () => {
       pinned_nonce: null,
     });
     expect(await p.watchRows()).toEqual([]);
+    // unpinned now; its attempt history makes the delete an admin action
     await p
       .write('delete', `${orgA}/payout-runs/${c.runId}`, member)
+      .expect(403);
+    await p
+      .write('delete', `${orgA}/payout-runs/${c.runId}`, admin)
       .expect(204);
   });
 
