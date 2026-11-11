@@ -3,18 +3,16 @@ import { Inject, Injectable } from '@nestjs/common';
 import {
   BaseError,
   decodeAbiParameters,
-  encodeFunctionData,
-  hexToBigInt,
   isAddressEqual,
-  isHex,
-  parseAbi,
-  size,
-  slice,
   zeroAddress,
   type Address,
   type Hex,
 } from 'viem';
-import { getSimulateTxAccessorDeployments } from '@/domain/common/utils/deployments';
+import {
+  getRevertReason,
+  getSimulateTxAccessor,
+  simulateSafeCall,
+} from '@/domain/common/utils/simulate-tx-accessor';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
 import { IPricesApi } from '@/modules/balances/datasources/prices-api.interface';
@@ -73,17 +71,9 @@ export class GasTokenFeeService {
     '0x0000000000000000000000000000000000000001';
   /** Simulation sender balance when simulating at a real gas price, enough for any gas limit */
   private static readonly SIMULATION_SENDER_BALANCE = BigInt(10) ** BigInt(30);
-  /** SimulateTxAccessor versions to look for, newest first; any of them works with a Safe ≥ 1.3.0 */
-  private static readonly ACCESSOR_VERSIONS = ['1.4.1', '1.3.0'];
   /** `simulateAndRevert` measures the inner call once; the real one runs in a different state, so pad it */
   private static readonly SAFE_TX_GAS_MARGIN_BPS = BigInt(1_000);
   private static readonly SAFE_TX_GAS_MARGIN_FIXED = BigInt(10_000);
-  private static readonly SAFE_ABI = parseAbi([
-    'function simulateAndRevert(address targetContract, bytes calldataPayload)',
-  ]);
-  private static readonly ACCESSOR_ABI = parseAbi([
-    'function simulate(address to, uint256 value, bytes data, uint8 operation) returns (uint256 estimate, bool success, bytes returnData)',
-  ]);
 
   private readonly configuration: GasTokenConfiguration;
   // Legal memo V2: the fee must carry our margin, never a pure gas pass-through.
@@ -412,42 +402,26 @@ export class GasTokenFeeService {
     data: Hex | null;
     operation: Operation;
   }): Promise<bigint> {
-    const [accessor] = GasTokenFeeService.ACCESSOR_VERSIONS.flatMap((version) =>
-      getSimulateTxAccessorDeployments({ chainId: args.chainId, version }),
-    );
+    const accessor = getSimulateTxAccessor(args.chainId);
     if (!accessor) {
       return this.getServiceEstimate(args);
     }
 
     const client = await this.blockchainApiManager.getApi(args.chainId);
-    const payload = encodeFunctionData({
-      abi: GasTokenFeeService.ACCESSOR_ABI,
-      functionName: 'simulate',
-      args: [args.to, BigInt(args.value), args.data ?? '0x', args.operation],
+    const simulation = await simulateSafeCall(client, {
+      safeAddress: args.safeAddress,
+      accessor,
+      to: args.to,
+      value: BigInt(args.value),
+      data: args.data ?? '0x',
+      operation: args.operation,
     });
-    const data = encodeFunctionData({
-      abi: GasTokenFeeService.SAFE_ABI,
-      functionName: 'simulateAndRevert',
-      args: [accessor, payload],
-    });
-    const revertData = await client
-      .request({
-        method: 'eth_call',
-        params: [{ to: args.safeAddress, data }, 'latest'],
-      })
-      .then(
-        () => null,
-        (error: unknown) => GasTokenFeeService.getRevertData(error),
-      );
-    const simulation = revertData
-      ? GasTokenFeeService.decodeSimulation(revertData)
-      : null;
     if (!simulation) {
       return this.getServiceEstimate(args);
     }
     if (!simulation.success) {
       throw new GasTokenRelayError(
-        `Simulation failed: ${GasTokenFeeService.getRevertReason(simulation.returnData)}`,
+        `Simulation failed: ${getRevertReason(simulation.returnData)}`,
         'SIMULATION_FAILED',
       );
     }
@@ -651,64 +625,6 @@ export class GasTokenFeeService {
       ),
     });
     return BigInt(estimation.safeTxGas);
-  }
-
-  /** Revert payload of a JSON-RPC error, wherever the node or viem put it. */
-  private static getRevertData(error: unknown): Hex | null {
-    let current: unknown = error;
-    for (let depth = 0; depth < 5 && current; depth++) {
-      const { data, cause } = current as { data?: unknown; cause?: unknown };
-      if (isHex(data)) {
-        return data;
-      }
-      const nested = (data as { data?: unknown } | undefined)?.data;
-      if (isHex(nested)) {
-        return nested;
-      }
-      current = cause;
-    }
-    return null;
-  }
-
-  /**
-   * `simulateAndRevert` reverts with `success (32) | responseSize (32) | response`, the response being
-   * the accessor's `(uint256 estimate, bool success, bytes returnData)`. Null when the payload is not that.
-   */
-  private static decodeSimulation(
-    revertData: Hex,
-  ): { estimate: bigint; success: boolean; returnData: Hex } | null {
-    if (size(revertData) < 64) {
-      return null;
-    }
-    const accessorRan = hexToBigInt(slice(revertData, 0, 32)) !== BigInt(0);
-    const responseSize = Number(hexToBigInt(slice(revertData, 32, 64)));
-    if (!accessorRan || size(revertData) < 64 + responseSize) {
-      return null;
-    }
-    try {
-      const [estimate, success, returnData] = decodeAbiParameters(
-        GasTokenFeeService.ACCESSOR_ABI[0].outputs,
-        slice(revertData, 64, 64 + responseSize),
-      );
-      return { estimate, success, returnData };
-    } catch {
-      return null;
-    }
-  }
-
-  private static getRevertReason(returnData: Hex): string {
-    // Error(string)
-    if (returnData.startsWith('0x08c379a0') && size(returnData) >= 68) {
-      try {
-        return decodeAbiParameters(
-          [{ type: 'string' }],
-          slice(returnData, 4),
-        )[0];
-      } catch {
-        // fall through
-      }
-    }
-    return returnData === '0x' ? 'call reverted' : returnData;
   }
 
   private static getReason(error: unknown): string {
