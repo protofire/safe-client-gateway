@@ -25,10 +25,13 @@ import { RateLimiter } from '@/modules/org/common/rate-limiter';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import { parse } from '@/modules/org/orgs/parse';
 
-/** Injectable so tests can shrink the cap. */
+/** Injectable so tests can shrink the caps. */
 export const TX_EXPORT_MAX_ROWS = 'TX_EXPORT_MAX_ROWS';
+export const TX_EXPORT_MAX_PAGES = 'TX_EXPORT_MAX_PAGES';
 // shortcut: row cap, move to a job if orgs need more
 const DEFAULT_MAX_ROWS = 100_000;
+// tx-service requests per export, whatever the rows: a server paging tiny pages cannot keep it busy
+const DEFAULT_MAX_PAGES = 2_000;
 const PAGE_SIZE = 100;
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** The range must be shorter than this (the UI rejects the same). */
@@ -79,6 +82,9 @@ export class OrgTransactionsExportService {
     @Optional()
     @Inject(TX_EXPORT_MAX_ROWS)
     private readonly maxRows: number = DEFAULT_MAX_ROWS,
+    @Optional()
+    @Inject(TX_EXPORT_MAX_PAGES)
+    private readonly maxPages: number = DEFAULT_MAX_PAGES,
   ) {}
 
   async stream(
@@ -143,18 +149,27 @@ export class OrgTransactionsExportService {
     }
   }
 
-  /** Safes one after another, 100 per page; a failing Safe becomes one `unavailable` row. */
+  /**
+   * Safes one after another, 100 per page; a failing Safe becomes one
+   * `unavailable` row. An empty page ends a Safe; the row and request caps
+   * end the export with a `truncated` row.
+   */
   private async *rows(
     safes: Array<Linked>,
     range: { gte: string; lte: string },
   ): AsyncGenerator<Row> {
     let count = 0;
+    let requests = 0;
     for (const safe of safes) {
       const base = { chainId: safe.chainId, safeLabel: safe.label };
       const before = count;
       try {
         const api = await this.exportApiManager.getApi(safe.chainId);
         for (let offset = 0; ; offset += PAGE_SIZE) {
+          if (requests++ >= this.maxPages) {
+            yield { ...base, status: 'truncated' };
+            return;
+          }
           const page = TransactionExportPageSchema.parse(
             await api.export({
               safeAddress: safe.address,
@@ -171,7 +186,7 @@ export class OrgTransactionsExportService {
             }
             yield { ...base, ...this.toRow(t), status: 'executed' };
           }
-          if (!page.next) break;
+          if (!page.next || page.results.length === 0) break;
         }
       } catch (error) {
         this.logger.error(
