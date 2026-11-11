@@ -76,12 +76,14 @@ const erc20 = (
 const safeSettingsAbi = parseAbi([
   'function changeThreshold(uint256 threshold)',
   'function addOwnerWithThreshold(address owner, uint256 threshold)',
+  'function enableModule(address module)',
   'function execTransactionFromModule(address to, uint256 value, bytes data, uint8 operation)',
 ]);
 const safeSelf = (
   functionName:
     | 'changeThreshold'
     | 'addOwnerWithThreshold'
+    | 'enableModule'
     | 'execTransactionFromModule',
   args: ReadonlyArray<unknown>,
 ): SafeCall => ({
@@ -367,17 +369,24 @@ describe('settlementOutcome', () => {
     }
   });
 
-  it('returns replaced at once for a tx at N whose every call is a Safe settings call on itself', () => {
+  it('never settles replaced for a settings-only tx at N: a guard hook runs on any tx and can pay; verifying, then indirect_unproven', () => {
     const changeThreshold = safeSelf('changeThreshold', [2n]);
     const addOwner = safeSelf('addOwnerWithThreshold', [STRANGER, 2n]);
     for (const tx of [
       executed(changeThreshold),
+      executed(safeSelf('enableModule', [SOME_CONTRACT])),
       executed({ to: SAFE, value: 1n, data: '0x', operation: 0 }),
       executed(multiSendCall(CALL_ONLY, [changeThreshold, addOwner])),
-    ])
+    ]) {
       expect(
         settlementOutcome(input({ executedAtNonce: tx, transfers: [] })),
-      ).toEqual({ status: 'replaced', executedTxHash: TX_HASH });
+      ).toEqual({ status: 'verifying', executedTxHash: TX_HASH });
+      expect(
+        settlementOutcome(
+          input({ executedAtNonce: tx, transfers: [], now: DEADLINE }),
+        ).review,
+      ).toEqual({ reason: 'indirect_unproven' });
+    }
   });
 
   it('never settles replaced for a Safe self-call that can run other code: a module execution or the fallback handler', () => {
@@ -519,7 +528,7 @@ describe('settlementOutcome', () => {
       review: { reason: 'partial_overlap' },
     });
     edited.executedAtNonce = executed(safeSelf('changeThreshold', [2n]));
-    expect(settlementOutcome(edited).status).toBe('replaced');
+    expect(settlementOutcome(edited).status).toBe('verifying');
     edited.executedAtNonce = executed(erc20('transfer', USDC, STRANGER, 5n));
     expect(settlementOutcome(edited).status).toBe('verifying');
   });
