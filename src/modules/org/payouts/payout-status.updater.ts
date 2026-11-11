@@ -55,7 +55,7 @@ const STRAY_SKEW_MS = 10 * MINUTE;
 const MAX_QUEUED_PAGES = 5;
 const MAX_TRANSFER_PAGES = 10;
 const SAFE_CONCURRENCY = 5;
-/** Periodic polls of a pinned draft that never had a reported tx: nothing of ours is queued at N. */
+/** Periodic polls of a pinned draft with no released, unreported attempt at N: nothing of ours to adopt there. */
 const IDLE_POLL_MS = 30 * MINUTE;
 // two-int4 advisory key space: never collides with the per-Safe bigint locks
 const RUN_LOCK = [0x6f7267, 3] as const;
@@ -188,8 +188,9 @@ export class PayoutStatusUpdater
 
   /**
    * One run: evidence read without a DB connection, then applied under the
-   * locks. `idleBackoff` (periodic pass): a pinned draft that never had a
-   * reported tx is read at most every {@link IDLE_POLL_MS}.
+   * locks. `idleBackoff` (periodic pass): a pinned draft with no adoptable
+   * attempt at N (released, never reported) is read at most every
+   * {@link IDLE_POLL_MS}.
    */
   async handle(
     orgId: string,
@@ -202,7 +203,7 @@ export class PayoutStatusUpdater
       status: PayoutRunStatus;
       pinned_nonce: string | null;
       first_attempt_at: Date | null;
-      ever_reported: boolean;
+      adoptable: boolean;
     }> = await this.tx.runInOrgTx(
       (em) =>
         em.query(
@@ -210,20 +211,22 @@ export class PayoutStatusUpdater
                   (SELECT min(a.created_at) FROM payout_proposal_attempts a
                     WHERE a.org_id = r.org_id AND a.run_id = r.id) AS first_attempt_at,
                   EXISTS (SELECT 1 FROM payout_proposal_attempts a
-                    WHERE a.org_id = r.org_id AND a.run_id = r.id AND a.reported_at IS NOT NULL) AS ever_reported
+                    WHERE a.org_id = r.org_id AND a.run_id = r.id AND a.nonce = r.pinned_nonce
+                      AND a.status = 'released' AND a.safe_tx_hash IS NULL) AS adoptable
              FROM payout_runs r WHERE org_id = $1 AND id = $2`,
           [orgId, runId],
         ),
       orgId,
     );
-    if (!peek || peek.pinned_nonce === null) return;
-    if (opts.idleBackoff && peek.status === 'draft' && !peek.ever_reported) {
-      const now = this.clock.now().getTime();
+    if (!peek || peek.pinned_nonce === null) {
+      this.idlePolledAt.delete(runId);
+      return;
+    }
+    const idle = peek.status === 'draft' && !peek.adoptable;
+    const now = this.clock.now().getTime();
+    if (idle && opts.idleBackoff) {
       const last = this.idlePolledAt.get(runId);
       if (last !== undefined && now - last < IDLE_POLL_MS) return;
-      this.idlePolledAt.set(runId, now);
-    } else {
-      this.idlePolledAt.delete(runId);
     }
     const evidence = await this.readEvidence(
       peek.chain_id,
@@ -231,6 +234,10 @@ export class PayoutStatusUpdater
       BigInt(peek.pinned_nonce),
       peek.first_attempt_at,
     );
+    // read succeeded: back off only while N is unused (a used N settles or verifies the run)
+    if (idle && evidence.currentNonce <= evidence.nonce)
+      this.idlePolledAt.set(runId, now);
+    else this.idlePolledAt.delete(runId);
     await this.tx.runInOrgTx(async (em) => {
       const run = await lockRun(em, orgId, runId);
       await lockSafe(em, run.chain_id, run.safe_address);
@@ -838,9 +845,12 @@ export class PayoutStatusUpdater
       if (taken.length > 0) {
         // another run of the org records this tx: both cannot own one payment
         safeTxHash = run.safe_tx_hash;
+        const stray =
+          outcome.review?.reason === 'stray_proposal' ? outcome.review : {};
         outcome = {
           status: 'needs_review',
-          review: { reason: 'partial_overlap' },
+          // a stray copy found at settlement stays visible
+          review: { ...stray, reason: 'partial_overlap' },
           ...(outcome.executedTxHash && {
             executedTxHash: outcome.executedTxHash,
           }),

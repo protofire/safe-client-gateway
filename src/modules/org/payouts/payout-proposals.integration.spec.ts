@@ -13,6 +13,8 @@ import {
   type User,
 } from '@/modules/org/payouts/__tests__/payout-test-app';
 import { toCall } from '@/modules/org/payouts/payout-calls';
+import { getSafeTxHash } from '@/domain/common/utils/safe';
+import type { Safe } from '@/modules/safe/domain/entities/safe.entity';
 
 describe('payout proposals API', () => {
   let p: PayoutTestApp;
@@ -642,6 +644,65 @@ describe('payout proposals API', () => {
       });
     });
 
+    it('clears the cached Safe before reading the version the hash is checked with', async () => {
+      const c = await claimed();
+      const tx = p.chain.propose(SAFE_A, 5, c.calls);
+      p.chain.repo.clearSafe.mockClear();
+      p.chain.repo.getSafe.mockClear();
+      await p
+        .report(orgA, c.runId, member, {
+          attemptId: c.attemptId,
+          expectedVersion: c.version,
+          safeTxHash: tx.safeTxHash,
+        })
+        .expect(200);
+      expect(p.chain.repo.clearSafe.mock.invocationCallOrder[0]).toBeLessThan(
+        p.chain.repo.getSafe.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('accepts a tx signed before the Safe was upgraded across 1.3.0 (domain without chainId)', async () => {
+      const c = await claimed();
+      const tx = p.chain.propose(SAFE_A, 5, c.calls);
+      // signed under a 1.2.0 domain; the Safe now reports 1.3.0
+      tx.safeTxHash = getSafeTxHash({
+        chainId: '1',
+        transaction: tx,
+        safe: { address: SAFE_A, version: '1.2.0' } as Safe,
+      });
+      await p
+        .report(orgA, c.runId, member, {
+          attemptId: c.attemptId,
+          expectedVersion: c.version,
+          safeTxHash: tx.safeTxHash,
+        })
+        .expect(200);
+      expect(await p.runRow(orgA, c.runId)).toMatchObject({
+        status: 'proposed',
+        safe_tx_hash: tx.safeTxHash.toLowerCase(),
+      });
+    });
+
+    it('fails closed with tx_mismatch when the Safe version is unknown', async () => {
+      const c = await claimed();
+      const tx = p.chain.propose(SAFE_A, 5, c.calls);
+      p.chain.repo.getSafe.mockResolvedValueOnce({
+        address: SAFE_A,
+        version: null,
+      } as Safe);
+      const res = await p
+        .report(orgA, c.runId, member, {
+          attemptId: c.attemptId,
+          expectedVersion: c.version,
+          safeTxHash: tx.safeTxHash,
+        })
+        .expect(422);
+      expect(res.body).toMatchObject({
+        code: 'tx_mismatch',
+        field: 'safeTxHash',
+      });
+    });
+
     it('answers 422 multisend_unknown when the outer target is not a MultiSendCallOnly', async () => {
       const c = await claimed();
       const tx = p.chain.propose(SAFE_A, 5, c.calls, { to: addr(0xbad) });
@@ -1017,22 +1078,11 @@ describe('payout proposals API', () => {
       expect(p.chain.repo.getMultiSigTransaction).not.toHaveBeenCalled();
     });
 
-    it('checks a pinned re-claim nonce and another pinned run from the DB before any tx-service read', async () => {
+    it('checks another pinned run from the DB before any tx-service read', async () => {
       const c = await claimed();
       await p.release(orgA, c.runId, c.attemptId, member).expect(200);
-      const { run } = await p.detail(orgA, c.runId, member);
       p.chain.repo.getNonces.mockClear();
       p.chain.repo.clearSafe.mockClear();
-      const wrong = await p
-        .claim(orgA, c.runId, member, {
-          expectedVersion: run.version,
-          nonce: 6,
-        })
-        .expect(409);
-      expect(wrong.body).toMatchObject({
-        code: 'nonce_mismatch',
-        expectedNonce: '5',
-      });
       const other = await built();
       const taken = await p
         .claim(orgA, other.runId, member, {
@@ -1043,6 +1093,54 @@ describe('payout proposals API', () => {
       expect(taken.body).toMatchObject({ code: 'nonce_taken', runId: c.runId });
       expect(p.chain.repo.getNonces).not.toHaveBeenCalled();
       expect(p.chain.repo.clearSafe).not.toHaveBeenCalled();
+    });
+
+    it('answers nonce_mismatch to a pinned re-claim at another nonce while the pin is unused', async () => {
+      const c = await claimed();
+      await p.release(orgA, c.runId, c.attemptId, member).expect(200);
+      const { run } = await p.detail(orgA, c.runId, member);
+      const wrong = await p
+        .claim(orgA, c.runId, member, {
+          expectedVersion: run.version,
+          nonce: 6,
+        })
+        .expect(409);
+      expect(wrong.body).toMatchObject({
+        code: 'nonce_mismatch',
+        expectedNonce: '5',
+      });
+    });
+
+    it('settles a used pin first instead of answering nonce_mismatch to a claim at the next nonce', async () => {
+      const c = await claimed();
+      await p.release(orgA, c.runId, c.attemptId, member).expect(200);
+      const { run } = await p.detail(orgA, c.runId, member);
+      // N goes to an unrelated tx: the draft only loses its pin
+      p.chain.execute(
+        p.chain.propose(SAFE_A, 5, [
+          toCall({ recipient: CAROL, token: 'native', amountRaw: 1n }),
+        ]),
+      );
+      const res = await p
+        .claim(orgA, c.runId, member, {
+          expectedVersion: run.version,
+          nonce: 6,
+        })
+        .expect(409);
+      // settled meanwhile: the version moved, the claim is retried on the fresh run
+      expect(res.body.code).toBe('version_conflict');
+      expect(await p.runRow(orgA, c.runId)).toMatchObject({
+        status: 'draft',
+        pinned_nonce: null,
+      });
+      const fresh = await p.detail(orgA, c.runId, member);
+      const ok = await p
+        .claim(orgA, c.runId, member, {
+          expectedVersion: fresh.run.version,
+          nonce: 6,
+        })
+        .expect(201);
+      expect(ok.body.nonce).toBe('6');
     });
 
     it('answers 409 run_limit at 500 outstanding runs of the org', async () => {
@@ -1086,19 +1184,161 @@ describe('payout proposals API', () => {
       expect(res.body.code).toBe('pin_limit');
     });
 
-    it('polls an idle pinned draft (never reported) at most every 30 minutes', async () => {
-      const c = await claimed();
-      await p.release(orgA, c.runId, c.attemptId, member).expect(200);
-      p.chain.repo.getNonces.mockClear();
-      await p.updater.run();
-      await p.updater.run();
-      expect(p.chain.repo.getNonces).toHaveBeenCalledTimes(1);
-      p.t.setOffset(31 * 60_000);
-      await p.updater.run();
-      expect(p.chain.repo.getNonces).toHaveBeenCalledTimes(2);
-      // an executed-transaction event is never backed off
-      await p.updater.onExecuted('1', SAFE_A, `0x${'1'.repeat(64)}`);
-      expect(p.chain.repo.getNonces).toHaveBeenCalledTimes(3);
+    it('lets payouts.manage claim past pin_limit', async () => {
+      await p.asOrg(orgA, (em) =>
+        em.query(
+          `INSERT INTO payout_runs (org_id, chain_id, safe_address, name, status, pinned_nonce)
+           SELECT $1, '1', '0x' || lpad(to_hex(4096 + g), 40, '0'), 'r' || g, 'proposing', 1
+             FROM generate_series(1, 50) g`,
+          [orgA],
+        ),
+      );
+      const b = await built(admin);
+      await p
+        .claim(orgA, b.runId, admin, { expectedVersion: b.version, nonce: 5 })
+        .expect(201);
+    });
+
+    describe('run_limit on reopening a settled run', () => {
+      const fill = (): Promise<unknown> =>
+        p.asOrg(orgA, (em) =>
+          em.query(
+            `INSERT INTO payout_runs (org_id, chain_id, safe_address, name)
+             SELECT $1, '1', $2, 'r' || g FROM generate_series(1, 499) g`,
+            [orgA, SAFE_A.toLowerCase()],
+          ),
+        );
+      const settle = async (runId: string): Promise<number> => {
+        await p.asOrg(orgA, (em) =>
+          em.query(`UPDATE payout_runs SET status = 'failed' WHERE id = $1`, [
+            runId,
+          ]),
+        );
+        return (await p.detail(orgA, runId, member)).run.version;
+      };
+
+      it('answers 409 run_limit to PATCH, build and claim of a failed run at 500 open runs', async () => {
+        const b = await built();
+        const version = await settle(b.runId);
+        // 499 + the other open run below = 500 open besides the failed one
+        await fill();
+        await p.createRun(orgA, safeA, member);
+        const patch = await p
+          .write('patch', `${orgA}/payout-runs/${b.runId}`, member, {
+            expectedVersion: version,
+            name: 'renamed',
+          })
+          .expect(409);
+        expect(patch.body.code).toBe('run_limit');
+        const build = await p
+          .write('post', `${orgA}/payout-runs/${b.runId}/build`, member, {
+            expectedVersion: version,
+          })
+          .expect(409);
+        expect(build.body.code).toBe('run_limit');
+        const claim = await p
+          .claim(orgA, b.runId, member, { expectedVersion: version, nonce: 5 })
+          .expect(409);
+        expect(claim.body.code).toBe('run_limit');
+        expect(await p.runRow(orgA, b.runId)).toMatchObject({
+          status: 'failed',
+          version,
+        });
+      });
+
+      it('lets an open pinned draft be edited, built and re-claimed at 500 open runs', async () => {
+        const c = await claimed();
+        await p.release(orgA, c.runId, c.attemptId, member).expect(200);
+        await fill();
+        const { run } = await p.detail(orgA, c.runId, member);
+        const patched = await p
+          .write('patch', `${orgA}/payout-runs/${c.runId}`, member, {
+            expectedVersion: run.version,
+            name: 'renamed',
+          })
+          .expect(200);
+        const rebuilt = await p
+          .write('post', `${orgA}/payout-runs/${c.runId}/build`, member, {
+            expectedVersion: patched.body.run.version,
+          })
+          .expect(200);
+        await p
+          .claim(orgA, c.runId, member, {
+            expectedVersion: rebuilt.body.run.version,
+            nonce: 5,
+          })
+          .expect(201);
+      });
+    });
+
+    describe('idle pinned draft back-off', () => {
+      const idleMap = (): Map<string, number> =>
+        (p.updater as unknown as { idlePolledAt: Map<string, number> })
+          .idlePolledAt;
+
+      /** Claimed, reported, released: nothing of ours left to adopt at N. */
+      async function idleDraft(): Promise<string> {
+        const c = await claimed();
+        const tx = p.chain.propose(SAFE_A, 5, c.calls);
+        await p
+          .report(orgA, c.runId, member, {
+            attemptId: c.attemptId,
+            expectedVersion: c.version,
+            safeTxHash: tx.safeTxHash,
+          })
+          .expect(200);
+        await p.release(orgA, c.runId, c.attemptId, member).expect(200);
+        return c.runId;
+      }
+
+      it('polls a pinned draft with no adoptable attempt at most every 30 minutes', async () => {
+        await idleDraft();
+        p.chain.repo.getNonces.mockClear();
+        await p.updater.run();
+        await p.updater.run();
+        expect(p.chain.repo.getNonces).toHaveBeenCalledTimes(1);
+        p.t.setOffset(31 * 60_000);
+        await p.updater.run();
+        expect(p.chain.repo.getNonces).toHaveBeenCalledTimes(2);
+        // an executed-transaction event is never backed off
+        await p.updater.onExecuted('1', SAFE_A, `0x${'1'.repeat(64)}`);
+        expect(p.chain.repo.getNonces).toHaveBeenCalledTimes(3);
+      });
+
+      it('keeps the normal cadence for a released, never reported attempt at N', async () => {
+        const c = await claimed();
+        await p.release(orgA, c.runId, c.attemptId, member).expect(200);
+        p.chain.repo.getNonces.mockClear();
+        await p.updater.run();
+        await p.updater.run();
+        expect(p.chain.repo.getNonces).toHaveBeenCalledTimes(2);
+      });
+
+      it('starts the back-off only after a successful read', async () => {
+        await idleDraft();
+        p.chain.failNonces = true;
+        await p.updater.run();
+        p.chain.failNonces = false;
+        p.chain.repo.getNonces.mockClear();
+        await p.updater.run();
+        expect(p.chain.repo.getNonces).toHaveBeenCalledTimes(1);
+      });
+
+      it('forgets the run once its pin is used', async () => {
+        const runId = await idleDraft();
+        await p.updater.run();
+        expect(idleMap().has(runId)).toBe(true);
+        p.chain.execute(
+          p.chain.propose(SAFE_A, 5, [
+            toCall({ recipient: CAROL, token: 'native', amountRaw: 1n }),
+          ]),
+        );
+        await p.updater.onExecuted('1', SAFE_A, `0x${'1'.repeat(64)}`);
+        expect(await p.runRow(orgA, runId)).toMatchObject({
+          pinned_nonce: null,
+        });
+        expect(idleMap().has(runId)).toBe(false);
+      });
     });
   });
 

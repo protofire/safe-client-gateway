@@ -674,6 +674,34 @@ describe('PayoutStatusUpdater', () => {
     });
   });
 
+  it('keeps the stray copy details when a taken hash turns a stray review into partial_overlap', async () => {
+    const c = await claimed();
+    await p.release(orgA, c.runId, c.attemptId, member).expect(200);
+    const tx = p.chain.propose(SAFE_A, 5, c.calls);
+    const copy = p.chain.propose(SAFE_A, 6, c.calls, { trusted: false });
+    const other = await p.createRun(orgA, safeA, member);
+    await p.asOrg(orgA, (em) =>
+      em.query(
+        `UPDATE payout_runs SET status = 'failed', safe_tx_hash = $2 WHERE id = $1`,
+        [other.run.id, tx.safeTxHash],
+      ),
+    );
+    p.chain.indexTransfers(SAFE_A, p.chain.execute(tx), c.items);
+    await p.updater.run();
+    expect(await p.runRow(orgA, c.runId)).toMatchObject({
+      status: 'needs_review',
+      review: {
+        reason: 'partial_overlap',
+        nonce: '6',
+        safeTxHash: copy.safeTxHash,
+        outcome: 'executed',
+        strayExecuted: false,
+      },
+      safe_tx_hash: null,
+      pinned_nonce: null,
+    });
+  });
+
   it('returns a reorged-out never-reported proposing run to proposing', async () => {
     const c = await claimed();
     const outside = p.chain.propose(SAFE_A, 5, [native(STRANGER)]);

@@ -124,6 +124,35 @@ const CREATES_PER_USER_PER_HOUR = 60;
 const CREATES_PER_ORG_PER_HOUR = 300;
 /** Runs not settled yet (`draft | proposing | proposed | verifying`) an org may hold. */
 export const MAX_OPEN_RUNS_PER_ORG = 500;
+const OPEN_RUN_STATUSES: ReadonlyArray<PayoutRunStatus> = [
+  'draft',
+  'proposing',
+  'proposed',
+  'verifying',
+];
+
+/**
+ * 409 `run_limit` when `run` (null: a new one) would become open while the
+ * org already holds {@link MAX_OPEN_RUNS_PER_ORG}; call under the org lock.
+ * Runs already open are exempt.
+ */
+export async function assertRunCapacity(
+  em: EntityManager,
+  orgId: string,
+  run: Pick<PayoutRunRow, 'status'> | null,
+): Promise<void> {
+  if (run && OPEN_RUN_STATUSES.includes(run.status)) return;
+  const [{ open }]: Array<{ open: number }> = await em.query(
+    `SELECT count(*)::int AS open FROM payout_runs WHERE org_id = $1 AND status = ANY($2)`,
+    [orgId, OPEN_RUN_STATUSES],
+  );
+  if (open >= MAX_OPEN_RUNS_PER_ORG) {
+    throw conflict(
+      'run_limit',
+      `The organization has ${MAX_OPEN_RUNS_PER_ORG} open payout runs; settle or delete some first`,
+    );
+  }
+}
 
 /**
  * Org lock, then the caller's membership and permission again (org not
@@ -514,6 +543,8 @@ export class PayoutRunsService {
       );
       const name = input.name ?? run.name;
       if (!prepared && name === run.name) return;
+      // a settled run becomes a draft again
+      await assertRunCapacity(em, orgId, run);
       if (prepared) {
         await em.query(
           `DELETE FROM payout_items WHERE org_id = $1 AND run_id = $2`,
@@ -581,6 +612,7 @@ export class PayoutRunsService {
     await this.tx.runInOrgTx(async (em) => {
       await this.lockOrg(em, orgId, actor);
       const run = await this.lockEditable(em, orgId, runId, expectedVersion);
+      await assertRunCapacity(em, orgId, run);
       const calls = itemCalls(await readItems(em, orgId, runId));
       const estimatedGas = assertRunSize(calls);
       const evaluation = await this.evaluateCalls(em, run, calls);
@@ -634,18 +666,7 @@ export class PayoutRunsService {
       await this.lockOrg(em, orgId, actor);
       // the Safe may have been unlinked meanwhile
       await this.linkedSafe(em, orgId, input.linkedSafeId);
-      // counted under the org lock
-      const [{ open }]: Array<{ open: number }> = await em.query(
-        `SELECT count(*)::int AS open FROM payout_runs
-          WHERE org_id = $1 AND status IN ('draft', 'proposing', 'proposed', 'verifying')`,
-        [orgId],
-      );
-      if (open >= MAX_OPEN_RUNS_PER_ORG) {
-        throw conflict(
-          'run_limit',
-          `The organization has ${MAX_OPEN_RUNS_PER_ORG} open payout runs; settle or delete some first`,
-        );
-      }
+      await assertRunCapacity(em, orgId, null);
       const [run]: Array<PayoutRunRow> = await em.query(
         `INSERT INTO payout_runs (org_id, chain_id, safe_address, name, created_by)
          VALUES ($1, $2, $3, $4, $5) RETURNING ${RUN_COLUMNS}`,

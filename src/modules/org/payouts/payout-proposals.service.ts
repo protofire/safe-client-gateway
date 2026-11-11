@@ -18,8 +18,12 @@ import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import { lockSafe } from '@/modules/org/events/safe-snapshot';
 import { conflict } from '@/modules/org/orgs/org-lock';
 import type { Actor } from '@/modules/org/orgs/parse';
-import { PermissionResolver } from '@/modules/org/permissions/permission.resolver';
 import {
+  PermissionResolver,
+  type EffectivePermissions,
+} from '@/modules/org/permissions/permission.resolver';
+import {
+  assertRunCapacity,
   fromStoredCalls,
   lockOrgFor,
   lockRun,
@@ -139,11 +143,12 @@ export class PayoutProposalsService {
     );
     let before = await this.peek(orgId, runId);
     assertClaimable(before, body.expectedVersion);
-    // everything the DB alone decides, before any tx-service read or cache clear
-    await this.tx.runInOrgTx(
-      (em) => assertClaimSlot(em, before, body.nonce),
-      orgId,
-    );
+    // everything the DB alone decides, before any tx-service read or cache clear;
+    // the pin itself is compared under the locks, after a used pin is settled
+    await this.tx.runInOrgTx(async (em) => {
+      const caller = await this.resolver.effective(orgId, actor.userId, em);
+      await assertClaimSlot(em, before, null, manages(caller));
+    }, orgId);
     const safeAddress = getAddress(before.safe_address);
     let nonces = await this.nonces(before.chain_id, safeAddress);
     if (
@@ -172,7 +177,7 @@ export class PayoutProposalsService {
     );
 
     return this.tx.runInOrgTx(async (em) => {
-      await lockOrgFor(
+      const caller = await lockOrgFor(
         this.resolver,
         em,
         orgId,
@@ -183,7 +188,9 @@ export class PayoutProposalsService {
       await lockSafe(em, run.chain_id, run.safe_address);
       assertClaimable(run, body.expectedVersion);
       await assertLinked(em, run);
-      await assertClaimSlot(em, run, body.nonce);
+      await assertClaimSlot(em, run, body.nonce, manages(caller));
+      // a settled (failed, replaced, rejected) run becomes open again
+      await assertRunCapacity(em, orgId, run);
       const expected = run.pinned_nonce ?? String(nonces.recommendedNonce);
       if (BigInt(body.nonce) !== BigInt(expected)) {
         throw conflictWith('nonce_mismatch', {
@@ -277,10 +284,17 @@ export class PayoutProposalsService {
     let tx: MultisigTransaction;
     let safe: Safe;
     try {
-      await this.safes.clearMultisigTransaction({
-        chainId: before.chain_id,
-        safeTransactionHash: body.safeTxHash,
-      });
+      await Promise.all([
+        this.safes.clearMultisigTransaction({
+          chainId: before.chain_id,
+          safeTransactionHash: body.safeTxHash,
+        }),
+        // a cached version could predate an upgrade
+        this.safes.clearSafe({
+          chainId: before.chain_id,
+          address: getAddress(before.safe_address),
+        }),
+      ]);
       [tx, safe] = await Promise.all([
         this.safes.getMultiSigTransaction({
           chainId: before.chain_id,
@@ -668,16 +682,21 @@ async function assertNoStray(
   }
 }
 
+const manages = (caller: EffectivePermissions | null): boolean =>
+  caller?.permissions.includes('payouts.manage') ?? false;
+
 /**
  * DB-only claim checks, run before any tx-service read and again under the
  * locks: no other run of the org pinned on this Safe (`nonce_taken`), a
- * pinned run is claimed at its pin (`nonce_mismatch`), and the org holds
- * fewer than {@link MAX_PINNED_RUNS_PER_ORG} pins (`pin_limit`).
+ * pinned run is claimed at its pin (`nonce_mismatch`; `nonce` null skips it),
+ * and the org holds fewer than {@link MAX_PINNED_RUNS_PER_ORG} pins
+ * (`pin_limit`; `payouts.manage` is exempt, so members cannot lock admins out).
  */
 async function assertClaimSlot(
   em: EntityManager,
   run: PayoutRunRow,
-  nonce: string | number,
+  nonce: string | number | null,
+  manage: boolean,
 ): Promise<void> {
   const [other]: Array<{ id: string; name: string }> = await em.query(
     `SELECT id, name FROM payout_runs
@@ -694,7 +713,7 @@ async function assertClaimSlot(
     });
   }
   if (run.pinned_nonce !== null) {
-    if (BigInt(nonce) !== BigInt(run.pinned_nonce)) {
+    if (nonce !== null && BigInt(nonce) !== BigInt(run.pinned_nonce)) {
       throw conflictWith('nonce_mismatch', {
         message: `The payout must be signed at nonce ${run.pinned_nonce}`,
         expectedNonce: run.pinned_nonce,
@@ -702,6 +721,7 @@ async function assertClaimSlot(
     }
     return; // keeps its pin: not a new one
   }
+  if (manage) return;
   const [{ pinned }]: Array<{ pinned: number }> = await em.query(
     `SELECT count(*)::int AS pinned FROM payout_runs
       WHERE org_id = $1 AND pinned_nonce IS NOT NULL`,
@@ -754,22 +774,34 @@ async function assertLinked(
   }
 }
 
-/** Whether the tx's own fields give `safeTxHash` (EIP-712, chainId, Safe address and version). */
+/**
+ * Whether the tx's own fields give `safeTxHash` (EIP-712, Safe address and
+ * version). A tx signed before an upgrade across 1.3.0 hashes under the other
+ * domain (chainId added in 1.3.0), so both domain variants are accepted: each
+ * binds the same fields and the Safe address.
+ */
 function hashesTo(
   chainId: string,
   safe: Safe,
   tx: MultisigTransaction,
   safeTxHash: string,
 ): boolean {
-  try {
-    return (
-      getSafeTxHash({ chainId, transaction: tx, safe }).toLowerCase() ===
-      safeTxHash
-    );
-  } catch {
-    // no Safe version known: the hash cannot be checked, so it is not accepted
-    return false;
-  }
+  // no Safe version known: the hash cannot be checked, so it is not accepted (fails closed)
+  if (!safe.version) return false;
+  // 1.2.0: domain without chainId, 1.3.0: with it (both use baseGas)
+  return [safe.version, '1.2.0', '1.3.0'].some((version) => {
+    try {
+      return (
+        getSafeTxHash({
+          chainId,
+          transaction: tx,
+          safe: { ...safe, version },
+        }).toLowerCase() === safeTxHash
+      );
+    } catch {
+      return false;
+    }
+  });
 }
 
 function mismatch(
