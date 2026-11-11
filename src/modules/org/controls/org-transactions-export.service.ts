@@ -213,7 +213,8 @@ export class OrgTransactionsExportService {
       from: t.from,
       to: t.to,
       transactionHash: t.transactionHash,
-      contractAddress: t.contractAddress ?? '',
+      // the token; the tx-service `contractAddress` is the Safe tx `to` (MultiSendCallOnly in a batch)
+      contractAddress: t.assetAddress ?? '',
       amount: t.amount,
       assetType: t.assetType,
       assetSymbol: t.assetSymbol ?? '',

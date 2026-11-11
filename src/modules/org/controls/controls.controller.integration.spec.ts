@@ -142,7 +142,7 @@ const exportRow = (
   executedAt: '2026-01-03T10:00:00Z',
   note: null,
   transactionHash: `0x${n.toString(16).padStart(64, '0')}`,
-  contractAddress: null,
+  contractAddress: addr(0x9a), // the tx `to`, e.g. MultiSendCallOnly
   nonce: String(n),
   ...over,
 });
@@ -653,8 +653,9 @@ describe('Controls and org-wide transactions CSV', () => {
       );
       expect(rows).toHaveLength(1 + 150 + 2); // 100 + 50 and 2: paged by 100
       expect(rows[1]).toContain(`${CHAIN},Ops,0,${SAFE_A}`);
+      // Contract Address is the token, not the tx `to`
       expect(rows[1]).toContain(
-        ',1.5,erc20,USDC,2026-01-02T10:00:00.000Z,2026-01-03T10:00:00.000Z,',
+        `,${addr(0xc0)},1.5,erc20,USDC,2026-01-02T10:00:00.000Z,2026-01-03T10:00:00.000Z,`,
       );
       expect(rows[1].endsWith(',executed')).toBe(true);
       expect(rows[151]).toContain(`${CHAIN_2},,0,${SAFE_B}`);
