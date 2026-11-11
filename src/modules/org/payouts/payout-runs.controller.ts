@@ -44,7 +44,7 @@ import {
   ImportPayoutRunSchema,
   ListPayoutRunsSchema,
   type PayoutRunDetail,
-  type PayoutRunListItem,
+  type PayoutRunPage,
   UpdatePayoutRunSchema,
 } from '@/modules/org/payouts/payout.schemas';
 
@@ -69,9 +69,8 @@ export class PayoutRunsController {
   list(
     @Param('orgId') orgId: string,
     @Query() query: unknown,
-  ): Promise<Array<PayoutRunListItem>> {
-    const { linkedSafeId } = parse(ListPayoutRunsSchema, query);
-    return this.runs.list(orgId, linkedSafeId);
+  ): Promise<PayoutRunPage> {
+    return this.runs.list(orgId, parse(ListPayoutRunsSchema, query));
   }
 
   @Post('payout-runs')

@@ -1,12 +1,14 @@
 import { createHash } from 'node:crypto';
 import {
   BadGatewayException,
+  BadRequestException,
   Inject,
   Injectable,
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import type { EntityManager } from 'typeorm';
+import { z } from 'zod';
 import {
   encodeFunctionData,
   encodePacked,
@@ -55,7 +57,8 @@ import {
   type PayoutItemWarning,
   type PayoutReview,
   type PayoutRunDetail,
-  type PayoutRunListItem,
+  type ListPayoutRuns,
+  type PayoutRunPage,
   type PayoutRunStatus,
   type PayoutRunView,
   type PayoutRunWarning,
@@ -323,6 +326,23 @@ export function checkJsonRows(rows: ReadonlyArray<unknown>): {
   return { rows: checked.rows, errors: [...errors, ...checked.errors] };
 }
 
+const CursorSchema = z.tuple([z.iso.datetime({ precision: 6 }), z.uuid()]);
+
+const encodeCursor = (createdAt: string, id: string): string =>
+  Buffer.from(JSON.stringify([createdAt, id])).toString('base64url');
+
+/** 400 for anything that is not a cursor this API issued. */
+function decodeCursor(cursor: string): { createdAt: string; id: string } {
+  try {
+    const [createdAt, id] = CursorSchema.parse(
+      JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')),
+    );
+    return { createdAt, id };
+  } catch {
+    throw new BadRequestException('Invalid cursor');
+  }
+}
+
 /** Payout run drafts: rows, warnings and the one-transaction build. */
 @Injectable()
 export class PayoutRunsService {
@@ -338,18 +358,22 @@ export class PayoutRunsService {
     private readonly balances: IBalancesRepository,
   ) {}
 
-  list(
-    orgId: string,
-    linkedSafeId?: string,
-  ): Promise<Array<PayoutRunListItem>> {
+  /** Keyset page, newest first: `(created_at, id)` below the cursor's. */
+  list(orgId: string, query: ListPayoutRuns): Promise<PayoutRunPage> {
+    const after = query.cursor ? decodeCursor(query.cursor) : null;
     return this.tx.runInOrgTx(async (em) => {
       const params: Array<unknown> = [orgId];
       let where = '';
-      if (linkedSafeId) {
-        const safe = await this.linkedSafe(em, orgId, linkedSafeId);
+      if (query.linkedSafeId) {
+        const safe = await this.linkedSafe(em, orgId, query.linkedSafeId);
         params.push(safe.chainId, safe.address);
-        where = `AND r.chain_id = $2 AND r.safe_address = $3`;
+        where += ` AND r.chain_id = $2 AND r.safe_address = $3`;
       }
+      if (after) {
+        params.push(after.createdAt, after.id);
+        where += ` AND (r.created_at, r.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
+      }
+      params.push(query.limit + 1);
       const rows: Array<{
         id: string;
         name: string;
@@ -360,19 +384,26 @@ export class PayoutRunsService {
         item_count: number;
         safe_tx_hash: string | null;
         created_at: Date;
+        /** full precision (microseconds) for the cursor */
+        created_at_text: string;
       }> = await em.query(
         `SELECT r.id, r.name, r.status, r.chain_id, r.safe_address::text AS safe_address,
                 ls.id AS linked_safe_id, r.safe_tx_hash, r.created_at,
+                to_char(r.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at_text,
                 (SELECT count(*)::int FROM payout_items i
                   WHERE i.org_id = r.org_id AND i.run_id = r.id) AS item_count
            FROM payout_runs r
            LEFT JOIN linked_safes ls
              ON ls.org_id = r.org_id AND ls.chain_id = r.chain_id AND ls.address = r.safe_address
           WHERE r.org_id = $1 ${where}
-          ORDER BY r.created_at DESC, r.id`,
+          ORDER BY r.created_at DESC, r.id DESC
+          LIMIT $${params.length}`,
         params,
       );
-      return rows.map((r) => ({
+      const more = rows.length > query.limit;
+      const page = more ? rows.slice(0, query.limit) : rows;
+      const last = page.at(-1);
+      const items = page.map((r) => ({
         id: r.id,
         name: r.name,
         status: r.status,
@@ -383,6 +414,11 @@ export class PayoutRunsService {
         safeTxHash: r.safe_tx_hash,
         createdAt: r.created_at.toISOString(),
       }));
+      return {
+        items,
+        nextCursor:
+          more && last ? encodeCursor(last.created_at_text, last.id) : null,
+      };
     }, orgId);
   }
 

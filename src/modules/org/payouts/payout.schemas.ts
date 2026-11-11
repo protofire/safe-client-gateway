@@ -27,7 +27,11 @@ export const UpdatePayoutRunSchema = z.object({
 export const BuildPayoutRunSchema = z.object({ expectedVersion });
 export const ListPayoutRunsSchema = z.object({
   linkedSafeId: z.uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  /** `nextCursor` of the previous page (opaque). */
+  cursor: z.string().max(200).optional(),
 });
+export type ListPayoutRuns = z.infer<typeof ListPayoutRunsSchema>;
 
 export type PayoutRowInput = z.infer<typeof PayoutRowInputSchema>;
 export type UpdatePayoutRun = z.infer<typeof UpdatePayoutRunSchema>;
@@ -90,6 +94,12 @@ export type PayoutRunListItem = {
   itemCount: number;
   safeTxHash: string | null;
   createdAt: string;
+};
+
+/** Newest first; `nextCursor` null on the last page. */
+export type PayoutRunPage = {
+  items: Array<PayoutRunListItem>;
+  nextCursor: string | null;
 };
 
 export type PayoutAttemptView = {

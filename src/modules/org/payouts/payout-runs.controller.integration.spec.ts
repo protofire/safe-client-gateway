@@ -941,33 +941,73 @@ describe('payout runs API', () => {
   it('keeps listing a run after its Safe is unlinked, with linkedSafeId null', async () => {
     const { run } = await createRun();
     const listed = await get(`${orgA}/payout-runs`, member).expect(200);
-    expect(listed.body).toEqual([
-      {
-        id: run.id,
-        name: 'March',
-        status: 'draft',
-        chainId: '1',
-        safeAddress: SAFE_A,
-        linkedSafeId: safeA,
-        itemCount: 2,
-        safeTxHash: null,
-        createdAt: expect.any(String),
-      },
-    ]);
+    expect(listed.body).toEqual({
+      items: [
+        {
+          id: run.id,
+          name: 'March',
+          status: 'draft',
+          chainId: '1',
+          safeAddress: SAFE_A,
+          linkedSafeId: safeA,
+          itemCount: 2,
+          safeTxHash: null,
+          createdAt: expect.any(String),
+        },
+      ],
+      nextCursor: null,
+    });
     const filtered = await get(
       `${orgA}/payout-runs?linkedSafeId=${safeA}`,
       member,
     ).expect(200);
-    expect(filtered.body).toHaveLength(1);
+    expect(filtered.body.items).toHaveLength(1);
     await sql.query(`DELETE FROM linked_safes WHERE id = $1`, [safeA]);
     const after = await get(`${orgA}/payout-runs`, member).expect(200);
-    expect(after.body).toEqual([
+    expect(after.body.items).toEqual([
       expect.objectContaining({ id: run.id, linkedSafeId: null }),
     ]);
     const detail = await get(`${orgA}/payout-runs/${run.id}`, member).expect(
       200,
     );
     expect(detail.body.run.linkedSafeId).toBeNull();
+  });
+
+  it('pages the run list newest first by cursor (limit default 50, max 100)', async () => {
+    const { run } = await createRun();
+    // 6 more runs with distinct and equal creation times (ties broken by id)
+    await asOrg(orgA, (em) =>
+      em.query(
+        `INSERT INTO payout_runs (org_id, chain_id, safe_address, name, created_at)
+         SELECT $1, '1', $2, 'r' || g, now() - interval '1 hour' - (g / 2) * interval '1 minute'
+           FROM generate_series(1, 6) g`,
+        [orgA, SAFE_A.toLowerCase()],
+      ),
+    );
+    const seen: Array<string> = [];
+    let cursor: string | null = null;
+    let pages = 0;
+    do {
+      const res: request.Response = await get(
+        `${orgA}/payout-runs?limit=3${cursor ? `&cursor=${cursor}` : ''}`,
+        member,
+      ).expect(200);
+      expect(res.body.items.length).toBeLessThanOrEqual(3);
+      seen.push(...res.body.items.map((i: { id: string }) => i.id));
+      cursor = res.body.nextCursor;
+      pages++;
+    } while (cursor !== null);
+    expect(pages).toBe(3);
+    expect(new Set(seen).size).toBe(7);
+    expect(seen[0]).toBe(run.id);
+
+    const all = await get(`${orgA}/payout-runs`, member).expect(200);
+    expect(all.body.items.map((i: { id: string }) => i.id)).toEqual(seen);
+    expect(all.body.nextCursor).toBeNull();
+
+    await get(`${orgA}/payout-runs?limit=101`, member).expect(400);
+    await get(`${orgA}/payout-runs?limit=0`, member).expect(400);
+    await get(`${orgA}/payout-runs?cursor=garbage`, member).expect(400);
   });
 
   it('answers 404 for a run of another org and for a linkedSafeId of another org', async () => {
