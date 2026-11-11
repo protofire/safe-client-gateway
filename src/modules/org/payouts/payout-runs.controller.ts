@@ -44,6 +44,7 @@ import {
   CreatePayoutRunSchema,
   ImportPayoutRunSchema,
   ListPayoutRunsSchema,
+  ResolvePayoutRunSchema,
   type PayoutRunDetail,
   type PayoutRunPage,
   UpdatePayoutRunDocSchema,
@@ -231,6 +232,26 @@ export class PayoutRunsController {
       orgId,
       uuid(runId),
       uuid(attemptId),
+      actor(req, session.userId),
+    );
+  }
+
+  /** Closes a `needs_review` run after an on-chain check; final. */
+  @Post('payout-runs/:runId/resolve')
+  @OrgApiBody(ResolvePayoutRunSchema)
+  @HttpCode(200)
+  @RequirePermission('payouts.manage')
+  resolve(
+    @Req() req: Request,
+    @Param('orgId') orgId: string,
+    @Param('runId') runId: string,
+    @OrgSession() session: OrgSession,
+    @Body() body: unknown,
+  ): Promise<PayoutRunDetail> {
+    return this.proposals.resolve(
+      orgId,
+      uuid(runId),
+      parse(ResolvePayoutRunSchema, body),
       actor(req, session.userId),
     );
   }

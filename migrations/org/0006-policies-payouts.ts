@@ -114,7 +114,7 @@ export class PoliciesPayouts1794614400000 implements MigrationInterface {
       name text NOT NULL,
       status text NOT NULL DEFAULT 'draft' CHECK (status IN (
         'draft', 'proposing', 'proposed', 'verifying', 'executed',
-        'failed', 'replaced', 'rejected', 'needs_review'
+        'failed', 'replaced', 'rejected', 'needs_review', 'resolved'
       )),
       version integer NOT NULL DEFAULT 1,
       created_by ${userRef},
@@ -126,8 +126,10 @@ export class PoliciesPayouts1794614400000 implements MigrationInterface {
       ${nonce('nonce', true)},
       executed_tx_hash text,
       verifying_since timestamptz,
-      delay_notified_at timestamptz,
       review jsonb,
+      resolved_by ${userRef},
+      resolved_at timestamptz,
+      resolution_note text CHECK (length(resolution_note) <= 500),
       ${timestamps},
       UNIQUE (org_id, id),
       UNIQUE (org_id, safe_tx_hash),
@@ -195,8 +197,7 @@ export class PoliciesPayouts1794614400000 implements MigrationInterface {
       LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
       BEGIN
         IF NEW.status IS DISTINCT FROM OLD.status AND (OLD.status, NEW.status) NOT IN (
-          ('open', 'reported'), ('open', 'released'),
-          ('reported', 'released'), ('released', 'reported')
+          ('open', 'reported'), ('open', 'released'), ('reported', 'released')
         ) THEN
           RAISE EXCEPTION 'payout proposal attempt transition % -> % not allowed', OLD.status, NEW.status
             USING ERRCODE = 'check_violation', CONSTRAINT = 'payout_attempt_transition';

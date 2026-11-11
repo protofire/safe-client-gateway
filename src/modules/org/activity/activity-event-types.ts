@@ -40,9 +40,8 @@ export const ACTIVITY_EVENT_TYPES = [
   'payout_run.proposal_claimed',
   'payout_run.proposal_released',
   'payout_run.proposed',
-  'payout_run.verification_delayed',
-  'payout_run.stray_detected',
   'payout_run.settled',
+  'payout_run.resolved',
 ] as const;
 
 export type ActivityEventType = (typeof ACTIVITY_EVENT_TYPES)[number];

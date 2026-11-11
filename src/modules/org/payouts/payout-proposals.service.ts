@@ -10,7 +10,6 @@ import {
 import type { EntityManager } from 'typeorm';
 import { getAddress, type Address } from 'viem';
 import { z } from 'zod';
-import { getSafeTxHash } from '@/domain/common/utils/safe';
 import { DataSourceError } from '@/domain/errors/data-source.error';
 import { ActivityLog } from '@/modules/org/activity/activity-log.service';
 import { RateLimiter } from '@/modules/org/common/rate-limiter';
@@ -18,35 +17,29 @@ import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import { lockSafe } from '@/modules/org/events/safe-snapshot';
 import { conflict } from '@/modules/org/orgs/org-lock';
 import type { Actor } from '@/modules/org/orgs/parse';
-import {
-  PermissionResolver,
-  type EffectivePermissions,
-} from '@/modules/org/permissions/permission.resolver';
+import { PermissionResolver } from '@/modules/org/permissions/permission.resolver';
 import {
   assertRunCapacity,
   fromStoredCalls,
   lockOrgFor,
   lockRun,
   readItems,
+  runLocked,
   type PayoutRunRow,
 } from '@/modules/org/payouts/payout-runs.service';
 import { PayoutRunsService } from '@/modules/org/payouts/payout-runs.service';
 import {
-  findStray,
-  knownCalls,
-  firstAttemptAt,
   PayoutStatusUpdater,
   type NonceEvidence,
 } from '@/modules/org/payouts/payout-status.updater';
 import { verifyProposedTx } from '@/modules/org/payouts/payout-verify';
-import type { Evaluation } from '@/modules/org/policies/evaluate';
 import {
   EDITABLE_STATUSES,
   type PayoutRunDetail,
   type PayoutRunStatus,
+  type ResolvePayoutRun,
 } from '@/modules/org/payouts/payout.schemas';
 import type { MultisigTransaction } from '@/modules/safe/domain/entities/multisig-transaction.entity';
-import type { Safe } from '@/modules/safe/domain/entities/safe.entity';
 import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
 
 const expectedVersion = z.number().int().min(1);
@@ -64,32 +57,17 @@ export const ClaimProposalSchema = z.object({
 });
 export const ReportProposalSchema = z.object({
   attemptId: z.uuid(),
-  /** Required on the normal path; a late report after a release has none. */
+  // optional in the schema so a missing one is a 409 version_conflict like a stale one
   expectedVersion: expectedVersion.optional(),
   safeTxHash: hash,
 });
 export type ClaimProposal = z.infer<typeof ClaimProposalSchema>;
 export type ReportProposal = z.infer<typeof ReportProposalSchema>;
-export type ClaimResult = {
-  attemptId: string;
-  version: number;
-  nonce: string;
-  /** The policy evaluation the claim recomputed and stored on the run. */
-  evaluation: Evaluation | null;
-};
+export type ClaimResult = { attemptId: string; version: number; nonce: string };
 
 // abuse limits (milestone P): each claim and report reads the tx-service several times
 const CLAIMS_PER_USER_PER_MINUTE = 30;
 const REPORTS_PER_USER_PER_MINUTE = 30;
-/** Runs of one org holding a nonce at once (one per Safe besides). */
-export const MAX_PINNED_RUNS_PER_ORG = 50;
-
-/** A claim is refused with `proposal_open` while the run holds an active proposal. */
-const OPEN_STATUSES: ReadonlyArray<PayoutRunStatus> = [
-  'proposing',
-  'proposed',
-  'verifying',
-];
 
 type AttemptRow = {
   id: string;
@@ -104,17 +82,14 @@ const versionConflict = (): ReturnType<typeof conflict> =>
     'version_conflict',
     'The run was changed meanwhile; reload and try again',
   );
-const proposalClosed = (): ReturnType<typeof conflict> =>
-  conflict(
-    'proposal_closed',
-    'This proposal attempt is no longer open; reload the run',
-  );
 const unavailable = (): ServiceUnavailableException =>
   new ServiceUnavailableException({
     statusCode: 503,
     code: 'tx_service_unavailable',
     message: 'The transaction service could not be read; try again',
   });
+const usedMessage = (nonce: string): string =>
+  `Nonce ${nonce} was used on-chain; the run is settled once the transaction is confirmed`;
 
 /**
  * Proposal claims, verified reports and releases of payout runs (canonical
@@ -152,10 +127,7 @@ export class PayoutProposalsService {
     assertClaimable(before, body.expectedVersion);
     // everything the DB alone decides, before any tx-service read or cache clear;
     // the pin itself is compared under the locks, after a used pin is settled
-    await this.tx.runInOrgTx(async (em) => {
-      const caller = await this.resolver.effective(orgId, actor.userId, em);
-      await assertClaimSlot(em, before, null, manages(caller));
-    }, orgId);
+    await this.tx.runInOrgTx((em) => assertClaimSlot(em, before, null), orgId);
     const safeAddress = getAddress(before.safe_address);
     let nonces = await this.nonces(before.chain_id, safeAddress);
     if (
@@ -169,22 +141,13 @@ export class PayoutProposalsService {
         throw unavailable();
       }
       before = await this.peek(orgId, runId);
-      if (before.pinned_nonce !== null) {
-        throw conflict(
-          'retry_later',
-          `Nonce ${before.pinned_nonce} was used on-chain; the run is settled once the transaction is confirmed`,
-        );
-      }
+      if (before.pinned_nonce !== null)
+        throw runLocked(before.status, usedMessage(before.pinned_nonce));
       nonces = await this.nonces(before.chain_id, safeAddress);
     }
-    const { queued, callOnly } = await this.queueView(
-      orgId,
-      before,
-      nonces.currentNonce,
-    );
 
     return this.tx.runInOrgTx(async (em) => {
-      const caller = await lockOrgFor(
+      await lockOrgFor(
         this.resolver,
         em,
         orgId,
@@ -195,7 +158,7 @@ export class PayoutProposalsService {
       await lockSafe(em, run.chain_id, run.safe_address);
       assertClaimable(run, body.expectedVersion);
       await assertLinked(em, run);
-      await assertClaimSlot(em, run, body.nonce, manages(caller));
+      await assertClaimSlot(em, run, body.nonce);
       // a settled (failed, replaced, rejected) run becomes open again
       await assertRunCapacity(em, orgId, run);
       const expected = run.pinned_nonce ?? String(nonces.recommendedNonce);
@@ -209,9 +172,8 @@ export class PayoutProposalsService {
         run.pinned_nonce !== null &&
         BigInt(nonces.currentNonce) > BigInt(run.pinned_nonce)
       ) {
-        throw conflict('retry_later', `Nonce ${expected} was used on-chain`);
+        throw runLocked(run.status, usedMessage(expected));
       }
-      await assertNoStray(em, run, expected, queued, callOnly);
       // the stored evaluation is the one the run is proposed with
       const evaluation = await this.runs.evaluateCalls(
         em,
@@ -236,8 +198,7 @@ export class PayoutProposalsService {
           `UPDATE payout_runs
             SET status = 'proposing', pinned_nonce = $3, evaluation = $4::jsonb,
                 safe_tx_hash = NULL, nonce = NULL, executed_tx_hash = NULL, review = NULL,
-                verifying_since = NULL, delay_notified_at = NULL,
-                version = version + 1, updated_at = now()
+                verifying_since = NULL, version = version + 1, updated_at = now()
           WHERE org_id = $1 AND id = $2 RETURNING version`,
           [orgId, run.id, expected, JSON.stringify(evaluation)],
         );
@@ -251,16 +212,15 @@ export class PayoutProposalsService {
         attemptId,
         nonce: expected,
       });
-      return { attemptId, version, nonce: expected, evaluation };
+      return { attemptId, version, nonce: expected };
     }, orgId);
   }
 
   /**
-   * The `safeTxHash` the signing flow produced, verified strictly against the
-   * tx-service copy. Normal path: the open attempt of a `proposing` run at
-   * `expectedVersion`. Late path: a released attempt of a draft still pinned
-   * at its nonce, whose tx matches the current calls. Already executed → the
-   * settlement runs in the same transaction.
+   * The `safeTxHash` the signing flow produced for the open attempt of a
+   * `proposing` run at `expectedVersion`, verified strictly against the
+   * tx-service copy. Already executed → the settlement runs in the same
+   * transaction.
    */
   async report(
     orgId: string,
@@ -281,66 +241,37 @@ export class PayoutProposalsService {
       (em) => this.lockAttempt(em, before, body.attemptId),
       orgId,
     );
-    if (
-      assertReportable(before, early) === 'normal' &&
-      body.expectedVersion !== before.version
-    )
-      throw versionConflict();
-    const N = BigInt(before.pinned_nonce!);
+    assertReportable(before, early, body.expectedVersion);
 
     let tx: MultisigTransaction;
-    let safe: Safe;
+    let callOnly: ReadonlySet<string>;
     try {
-      await Promise.all([
-        this.safes.clearMultisigTransaction({
-          chainId: before.chain_id,
-          safeTransactionHash: body.safeTxHash,
-        }),
-        // a cached version could predate an upgrade
-        this.safes.clearSafe({
-          chainId: before.chain_id,
-          address: getAddress(before.safe_address),
-        }),
-      ]);
-      [tx, safe] = await Promise.all([
+      await this.safes.clearMultisigTransaction({
+        chainId: before.chain_id,
+        safeTransactionHash: body.safeTxHash,
+      });
+      [tx, callOnly] = await Promise.all([
         this.safes.getMultiSigTransaction({
           chainId: before.chain_id,
           safeTransactionHash: body.safeTxHash,
         }),
-        // the Safe version decides the EIP-712 hash the fields are checked against
-        this.safes.getSafe({
-          chainId: before.chain_id,
-          address: getAddress(before.safe_address),
-        }),
+        this.updater.callOnly(before.chain_id),
       ]);
-    } catch (error) {
-      if (error instanceof DataSourceError && error.code === 404) {
-        // not indexed yet (or unknown): retryable, the attempt stays open
-        throw new ServiceUnavailableException({
-          statusCode: 503,
-          code: 'tx_not_indexed',
-          message:
-            'The transaction service does not list this transaction yet; try again shortly',
-        });
-      }
+    } catch {
+      // not indexed yet, or the service is down: retryable, the attempt stays open
       throw unavailable();
     }
-    const nonces = await this.nonces(
-      before.chain_id,
-      getAddress(before.safe_address),
-    );
-    const { queued, callOnly, since } = await this.queueView(
-      orgId,
-      before,
-      nonces.currentNonce,
-    );
     // executed already (1-of-1, retried report): settle under the same lock if the evidence can be read
-    let evidence: NonceEvidence | null = null;
-    if (tx.isExecuted) {
-      evidence = await this.updater
-        .readEvidence(before.chain_id, before.safe_address, N, since)
-        .catch(() => null);
-    }
+    const evidence: NonceEvidence | null = tx.isExecuted
+      ? await this.updater
+          .readEvidence(
+            before.chain_id,
+            before.safe_address,
+            BigInt(before.pinned_nonce!),
+            fromStoredCalls(before.calls!),
+          )
+          .catch(() => null)
+      : null;
 
     await this.tx.runInOrgTx(async (em) => {
       await lockOrgFor(
@@ -354,22 +285,10 @@ export class PayoutProposalsService {
       await lockSafe(em, run.chain_id, run.safe_address);
       if (run.safe_tx_hash === body.safeTxHash) return;
       const attempt = await this.lockAttempt(em, run, body.attemptId);
-      const late = assertReportable(run, attempt) === 'late';
-      if (!late && body.expectedVersion !== run.version)
-        throw versionConflict();
-      const [taken]: Array<unknown> = await em.query(
-        `SELECT 1 FROM payout_runs WHERE org_id = $1 AND safe_tx_hash = $2 AND id <> $3`,
-        [orgId, body.safeTxHash, run.id],
-      );
-      if (taken) {
-        throw conflict(
-          'tx_taken',
-          'This Safe transaction is already recorded for another payout run',
-        );
-      }
+      assertReportable(run, attempt, body.expectedVersion);
       const result =
         tx.safeTxHash.toLowerCase() !== body.safeTxHash
-          ? ({ ok: false, code: 'tx_mismatch', field: 'safeTxHash' } as const)
+          ? ({ ok: false, field: 'safeTxHash' } as const)
           : verifyProposedTx(
               tx,
               {
@@ -379,36 +298,9 @@ export class PayoutProposalsService {
               },
               callOnly,
             );
-      if (!result.ok && result.field === 'nonce') {
-        const atTxNonce = verifyProposedTx(
-          tx,
-          {
-            safeAddress: getAddress(run.safe_address),
-            nonce: BigInt(tx.nonce),
-            calls: fromStoredCalls(run.calls!),
-          },
-          callOnly,
-        );
-        if (atTxNonce.ok) {
-          throw new UnprocessableEntityException({
-            statusCode: 422,
-            code: 'tx_wrong_nonce',
-            nonce: String(tx.nonce),
-            expectedNonce: run.pinned_nonce,
-            message: `This payout was signed at nonce ${tx.nonce} instead of ${run.pinned_nonce}; reject the transaction at nonce ${tx.nonce} in the Safe queue so it cannot execute`,
-          });
-        }
-      }
-      if (!result.ok) {
-        // a late tx of another version is not adopted; settlement judges it if it executes
-        if (late) throw proposalClosed();
-        throw mismatch(result.code, result.field);
-      }
-      // only an owner- or delegate-signed copy, whose fields really hash to what was reported
-      if (!tx.trusted) throw mismatch('tx_mismatch', 'trusted');
-      if (!hashesTo(run.chain_id, safe, tx, body.safeTxHash))
-        throw mismatch('tx_mismatch', 'safeTxHash');
-      await assertNoStray(em, run, run.pinned_nonce!, queued, callOnly);
+      if (!result.ok) throw mismatch(result.field, run.pinned_nonce!);
+      // only an owner- or delegate-signed copy
+      if (!tx.trusted) throw mismatch('trusted', run.pinned_nonce!);
       const proposed = await this.updater.markProposed(
         em,
         run,
@@ -446,7 +338,7 @@ export class PayoutProposalsService {
         (run.status === 'proposed' &&
           attempt.status === 'reported' &&
           attempt.safe_tx_hash === run.safe_tx_hash);
-      if (!active) throw proposalClosed();
+      if (!active) throw versionConflict();
       if (attempt.created_by !== actor.userId) {
         if (!caller.permissions.includes('payouts.manage')) {
           throw new ForbiddenException({
@@ -476,6 +368,44 @@ export class PayoutProposalsService {
         attemptId: attempt.id,
         nonce: attempt.nonce,
         reason: 'released',
+      });
+    }, orgId);
+    return this.runs.get(orgId, runId, actor.userId);
+  }
+
+  /** Closes a `needs_review` run by hand after an on-chain check: final, the pin is already cleared. */
+  async resolve(
+    orgId: string,
+    runId: string,
+    body: ResolvePayoutRun,
+    actor: Actor,
+  ): Promise<PayoutRunDetail> {
+    await this.tx.runInOrgTx(async (em) => {
+      await lockOrgFor(
+        this.resolver,
+        em,
+        orgId,
+        actor.userId,
+        'payouts.manage',
+      );
+      const run = await lockRun(em, orgId, runId);
+      if (run.status !== 'needs_review')
+        throw runLocked(
+          run.status,
+          'Only a run that needs review can be resolved',
+        );
+      if (run.version !== body.expectedVersion) throw versionConflict();
+      const note = body.note ?? null;
+      await em.query(
+        `UPDATE payout_runs
+            SET status = 'resolved', resolved_by = $3, resolved_at = now(), resolution_note = $4,
+                version = version + 1, updated_at = now()
+          WHERE org_id = $1 AND id = $2`,
+        [orgId, run.id, actor.userId, note],
+      );
+      await this.event(em, run, 'payout_run.resolved', actor, {
+        name: run.name,
+        note,
       });
     }, orgId);
     return this.runs.get(orgId, runId, actor.userId);
@@ -528,48 +458,6 @@ export class PayoutProposalsService {
     return this.tx.runInOrgTx((em) => lockRun(em, orgId, runId), orgId);
   }
 
-  /**
-   * The stray-rule view (queued from the current nonce, executed from the
-   * run's first attempt). Fails closed when it cannot be read whole.
-   */
-  private async queueView(
-    orgId: string,
-    run: PayoutRunRow,
-    currentNonce: number,
-  ): Promise<{
-    queued: Array<MultisigTransaction>;
-    callOnly: ReadonlySet<string>;
-    since: Date | null;
-  }> {
-    const since = await this.tx.runInOrgTx(
-      (em) => firstAttemptAt(em, run),
-      orgId,
-    );
-    try {
-      const [view, callOnly] = await Promise.all([
-        this.updater.readStrayView(
-          run.chain_id,
-          getAddress(run.safe_address),
-          currentNonce,
-          since,
-        ),
-        this.updater.callOnly(run.chain_id),
-      ]);
-      if (view.complete) return { queued: view.txs, callOnly, since };
-      // a capped queue read is transient (the queue drains): retryable
-      if (view.historyComplete) throw unavailable();
-    } catch {
-      throw unavailable();
-    }
-    // fail closed: a copy could hide in the executed history not read, and that history only grows
-    throw new ServiceUnavailableException({
-      statusCode: 503,
-      code: 'stray_history_too_long',
-      message:
-        'This Safe account has too much history since this run was first proposed to check it for copies. Use Cancel reservation on this run and wait for it to settle, check on-chain that it was not paid, then create a new run from its CSV.',
-    });
-  }
-
   /** Fails closed: a Safe the tx-service does not know (counterfactual) cannot be claimed. */
   private async nonces(
     chainId: string,
@@ -612,7 +500,10 @@ export class PayoutProposalsService {
   private event(
     em: EntityManager,
     run: PayoutRunRow,
-    type: 'payout_run.proposal_claimed' | 'payout_run.proposal_released',
+    type:
+      | 'payout_run.proposal_claimed'
+      | 'payout_run.proposal_released'
+      | 'payout_run.resolved',
     actor: Actor,
     payload: Record<string, unknown>,
   ): Promise<void> {
@@ -637,78 +528,31 @@ function conflictWith(
   return new ConflictException({ statusCode: 409, code, ...body });
 }
 
-/**
- * Which report path the attempt is on: `normal` (open attempt of a proposing
- * run) or `late` (a released, never reported attempt of a draft still pinned
- * at its nonce, with calls). Anything else is closed.
- */
+/** Only the open attempt of a `proposing` run at `expectedVersion` takes a report. */
 function assertReportable(
   run: PayoutRunRow,
   attempt: AttemptRow,
-): 'normal' | 'late' {
-  if (run.status === 'verifying') {
-    throw conflict(
-      'retry_later',
-      'The nonce of this run was used on-chain; it is settled once the transaction is confirmed',
-    );
-  }
-  if (run.status === 'proposing' && attempt.status === 'open') return 'normal';
+  expectedVersion: number | undefined,
+): void {
+  if (run.status === 'verifying')
+    throw runLocked(run.status, usedMessage(run.pinned_nonce!));
   if (
-    run.status === 'draft' &&
-    attempt.status === 'released' &&
-    attempt.safe_tx_hash === null &&
-    run.pinned_nonce !== null &&
-    run.pinned_nonce === attempt.nonce &&
-    run.calls !== null
+    run.status !== 'proposing' ||
+    attempt.status !== 'open' ||
+    run.version !== expectedVersion
   )
-    return 'late';
-  throw proposalClosed();
+    throw versionConflict();
 }
-
-/**
- * 409 `stray_proposal` while a queued tx at another nonce than `nonce` carries
- * the run's current calls or any attempt's calls: it could execute besides it.
- */
-async function assertNoStray(
-  em: EntityManager,
-  run: PayoutRunRow,
-  nonce: string,
-  queued: ReadonlyArray<MultisigTransaction>,
-  callOnly: ReadonlySet<string>,
-): Promise<void> {
-  const stray = findStray(
-    queued,
-    BigInt(nonce),
-    await knownCalls(em, run),
-    callOnly,
-  );
-  if (stray) {
-    throw conflictWith('stray_proposal', {
-      message: stray.isExecuted
-        ? `This payout already executed at nonce ${stray.nonce}; check that payment before proposing it at ${nonce}`
-        : `This payout is also queued at nonce ${stray.nonce}; reject that transaction in the Safe queue before proposing it at ${nonce}`,
-      nonce: String(stray.nonce),
-      safeTxHash: stray.safeTxHash,
-      executed: stray.isExecuted,
-    });
-  }
-}
-
-const manages = (caller: EffectivePermissions | null): boolean =>
-  caller?.permissions.includes('payouts.manage') ?? false;
 
 /**
  * DB-only claim checks, run before any tx-service read and again under the
- * locks: no other run of the org pinned on this Safe (`nonce_taken`), a
- * pinned run is claimed at its pin (`nonce_mismatch`; `nonce` null skips it),
- * and the org holds fewer than {@link MAX_PINNED_RUNS_PER_ORG} pins
- * (`pin_limit`; `payouts.manage` is exempt, so members cannot lock admins out).
+ * locks: no other run of the org pinned on this Safe (`nonce_taken`), and a
+ * pinned run is claimed at its pin (`nonce_mismatch`; `nonce` null skips it).
  */
 async function assertClaimSlot(
   em: EntityManager,
   run: PayoutRunRow,
   nonce: string | number | null,
-  manage: boolean,
 ): Promise<void> {
   const [other]: Array<{ id: string; name: string }> = await em.query(
     `SELECT id, name FROM payout_runs
@@ -724,48 +568,35 @@ async function assertClaimSlot(
       name: other.name,
     });
   }
-  if (run.pinned_nonce !== null) {
-    if (nonce !== null && BigInt(nonce) !== BigInt(run.pinned_nonce)) {
-      throw conflictWith('nonce_mismatch', {
-        message: `The payout must be signed at nonce ${run.pinned_nonce}`,
-        expectedNonce: run.pinned_nonce,
-      });
-    }
-    return; // keeps its pin: not a new one
-  }
-  if (manage) return;
-  const [{ pinned }]: Array<{ pinned: number }> = await em.query(
-    `SELECT count(*)::int AS pinned FROM payout_runs
-      WHERE org_id = $1 AND pinned_nonce IS NOT NULL`,
-    [run.org_id],
-  );
-  if (pinned >= MAX_PINNED_RUNS_PER_ORG) {
-    throw conflict(
-      'pin_limit',
-      `The organization has ${MAX_PINNED_RUNS_PER_ORG} payout runs holding a nonce; settle some first`,
-    );
+  if (
+    run.pinned_nonce !== null &&
+    nonce !== null &&
+    BigInt(nonce) !== BigInt(run.pinned_nonce)
+  ) {
+    throw conflictWith('nonce_mismatch', {
+      message: `The payout must be signed at nonce ${run.pinned_nonce}`,
+      expectedNonce: run.pinned_nonce,
+    });
   }
 }
 
+const NOT_CLAIMABLE: Partial<Record<PayoutRunStatus, string>> = {
+  proposing: 'A proposal of this run is open; finish or release it first',
+  proposed: 'A proposal of this run is open; finish or release it first',
+  verifying:
+    'The nonce of this run was used on-chain; it is settled once the transaction is confirmed',
+};
+
 function assertClaimable(run: PayoutRunRow, expectedVersion: number): void {
-  if (run.status === 'verifying') {
-    throw conflict(
-      'retry_later',
-      'The nonce of this run was used on-chain; it is settled once the transaction is confirmed',
-    );
-  }
-  if (OPEN_STATUSES.includes(run.status)) {
-    throw conflict(
-      'proposal_open',
-      'A proposal of this run is open; finish or release it first',
-    );
-  }
   if (!EDITABLE_STATUSES.includes(run.status)) {
-    throw conflict('run_locked', 'This run cannot be proposed again');
+    throw runLocked(
+      run.status,
+      NOT_CLAIMABLE[run.status] ?? 'This run cannot be proposed again',
+    );
   }
   if (run.version !== expectedVersion) throw versionConflict();
   if (run.calls === null) {
-    throw conflict('run_locked', 'Build the run before proposing it');
+    throw runLocked(run.status, 'Build the run before proposing it');
   }
 }
 
@@ -786,47 +617,23 @@ async function assertLinked(
   }
 }
 
-/**
- * Whether the tx's own fields give `safeTxHash` (EIP-712, Safe address and
- * version). A tx signed before an upgrade across 1.3.0 hashes under the other
- * domain (chainId added in 1.3.0), so both domain variants are accepted: each
- * binds the same fields and the Safe address.
- */
-function hashesTo(
-  chainId: string,
-  safe: Safe,
-  tx: MultisigTransaction,
-  safeTxHash: string,
-): boolean {
-  // no Safe version known: the hash cannot be checked, so it is not accepted (fails closed)
-  if (!safe.version) return false;
-  // 1.2.0: domain without chainId, 1.3.0: with it (both use baseGas)
-  return [safe.version, '1.2.0', '1.3.0'].some((version) => {
-    try {
-      return (
-        getSafeTxHash({
-          chainId,
-          transaction: tx,
-          safe: { ...safe, version },
-        }).toLowerCase() === safeTxHash
-      );
-    } catch {
-      return false;
-    }
-  });
-}
-
+/** 422 `tx_mismatch { field }`; `field: 'nonce'` carries `expectedNonce`. */
 function mismatch(
-  code: 'tx_mismatch' | 'multisend_unknown',
   field: string,
+  expectedNonce: string,
 ): UnprocessableEntityException {
+  const messages: Record<string, string> = {
+    nonce: `The transaction is not at nonce ${expectedNonce}; it was not recorded. If it carries this payout, reject it in the Safe queue so it cannot execute`,
+    multisend:
+      'The transaction does not use a known MultiSendCallOnly contract of this chain',
+  };
   return new UnprocessableEntityException({
     statusCode: 422,
-    code,
+    code: 'tx_mismatch',
     field,
+    ...(field === 'nonce' && { expectedNonce }),
     message:
-      code === 'multisend_unknown'
-        ? 'The transaction does not use a known MultiSendCallOnly contract of this chain'
-        : `The proposed transaction differs from the payout run (${field}); it was not recorded`,
+      messages[field] ??
+      `The proposed transaction differs from the payout run (${field}); it was not recorded`,
   });
 }

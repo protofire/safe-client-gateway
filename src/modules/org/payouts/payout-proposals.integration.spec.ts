@@ -13,9 +13,6 @@ import {
   type User,
 } from '@/modules/org/payouts/__tests__/payout-test-app';
 import { toCall } from '@/modules/org/payouts/payout-calls';
-import { firstAttemptAt } from '@/modules/org/payouts/payout-status.updater';
-import { getSafeTxHash } from '@/domain/common/utils/safe';
-import type { Safe } from '@/modules/safe/domain/entities/safe.entity';
 
 describe('payout proposals API', () => {
   let p: PayoutTestApp;
@@ -115,7 +112,6 @@ describe('payout proposals API', () => {
         attemptId: expect.any(String),
         version: b.version + 1,
         nonce: '6',
-        evaluation: { status: 'ok' },
       });
       const { run } = await p.detail(orgA, b.runId, member);
       expect(run).toMatchObject({
@@ -162,8 +158,8 @@ describe('payout proposals API', () => {
         .expect(201);
       const row = await p.runRow(orgA, b.runId);
       expect(row.evaluation).toMatchObject({ status: 'violation' });
-      // returned with the claim, so the signing step shows what was stored
-      expect(res.body.evaluation).toEqual(row.evaluation);
+      // not in the claim response: the UI shows the refetched run's warnings
+      expect(res.body.evaluation).toBeUndefined();
     });
 
     it('answers 409 nonce_mismatch to a stale body nonce and to a re-claim of a pinned draft at another nonce', async () => {
@@ -242,202 +238,16 @@ describe('payout proposals API', () => {
       expect(await p.events('payout_run.proposal_claimed')).toEqual([]);
     });
 
-    it('answers 409 stray_proposal while the run calls are queued at another nonce', async () => {
-      const b = await built();
-      const { run } = await p.detail(orgA, b.runId, member);
-      // signed outside the claim at 5; the recommended nonce is now 6
-      const stray = p.chain.propose(SAFE_A, 5, toCalls(run.calls!));
-      const res = await p
-        .claim(orgA, b.runId, member, { expectedVersion: b.version, nonce: 6 })
-        .expect(409);
-      expect(res.body).toMatchObject({
-        code: 'stray_proposal',
-        nonce: '5',
-        safeTxHash: stray.safeTxHash,
-        executed: false,
-      });
-    });
-
-    it('answers 409 stray_proposal while an earlier attempt calls are queued at another nonce', async () => {
-      const c = await claimed();
-      await p.release(orgA, c.runId, c.attemptId, member).expect(200);
-      let { run } = await p.detail(orgA, c.runId, member);
-      await p
-        .write('patch', `${orgA}/payout-runs/${c.runId}`, member, {
-          expectedVersion: run.version,
-          rows: [{ address: CAROL, amount: '2', token: 'native' }],
-        })
-        .expect(200);
-      ({ run } = await p.build(orgA, c.runId, member));
-      const stray = p.chain.propose(SAFE_A, 6, c.calls);
-      const res = await p
-        .claim(orgA, c.runId, member, {
-          expectedVersion: run.version,
-          nonce: 5,
-        })
-        .expect(409);
-      expect(res.body).toMatchObject({
-        code: 'stray_proposal',
-        nonce: '6',
-        safeTxHash: stray.safeTxHash,
-      });
-    });
-
-    it('answers 409 stray_proposal for an untrusted (delegate-proposed) copy of the run calls', async () => {
-      const b = await built();
-      const { run } = await p.detail(orgA, b.runId, member);
-      const stray = p.chain.propose(SAFE_A, 5, toCalls(run.calls!), {
-        trusted: false,
-      });
-      const res = await p
-        .claim(orgA, b.runId, member, { expectedVersion: b.version, nonce: 6 })
-        .expect(409);
-      expect(res.body).toMatchObject({
-        code: 'stray_proposal',
-        safeTxHash: stray.safeTxHash,
-      });
-    });
-
-    it('answers 503 tx_service_unavailable (retryable) when the queued read hits its page cap', async () => {
-      const b = await built();
-      p.chain.txPageSize = 1;
-      for (let i = 0; i < 6; i++)
-        p.chain.propose(SAFE_A, 5 + i, [
-          toCall({
-            recipient: CAROL,
-            token: 'native',
-            amountRaw: BigInt(i + 1),
-          }),
-        ]);
-      const res = await p
-        .claim(orgA, b.runId, member, { expectedVersion: b.version, nonce: 11 })
-        .expect(503);
-      expect(res.body).toEqual({
-        statusCode: 503,
-        code: 'tx_service_unavailable',
-        message: 'The transaction service could not be read; try again',
-      });
-    });
-
-    it('fails closed with 503 stray_history_too_long when the executed history since the first attempt hits its page cap', async () => {
-      const c = await claimed();
-      await p.release(orgA, c.runId, c.attemptId, member).expect(200);
-      p.chain.execute(
-        p.chain.propose(SAFE_A, 5, [
-          toCall({ recipient: CAROL, token: 'native', amountRaw: 1n }),
-        ]),
-        { success: false },
-      );
-      await p.updater.run();
-      // more executed history after the attempt at 5 than one read may page through
-      p.chain.txPageSize = 1;
-      for (let i = 6; i < 12; i++)
-        p.chain.execute(
-          p.chain.propose(SAFE_A, i, [
-            toCall({ recipient: CAROL, token: 'native', amountRaw: BigInt(i) }),
-          ]),
-          { ago: 1000 },
-        );
-      const { run } = await p.detail(orgA, c.runId, member);
-      const res = await p
-        .claim(orgA, c.runId, member, {
-          expectedVersion: run.version,
-          nonce: 12,
-        })
-        .expect(503);
-      expect(res.body).toEqual({
-        statusCode: 503,
-        code: 'stray_history_too_long',
-        message:
-          'This Safe account has too much history since this run was first proposed to check it for copies. Use Cancel reservation on this run and wait for it to settle, check on-chain that it was not paid, then create a new run from its CSV.',
-      });
-    });
-
-    it('reads executed history only from the most recent pin, so older history does not fail closed', async () => {
-      const c = await claimed();
-      await p.release(orgA, c.runId, c.attemptId, member).expect(200);
-      // N goes to an unrelated tx that moved nothing: the draft loses its pin
-      p.chain.execute(
-        p.chain.propose(SAFE_A, 5, [
-          toCall({ recipient: CAROL, token: 'native', amountRaw: 1n }),
-        ]),
-        { success: false },
-      );
-      await p.updater.run();
-      expect(await p.runRow(orgA, c.runId)).toMatchObject({
-        status: 'draft',
-        pinned_nonce: null,
-      });
-      // more executed history, all before the attempt at 5, than one read may page through
-      p.chain.txPageSize = 1;
-      for (let i = 6; i < 12; i++)
-        p.chain.execute(
-          p.chain.propose(SAFE_A, i, [
-            toCall({ recipient: CAROL, token: 'native', amountRaw: BigInt(i) }),
-          ]),
-        );
-      const { run } = await p.detail(orgA, c.runId, member);
-      await p
-        .claim(orgA, c.runId, member, {
-          expectedVersion: run.version,
-          nonce: 12,
-        })
-        .expect(201);
-    });
-
-    it('answers 409 stray_proposal executed for a copy executed after the run pin was cleared', async () => {
-      const c = await claimed();
-      await p.release(orgA, c.runId, c.attemptId, member).expect(200);
-      p.chain.execute(
-        p.chain.propose(SAFE_A, 5, [
-          toCall({ recipient: CAROL, token: 'native', amountRaw: 1n }),
-        ]),
-        { success: false },
-      );
-      await p.updater.run();
-      expect(await p.runRow(orgA, c.runId)).toMatchObject({
-        status: 'draft',
-        pinned_nonce: null,
-      });
-      // the window stays anchored at the attempt at 5 however late the re-claim comes
-      const [attempt] = await p.asOrg(orgA, (em) =>
-        em.query(
-          `SELECT created_at FROM payout_proposal_attempts WHERE run_id = $1`,
-          [c.runId],
-        ),
-      );
-      expect(
-        await p.asOrg(orgA, (em) =>
-          firstAttemptAt(em, {
-            org_id: orgA,
-            id: c.runId,
-            pinned_nonce: null,
-          }),
-        ),
-      ).toEqual(attempt.created_at);
-      const copy = p.chain.propose(SAFE_A, 6, c.calls, { trusted: false });
-      p.chain.execute(copy, { ago: 1000 });
-      const { run } = await p.detail(orgA, c.runId, member);
-      const res = await p
-        .claim(orgA, c.runId, member, {
-          expectedVersion: run.version,
-          nonce: 7,
-        })
-        .expect(409);
-      expect(res.body).toMatchObject({
-        code: 'stray_proposal',
-        nonce: '6',
-        safeTxHash: copy.safeTxHash,
-        executed: true,
-      });
-    });
-
-    it('answers 409 proposal_open to a second claim from another tab', async () => {
+    it('answers 409 run_locked to a second claim from another tab', async () => {
       const c = await claimed();
       const res = await p
         .claim(orgA, c.runId, member, { expectedVersion: c.version, nonce: 5 })
         .expect(409);
-      expect(res.body.code).toBe('proposal_open');
+      expect(res.body).toMatchObject({
+        code: 'run_locked',
+        status: 'proposing',
+        message: expect.any(String),
+      });
     });
 
     it('answers 409 run_locked to DELETE, PATCH and build of a proposing run', async () => {
@@ -570,68 +380,29 @@ describe('payout proposals API', () => {
       });
     });
 
-    it('answers 422 tx_wrong_nonce to the run calls signed at another nonce, and tx_mismatch field nonce when more differs', async () => {
+    it('answers 422 tx_mismatch field nonce with expectedNonce to a tx at another nonce', async () => {
       const c = await claimed();
-      const tx = p.chain.propose(SAFE_A, 6, c.calls);
-      const res = await p
-        .report(orgA, c.runId, member, {
-          attemptId: c.attemptId,
-          expectedVersion: c.version,
-          safeTxHash: tx.safeTxHash,
-        })
-        .expect(422);
-      expect(res.body).toMatchObject({
-        code: 'tx_wrong_nonce',
-        nonce: '6',
-        expectedNonce: '5',
-      });
-      const other = p.chain.propose(SAFE_A, 6, [c.calls[0]]);
-      const res2 = await p
-        .report(orgA, c.runId, member, {
-          attemptId: c.attemptId,
-          expectedVersion: c.version,
-          safeTxHash: other.safeTxHash,
-        })
-        .expect(422);
-      expect(res2.body).toMatchObject({ code: 'tx_mismatch', field: 'nonce' });
+      for (const tx of [
+        p.chain.propose(SAFE_A, 6, c.calls),
+        p.chain.propose(SAFE_A, 6, [c.calls[0]]),
+      ]) {
+        const res = await p
+          .report(orgA, c.runId, member, {
+            attemptId: c.attemptId,
+            expectedVersion: c.version,
+            safeTxHash: tx.safeTxHash,
+          })
+          .expect(422);
+        expect(res.body).toMatchObject({
+          code: 'tx_mismatch',
+          field: 'nonce',
+          expectedNonce: '5',
+          message: expect.any(String),
+        });
+      }
     });
 
-    it('refuses a report with stray_proposal while the run calls signed at another nonce are still queued', async () => {
-      const c = await claimed();
-      const wrong = p.chain.propose(SAFE_A, 6, c.calls);
-      const first = await p
-        .report(orgA, c.runId, member, {
-          attemptId: c.attemptId,
-          expectedVersion: c.version,
-          safeTxHash: wrong.safeTxHash,
-        })
-        .expect(422);
-      expect(first.body.code).toBe('tx_wrong_nonce');
-      const right = p.chain.propose(SAFE_A, 5, c.calls);
-      const second = await p
-        .report(orgA, c.runId, member, {
-          attemptId: c.attemptId,
-          expectedVersion: c.version,
-          safeTxHash: right.safeTxHash,
-        })
-        .expect(409);
-      expect(second.body).toMatchObject({
-        code: 'stray_proposal',
-        nonce: '6',
-        safeTxHash: wrong.safeTxHash,
-      });
-      // the owners rejected M: it is gone from the queue
-      p.chain.txs = p.chain.txs.filter((t) => t !== wrong);
-      await p
-        .report(orgA, c.runId, member, {
-          attemptId: c.attemptId,
-          expectedVersion: c.version,
-          safeTxHash: right.safeTxHash,
-        })
-        .expect(200);
-    });
-
-    it('answers 409 proposal_closed without any tx-service read to a released, already reported attempt reporting a tx at another nonce', async () => {
+    it('answers 409 version_conflict without any tx-service read to a released, already reported attempt reporting a tx at another nonce', async () => {
       const pr = await proposed();
       await p.release(orgA, pr.runId, pr.attemptId, member).expect(200);
       const wrong = p.chain.propose(SAFE_A, 6, pr.calls);
@@ -643,12 +414,12 @@ describe('payout proposals API', () => {
           safeTxHash: wrong.safeTxHash,
         })
         .expect(409);
-      expect(res.body.code).toBe('proposal_closed');
+      expect(res.body.code).toBe('version_conflict');
       expect(p.chain.repo.getMultiSigTransaction).not.toHaveBeenCalled();
       expect(p.chain.repo.getMultisigTransactions).not.toHaveBeenCalled();
     });
 
-    it('answers 409 retry_later to a report on a verifying run', async () => {
+    it('answers 409 run_locked to a report on a verifying run', async () => {
       const c = await claimed();
       p.chain.execute(
         p.chain.propose(SAFE_A, 5, [
@@ -668,10 +439,13 @@ describe('payout proposals API', () => {
           safeTxHash: tx.safeTxHash,
         })
         .expect(409);
-      expect(res.body.code).toBe('retry_later');
+      expect(res.body).toMatchObject({
+        code: 'run_locked',
+        status: 'verifying',
+      });
     });
 
-    it('answers 503 tx_not_indexed to a hash the tx-service does not know yet and keeps the attempt open', async () => {
+    it('answers 503 tx_service_unavailable to a hash the tx-service does not know yet and keeps the attempt open', async () => {
       const c = await claimed();
       const res = await p
         .report(orgA, c.runId, member, {
@@ -680,13 +454,13 @@ describe('payout proposals API', () => {
           safeTxHash: `0x${'7'.repeat(64)}`,
         })
         .expect(503);
-      expect(res.body.code).toBe('tx_not_indexed');
+      expect(res.body.code).toBe('tx_service_unavailable');
       expect(await p.runRow(orgA, c.runId)).toMatchObject({
         status: 'proposing',
       });
     });
 
-    it('answers 409 proposal_closed before any tx-service read when the run is not open for a report', async () => {
+    it('answers 409 version_conflict before any tx-service read when the run is not open for a report', async () => {
       const pr = await proposed();
       p.chain.repo.getMultiSigTransaction.mockClear();
       const other = p.chain.propose(SAFE_A, 5, pr.calls);
@@ -697,7 +471,7 @@ describe('payout proposals API', () => {
           safeTxHash: other.safeTxHash,
         })
         .expect(409);
-      expect(res.body.code).toBe('proposal_closed');
+      expect(res.body.code).toBe('version_conflict');
       expect(p.chain.repo.getMultiSigTransaction).not.toHaveBeenCalled();
     });
 
@@ -740,89 +514,7 @@ describe('payout proposals API', () => {
       });
     });
 
-    it('rejects a tx whose returned fields do not hash to the reported safeTxHash', async () => {
-      const c = await claimed();
-      // the tx-service copy claims a hash its fields do not produce
-      const tx = p.chain.propose(SAFE_A, 5, c.calls, {
-        safeTxHash: `0x${'5a'.repeat(32)}`,
-      });
-      const res = await p
-        .report(orgA, c.runId, member, {
-          attemptId: c.attemptId,
-          expectedVersion: c.version,
-          safeTxHash: tx.safeTxHash,
-        })
-        .expect(422);
-      expect(res.body).toMatchObject({
-        code: 'tx_mismatch',
-        field: 'safeTxHash',
-      });
-      expect(p.chain.repo.getSafe).toHaveBeenCalledWith({
-        chainId: '1',
-        address: SAFE_A,
-      });
-    });
-
-    it('clears the cached Safe before reading the version the hash is checked with', async () => {
-      const c = await claimed();
-      const tx = p.chain.propose(SAFE_A, 5, c.calls);
-      p.chain.repo.clearSafe.mockClear();
-      p.chain.repo.getSafe.mockClear();
-      await p
-        .report(orgA, c.runId, member, {
-          attemptId: c.attemptId,
-          expectedVersion: c.version,
-          safeTxHash: tx.safeTxHash,
-        })
-        .expect(200);
-      expect(p.chain.repo.clearSafe.mock.invocationCallOrder[0]).toBeLessThan(
-        p.chain.repo.getSafe.mock.invocationCallOrder[0],
-      );
-    });
-
-    it('accepts a tx signed before the Safe was upgraded across 1.3.0 (domain without chainId)', async () => {
-      const c = await claimed();
-      const tx = p.chain.propose(SAFE_A, 5, c.calls);
-      // signed under a 1.2.0 domain; the Safe now reports 1.3.0
-      tx.safeTxHash = getSafeTxHash({
-        chainId: '1',
-        transaction: tx,
-        safe: { address: SAFE_A, version: '1.2.0' } as Safe,
-      });
-      await p
-        .report(orgA, c.runId, member, {
-          attemptId: c.attemptId,
-          expectedVersion: c.version,
-          safeTxHash: tx.safeTxHash,
-        })
-        .expect(200);
-      expect(await p.runRow(orgA, c.runId)).toMatchObject({
-        status: 'proposed',
-        safe_tx_hash: tx.safeTxHash.toLowerCase(),
-      });
-    });
-
-    it('fails closed with tx_mismatch when the Safe version is unknown', async () => {
-      const c = await claimed();
-      const tx = p.chain.propose(SAFE_A, 5, c.calls);
-      p.chain.repo.getSafe.mockResolvedValueOnce({
-        address: SAFE_A,
-        version: null,
-      } as Safe);
-      const res = await p
-        .report(orgA, c.runId, member, {
-          attemptId: c.attemptId,
-          expectedVersion: c.version,
-          safeTxHash: tx.safeTxHash,
-        })
-        .expect(422);
-      expect(res.body).toMatchObject({
-        code: 'tx_mismatch',
-        field: 'safeTxHash',
-      });
-    });
-
-    it('answers 422 multisend_unknown when the outer target is not a MultiSendCallOnly', async () => {
+    it('answers 422 tx_mismatch field multisend when the outer target is not a MultiSendCallOnly', async () => {
       const c = await claimed();
       const tx = p.chain.propose(SAFE_A, 5, c.calls, { to: addr(0xbad) });
       const res = await p
@@ -833,12 +525,12 @@ describe('payout proposals API', () => {
         })
         .expect(422);
       expect(res.body).toMatchObject({
-        code: 'multisend_unknown',
-        field: 'to',
+        code: 'tx_mismatch',
+        field: 'multisend',
       });
     });
 
-    it('is idempotent for the same safeTxHash and 409 for a hash used by another run', async () => {
+    it('is idempotent for the same safeTxHash and refuses the hash for another run at another nonce', async () => {
       const first = await proposed();
       // same report again: 200, nothing new
       const again = await p
@@ -865,8 +557,8 @@ describe('payout proposals API', () => {
           expectedVersion: second.version,
           safeTxHash: first.tx.safeTxHash,
         })
-        .expect(409);
-      expect(res.body.code).toBe('tx_taken');
+        .expect(422);
+      expect(res.body).toMatchObject({ code: 'tx_mismatch', field: 'nonce' });
       // idempotent after settlement too
       await p
         .report(orgA, first.runId, member, {
@@ -956,21 +648,22 @@ describe('payout proposals API', () => {
       expect(await p.events('payout_run.proposed')).toHaveLength(1);
     });
 
-    it('adopts a late matching report at N after a release', async () => {
+    it('refuses a report after a release with version_conflict (no late adoption)', async () => {
       const c = await claimed();
       await p.release(orgA, c.runId, c.attemptId, member).expect(200);
-      // the hardware wallet finishes after the release
       const tx = p.chain.propose(SAFE_A, 5, c.calls);
       const res = await p
         .report(orgA, c.runId, member, {
           attemptId: c.attemptId,
+          expectedVersion: c.version,
           safeTxHash: tx.safeTxHash,
         })
-        .expect(200);
-      expect(res.body.run).toMatchObject({
-        status: 'proposed',
-        safeTxHash: tx.safeTxHash,
-        latestAttempt: { id: c.attemptId, status: 'reported' },
+        .expect(409);
+      expect(res.body.code).toBe('version_conflict');
+      expect(await p.runRow(orgA, c.runId)).toMatchObject({
+        status: 'draft',
+        pinned_nonce: '5',
+        safe_tx_hash: null,
       });
     });
 
@@ -992,7 +685,7 @@ describe('payout proposals API', () => {
           safeTxHash: old.safeTxHash,
         })
         .expect(409);
-      expect(res.body.code).toBe('proposal_closed');
+      expect(res.body.code).toBe('version_conflict');
       expect(await p.runRow(orgA, c.runId)).toMatchObject({
         status: 'draft',
         pinned_nonce: '5',
@@ -1049,7 +742,7 @@ describe('payout proposals API', () => {
       const again = await p
         .release(orgA, c.runId, c.attemptId, admin)
         .expect(409);
-      expect(again.body.code).toBe('proposal_closed');
+      expect(again.body.code).toBe('version_conflict');
     });
 
     it('releases a proposed run and clears its reported hash', async () => {
@@ -1100,6 +793,235 @@ describe('payout proposals API', () => {
         true,
         false,
       ]);
+    });
+  });
+
+  describe('resolve', () => {
+    /** A run settled needs_review (pin already cleared). */
+    async function needsReview(): Promise<{ runId: string; version: number }> {
+      const b = await built();
+      await p.asOrg(orgA, (em) =>
+        em.query(
+          `UPDATE payout_runs SET status = 'needs_review', review = '{"reason":"partial_overlap"}', version = version + 1
+            WHERE id = $1`,
+          [b.runId],
+        ),
+      );
+      return { runId: b.runId, version: b.version + 1 };
+    }
+    const resolve = (
+      runId: string,
+      who: User,
+      body: object,
+    ): ReturnType<PayoutTestApp['write']> =>
+      p.write('post', `${orgA}/payout-runs/${runId}/resolve`, who, body);
+
+    it('lets payouts.manage resolve a needs_review run with a note: final, stored and logged', async () => {
+      const r = await needsReview();
+      const res = await resolve(r.runId, admin, {
+        expectedVersion: r.version,
+        note: 'checked on-chain, Bob paid in full',
+      }).expect(200);
+      expect(res.body.run).toMatchObject({
+        status: 'resolved',
+        version: r.version + 1,
+        actions: {
+          edit: false,
+          build: false,
+          propose: false,
+          release: false,
+          cancelReservation: false,
+          delete: false,
+          resolve: false,
+        },
+      });
+      expect(await p.runRow(orgA, r.runId)).toMatchObject({
+        status: 'resolved',
+        resolved_by: admin.userId,
+        resolved_at: expect.any(Date),
+        resolution_note: 'checked on-chain, Bob paid in full',
+      });
+      const [event] = await p.events('payout_run.resolved');
+      expect(event.payload).toEqual({
+        name: 'March',
+        note: 'checked on-chain, Bob paid in full',
+      });
+      // final: not editable, not resolvable again
+      const patch = await p
+        .write('patch', `${orgA}/payout-runs/${r.runId}`, admin, {
+          expectedVersion: r.version + 1,
+          name: 'x',
+        })
+        .expect(409);
+      expect(patch.body).toMatchObject({
+        code: 'run_locked',
+        status: 'resolved',
+      });
+      const again = await resolve(r.runId, admin, {
+        expectedVersion: r.version + 1,
+      }).expect(409);
+      expect(again.body).toMatchObject({
+        code: 'run_locked',
+        status: 'resolved',
+      });
+    });
+
+    it('stores a missing note as null', async () => {
+      const r = await needsReview();
+      await resolve(r.runId, admin, { expectedVersion: r.version }).expect(200);
+      expect(await p.runRow(orgA, r.runId)).toMatchObject({
+        status: 'resolved',
+        resolution_note: null,
+      });
+      const [event] = await p.events('payout_run.resolved');
+      expect(event.payload).toEqual({ name: 'March', note: null });
+    });
+
+    it('refuses a member without payouts.manage with 403', async () => {
+      const r = await needsReview();
+      await resolve(r.runId, member, { expectedVersion: r.version }).expect(
+        403,
+      );
+      expect(await p.runRow(orgA, r.runId)).toMatchObject({
+        status: 'needs_review',
+      });
+    });
+
+    it('answers 409 run_locked { status } outside needs_review', async () => {
+      const b = await built();
+      const res = await resolve(b.runId, admin, {
+        expectedVersion: b.version,
+      }).expect(409);
+      expect(res.body).toMatchObject({
+        code: 'run_locked',
+        status: 'draft',
+        message: expect.any(String),
+      });
+    });
+
+    it('answers 409 version_conflict to a stale expectedVersion and 400 to a note over 500 characters', async () => {
+      const r = await needsReview();
+      const stale = await resolve(r.runId, admin, {
+        expectedVersion: r.version - 1,
+      }).expect(409);
+      expect(stale.body.code).toBe('version_conflict');
+      await resolve(r.runId, admin, {
+        expectedVersion: r.version,
+        note: 'x'.repeat(501),
+      }).expect(400);
+      expect(await p.runRow(orgA, r.runId)).toMatchObject({
+        status: 'needs_review',
+      });
+    });
+  });
+
+  describe('actions', () => {
+    const actionsOf = async (
+      runId: string,
+      who: User,
+    ): Promise<Record<string, boolean>> =>
+      (await p.detail(orgA, runId, who)).run.actions;
+    const none = {
+      edit: false,
+      build: false,
+      propose: false,
+      release: false,
+      cancelReservation: false,
+      delete: false,
+      resolve: false,
+    };
+
+    it('allows edit, build and delete of an unbuilt draft, propose once built', async () => {
+      const created = await p.createRun(orgA, safeA, member);
+      expect(await actionsOf(created.run.id, member)).toEqual({
+        ...none,
+        edit: true,
+        build: true,
+        delete: true,
+      });
+      await p.build(orgA, created.run.id, member);
+      expect(await actionsOf(created.run.id, member)).toEqual({
+        ...none,
+        edit: true,
+        build: true,
+        propose: true,
+        delete: true,
+      });
+    });
+
+    it('allows release and cancelReservation of a proposing or proposed run to the claimer and payouts.manage only', async () => {
+      const c = await claimed(member);
+      const active = { ...none, release: true, cancelReservation: true };
+      expect(await actionsOf(c.runId, member)).toEqual(active);
+      expect(await actionsOf(c.runId, admin)).toEqual(active);
+      expect(await actionsOf(c.runId, member2)).toEqual(none);
+      const tx = p.chain.propose(SAFE_A, 5, c.calls);
+      await p
+        .report(orgA, c.runId, member, {
+          attemptId: c.attemptId,
+          expectedVersion: c.version,
+          safeTxHash: tx.safeTxHash,
+        })
+        .expect(200);
+      expect(await actionsOf(c.runId, member)).toEqual(active);
+      expect(await actionsOf(c.runId, member2)).toEqual(none);
+    });
+
+    it('keeps a released pinned draft editable and cancellable but not deletable', async () => {
+      const c = await claimed();
+      await p.release(orgA, c.runId, c.attemptId, member).expect(200);
+      expect(await actionsOf(c.runId, member2)).toEqual({
+        ...none,
+        edit: true,
+        build: true,
+        propose: true,
+        cancelReservation: true,
+      });
+    });
+
+    it('allows nothing while verifying', async () => {
+      const r = await proposed();
+      p.chain.execute(r.tx, { ago: 60_000 });
+      await p.updater.run();
+      expect(await actionsOf(r.runId, admin)).toEqual(none);
+    });
+
+    it('lets only payouts.manage delete a settled run with attempts and resolve a needs_review run', async () => {
+      const c = await claimed();
+      await p.release(orgA, c.runId, c.attemptId, member).expect(200);
+      p.chain.execute(
+        p.chain.propose(SAFE_A, 5, [
+          toCall({ recipient: CAROL, token: 'native', amountRaw: 1n }),
+        ]),
+        { success: false },
+      );
+      await p.updater.run();
+      const editable = { ...none, edit: true, build: true, propose: true };
+      expect(await actionsOf(c.runId, member)).toEqual(editable);
+      expect(await actionsOf(c.runId, admin)).toEqual({
+        ...editable,
+        delete: true,
+      });
+      await p.asOrg(orgA, (em) =>
+        em.query(
+          `UPDATE payout_runs SET status = 'needs_review', review = '{"reason":"partial_overlap"}' WHERE id = $1`,
+          [c.runId],
+        ),
+      );
+      expect(await actionsOf(c.runId, member)).toEqual(none);
+      expect(await actionsOf(c.runId, admin)).toEqual({
+        ...none,
+        resolve: true,
+      });
+    });
+
+    it('allows no edit, build or propose once the Safe is unlinked', async () => {
+      const b = await built();
+      await p.t.sql.query(`DELETE FROM linked_safes WHERE id = $1`, [safeA]);
+      expect(await actionsOf(b.runId, member)).toEqual({
+        ...none,
+        delete: true,
+      });
     });
   });
 
@@ -1234,7 +1156,7 @@ describe('payout proposals API', () => {
       const c = await claimed();
       await p.release(orgA, c.runId, c.attemptId, member).expect(200);
       const { run } = await p.detail(orgA, c.runId, member);
-      // N goes to an unrelated tx: the draft only loses its pin
+      // N goes to an unrelated tx that reverted
       p.chain.execute(
         p.chain.propose(SAFE_A, 5, [
           toCall({ recipient: CAROL, token: 'native', amountRaw: 1n }),
@@ -1250,7 +1172,7 @@ describe('payout proposals API', () => {
       // settled meanwhile: the version moved, the claim is retried on the fresh run
       expect(res.body.code).toBe('version_conflict');
       expect(await p.runRow(orgA, c.runId)).toMatchObject({
-        status: 'draft',
+        status: 'failed',
         pinned_nonce: null,
       });
       const fresh = await p.detail(orgA, c.runId, member);
@@ -1286,37 +1208,6 @@ describe('payout proposals API', () => {
         ),
       );
       await p.createRun(orgA, safeA, member);
-    });
-
-    it('answers 409 pin_limit at 50 pinned runs of the org', async () => {
-      await p.asOrg(orgA, (em) =>
-        em.query(
-          `INSERT INTO payout_runs (org_id, chain_id, safe_address, name, status, pinned_nonce)
-           SELECT $1, '1', '0x' || lpad(to_hex(4096 + g), 40, '0'), 'r' || g, 'proposing', 1
-             FROM generate_series(1, 50) g`,
-          [orgA],
-        ),
-      );
-      const b = await built();
-      const res = await p
-        .claim(orgA, b.runId, member, { expectedVersion: b.version, nonce: 5 })
-        .expect(409);
-      expect(res.body.code).toBe('pin_limit');
-    });
-
-    it('lets payouts.manage claim past pin_limit', async () => {
-      await p.asOrg(orgA, (em) =>
-        em.query(
-          `INSERT INTO payout_runs (org_id, chain_id, safe_address, name, status, pinned_nonce)
-           SELECT $1, '1', '0x' || lpad(to_hex(4096 + g), 40, '0'), 'r' || g, 'proposing', 1
-             FROM generate_series(1, 50) g`,
-          [orgA],
-        ),
-      );
-      const b = await built(admin);
-      await p
-        .claim(orgA, b.runId, admin, { expectedVersion: b.version, nonce: 5 })
-        .expect(201);
     });
 
     describe('run_limit on reopening a settled run', () => {
@@ -1390,77 +1281,6 @@ describe('payout proposals API', () => {
           .expect(201);
       });
     });
-
-    describe('idle pinned draft back-off', () => {
-      const idleMap = (): Map<string, number> =>
-        (p.updater as unknown as { idlePolledAt: Map<string, number> })
-          .idlePolledAt;
-
-      /** Claimed, reported, released: nothing of ours left to adopt at N. */
-      async function idleDraft(): Promise<string> {
-        const c = await claimed();
-        const tx = p.chain.propose(SAFE_A, 5, c.calls);
-        await p
-          .report(orgA, c.runId, member, {
-            attemptId: c.attemptId,
-            expectedVersion: c.version,
-            safeTxHash: tx.safeTxHash,
-          })
-          .expect(200);
-        await p.release(orgA, c.runId, c.attemptId, member).expect(200);
-        return c.runId;
-      }
-
-      it('polls a pinned draft with no adoptable attempt at most every 30 minutes', async () => {
-        await idleDraft();
-        p.chain.repo.getNonces.mockClear();
-        await p.updater.run();
-        await p.updater.run();
-        expect(p.chain.repo.getNonces).toHaveBeenCalledTimes(1);
-        p.t.setOffset(31 * 60_000);
-        await p.updater.run();
-        expect(p.chain.repo.getNonces).toHaveBeenCalledTimes(2);
-        // an executed-transaction event is never backed off
-        await p.updater.onExecuted('1', SAFE_A, `0x${'1'.repeat(64)}`);
-        expect(p.chain.repo.getNonces).toHaveBeenCalledTimes(3);
-      });
-
-      it('keeps the normal cadence for a released, never reported attempt at N', async () => {
-        const c = await claimed();
-        await p.release(orgA, c.runId, c.attemptId, member).expect(200);
-        p.chain.repo.getNonces.mockClear();
-        await p.updater.run();
-        await p.updater.run();
-        expect(p.chain.repo.getNonces).toHaveBeenCalledTimes(2);
-      });
-
-      it('starts the back-off only after a successful read', async () => {
-        await idleDraft();
-        p.chain.failNonces = true;
-        await p.updater.run();
-        p.chain.failNonces = false;
-        p.chain.repo.getNonces.mockClear();
-        await p.updater.run();
-        expect(p.chain.repo.getNonces).toHaveBeenCalledTimes(1);
-      });
-
-      it('forgets the run once its pin is used', async () => {
-        const runId = await idleDraft();
-        await p.updater.run();
-        expect(idleMap().has(runId)).toBe(true);
-        p.chain.execute(
-          p.chain.propose(SAFE_A, 5, [
-            toCall({ recipient: CAROL, token: 'native', amountRaw: 1n }),
-          ]),
-          { success: false },
-        );
-        await p.updater.onExecuted('1', SAFE_A, `0x${'1'.repeat(64)}`);
-        expect(await p.runRow(orgA, runId)).toMatchObject({
-          pinned_nonce: null,
-        });
-        expect(idleMap().has(runId)).toBe(false);
-      });
-    });
   });
 
   describe('stale authorization', () => {
@@ -1503,9 +1323,9 @@ describe('payout proposals API', () => {
     it('re-checks the permission after the tx-service reads of a report', async () => {
       const c = await claimed();
       const tx = p.chain.propose(SAFE_A, 5, c.calls);
-      p.chain.repo.getSafe.mockImplementationOnce(async () => {
+      p.chain.repo.getMultiSigTransaction.mockImplementationOnce(async () => {
         await revoke(member);
-        return { address: SAFE_A, version: '1.3.0' } as never;
+        return structuredClone(tx);
       });
       await p
         .report(orgA, c.runId, member, {
@@ -1547,7 +1367,7 @@ describe('payout proposals API', () => {
     it('requires payouts.manage to delete a run that has a proposal attempt', async () => {
       const c = await claimed();
       await p.release(orgA, c.runId, c.attemptId, member).expect(200);
-      // N goes to an unrelated tx: the draft loses its pin, the attempt stays
+      // N goes to an unrelated tx: the run loses its pin, the attempt stays
       p.chain.execute(
         p.chain.propose(SAFE_A, 5, [
           toCall({ recipient: CAROL, token: 'native', amountRaw: 1n }),
@@ -1556,7 +1376,7 @@ describe('payout proposals API', () => {
       );
       await p.updater.run();
       expect(await p.runRow(orgA, c.runId)).toMatchObject({
-        status: 'draft',
+        status: 'failed',
         pinned_nonce: null,
       });
       const res = await p

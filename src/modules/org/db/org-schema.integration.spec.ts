@@ -635,7 +635,7 @@ describe('org schema (through the app login)', () => {
         ).rejects.toThrow(/permission denied/);
       });
 
-      it('allows only open→reported→released→reported and open→released', async () => {
+      it('allows only open→reported→released and open→released', async () => {
         await expect(
           inA((em) =>
             em.query(
@@ -656,8 +656,7 @@ describe('org schema (through the app login)', () => {
           ),
         ).resolves.toBeDefined();
         await expect(setStatus('open')).rejects.toThrow(/transition/);
-        await expect(setStatus('released')).resolves.toBeDefined();
-        await expect(setStatus('reported')).resolves.toBeDefined();
+        await expect(setStatus('reported')).rejects.toThrow(/transition/);
       });
 
       it('allows open→released', async () => {

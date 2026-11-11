@@ -529,7 +529,8 @@ export async function createPayoutTestApp(
           (
             await em.query(
               `SELECT status, version, pinned_nonce::text AS pinned_nonce, safe_tx_hash, nonce::text AS nonce,
-                      executed_tx_hash, verifying_since, delay_notified_at, review, evaluation
+                      executed_tx_hash, verifying_since, review, evaluation,
+                      resolved_by, resolved_at, resolution_note
                  FROM payout_runs WHERE id = $1`,
               [runId],
             )

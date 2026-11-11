@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   BadGatewayException,
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Inject,
   Injectable,
@@ -95,7 +96,6 @@ export type PayoutRunRow = {
   nonce: string | null;
   executed_tx_hash: string | null;
   verifying_since: Date | null;
-  delay_notified_at: Date | null;
   review: PayoutReview | null;
   created_at: Date;
 };
@@ -116,7 +116,7 @@ export type PayoutItemRow = {
 
 const RUN_COLUMNS = `id, org_id, chain_id, safe_address::text AS safe_address, name, status, version,
   created_by, calls, est_gas::text AS est_gas, evaluation, pinned_nonce::text AS pinned_nonce,
-  safe_tx_hash, nonce::text AS nonce, executed_tx_hash, verifying_since, delay_notified_at,
+  safe_tx_hash, nonce::text AS nonce, executed_tx_hash, verifying_since,
   review, created_at`;
 
 // abuse limits (milestone P): creation is cheap to call and costly to serve
@@ -152,6 +152,19 @@ export async function assertRunCapacity(
       `The organization has ${MAX_OPEN_RUNS_PER_ORG} open payout runs; settle or delete some first`,
     );
   }
+}
+
+/** 409 `run_locked { status }`: the run's status does not allow the action. */
+export function runLocked(
+  status: PayoutRunStatus,
+  message: string,
+): ConflictException {
+  return new ConflictException({
+    statusCode: 409,
+    code: 'run_locked',
+    status,
+    message,
+  });
 }
 
 /**
@@ -252,7 +265,7 @@ const BALANCE_STATUSES: ReadonlyArray<PayoutRunStatus> = [
   'proposed',
 ];
 const LOCKED_MESSAGE =
-  'The run is being proposed or settled; it cannot be changed now';
+  'The run is being proposed or settled, or it is final; it cannot be changed now';
 
 const AMOUNT_REASONS: Record<AmountError['code'], string> = {
   too_many_decimals: 'too_many_decimals',
@@ -557,7 +570,7 @@ export class PayoutRunsService {
         `UPDATE payout_runs
             SET name = $3, status = 'draft', version = version + 1, calls = NULL, est_gas = NULL,
                 evaluation = NULL, safe_tx_hash = NULL, nonce = NULL, executed_tx_hash = NULL,
-                review = NULL, verifying_since = NULL, delay_notified_at = NULL, updated_at = now()
+                review = NULL, verifying_since = NULL, updated_at = now()
           WHERE org_id = $1 AND id = $2`,
         [orgId, runId, name],
       );
@@ -621,7 +634,7 @@ export class PayoutRunsService {
         `UPDATE payout_runs
             SET status = 'draft', version = version + 1, calls = $3::jsonb, est_gas = $4,
                 evaluation = $5::jsonb, safe_tx_hash = NULL, nonce = NULL, executed_tx_hash = NULL,
-                review = NULL, verifying_since = NULL, delay_notified_at = NULL, updated_at = now()
+                review = NULL, verifying_since = NULL, updated_at = now()
           WHERE org_id = $1 AND id = $2`,
         [
           orgId,
@@ -900,6 +913,14 @@ export class PayoutRunsService {
       [orgId, r.chain_id],
     );
     const known = new Set(contacts.map((c) => c.address));
+    const permissions =
+      (await this.resolver.effective(orgId, userId, em))?.permissions ?? [];
+    const prepare = permissions.includes('payouts.prepare');
+    const manage = permissions.includes('payouts.manage');
+    const editable = EDITABLE_STATUSES.includes(r.status);
+    const linked = r.linked_safe_id !== null;
+    const latestAttempt = await this.latestAttempt(em, r, userId, manage);
+    const releasable = latestAttempt?.releasable ?? false;
 
     return {
       run: {
@@ -920,8 +941,25 @@ export class PayoutRunsService {
         review: r.review,
         pinnedNonce: r.pinned_nonce,
         verifyingSince: r.verifying_since?.toISOString() ?? null,
-        delayNotified: r.delay_notified_at !== null,
-        latestAttempt: await this.latestAttempt(em, r, userId),
+        latestAttempt,
+        actions: {
+          edit: prepare && editable && linked,
+          build: prepare && editable && linked,
+          propose: prepare && editable && linked && r.calls !== null,
+          release: releasable,
+          // the UI's on-chain rejection at the pin; an active attempt is released first
+          cancelReservation:
+            prepare &&
+            r.pinned_nonce !== null &&
+            (r.status === 'draft' || releasable),
+          // a proposed run's attempts are evidence: only payouts.manage deletes it
+          delete:
+            prepare &&
+            editable &&
+            r.pinned_nonce === null &&
+            (manage || latestAttempt === null),
+          resolve: manage && r.status === 'needs_review',
+        },
       },
       items: rows.map((i, index) => ({
         id: i.id,
@@ -951,6 +989,7 @@ export class PayoutRunsService {
     em: EntityManager,
     r: PayoutRunRow,
     userId: string,
+    manage: boolean,
   ): Promise<PayoutAttemptView | null> {
     const active = r.status === 'proposing' || r.status === 'proposed';
     const WHERE: Partial<Record<PayoutRunStatus, string>> = {
@@ -974,12 +1013,7 @@ export class PayoutRunsService {
     );
     if (!a) return null;
     // the claimer or payouts.manage may release the active attempt (B8)
-    const releasable =
-      active &&
-      (a.created_by === userId ||
-        !!(
-          await this.resolver.effective(r.org_id, userId, em)
-        )?.permissions.includes('payouts.manage'));
+    const releasable = active && (a.created_by === userId || manage);
     return {
       id: a.id,
       status: a.status,
@@ -1050,7 +1084,7 @@ export class PayoutRunsService {
 
   private assertEditable(run: PayoutRunRow): void {
     if (!EDITABLE_STATUSES.includes(run.status)) {
-      throw conflict('run_locked', LOCKED_MESSAGE);
+      throw runLocked(run.status, LOCKED_MESSAGE);
     }
   }
 

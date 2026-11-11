@@ -25,6 +25,10 @@ export const UpdatePayoutRunSchema = z.object({
   rows: rows.optional(),
 });
 export const BuildPayoutRunSchema = z.object({ expectedVersion });
+export const ResolvePayoutRunSchema = z.object({
+  expectedVersion,
+  note: z.string().max(500).optional(),
+});
 export const ListPayoutRunsSchema = z.object({
   linkedSafeId: z.uuid().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
@@ -35,6 +39,7 @@ export type ListPayoutRuns = z.infer<typeof ListPayoutRunsSchema>;
 
 export type PayoutRowInput = z.infer<typeof PayoutRowInputSchema>;
 export type UpdatePayoutRun = z.infer<typeof UpdatePayoutRunSchema>;
+export type ResolvePayoutRun = z.infer<typeof ResolvePayoutRunSchema>;
 
 export type PayoutRunStatus =
   | 'draft'
@@ -45,7 +50,9 @@ export type PayoutRunStatus =
   | 'failed'
   | 'replaced'
   | 'rejected'
-  | 'needs_review';
+  | 'needs_review'
+  /** needs_review closed by hand (`payouts.manage`); final */
+  | 'resolved';
 
 /** PATCH, DELETE and build are allowed only here (canonical status table). */
 export const EDITABLE_STATUSES: ReadonlyArray<PayoutRunStatus> = [
@@ -65,23 +72,20 @@ export type PayoutItemWarning =
 export type StoredCall = { to: string; value: string; data: string };
 
 export type PayoutReview = {
-  reason:
-    | 'missing_transfers'
-    | 'partial_overlap'
-    | 'undecodable'
-    | 'indirect_unproven'
-    | 'stray_proposal'
-    /** a warning, status kept: the run's calls executed under another hash than the reported one */
-    | 'executed_other_hash';
+  reason: 'missing_transfers' | 'partial_overlap';
+  /** `missing_transfers`: the item lines without their transfer */
   lines?: Array<number>;
-  /** `stray_proposal`: the queued copy of the run owners must reject. */
-  nonce?: string;
-  safeTxHash?: string;
-  /** `stray_proposal` once settled: the outcome at the run's nonce and whether the copy executed too. */
-  outcome?: 'executed' | 'failed' | 'replaced' | 'rejected' | 'needs_review';
-  strayExecuted?: boolean;
-  /** The reported hash when another safeTxHash with the run's calls executed (`safeTxHash` of the run is the executed one). */
-  reportedSafeTxHash?: string;
+};
+
+/** What the calling member may do with the run now (permissions, status, attempts, pin). */
+export type PayoutRunActions = {
+  edit: boolean;
+  build: boolean;
+  propose: boolean;
+  release: boolean;
+  cancelReservation: boolean;
+  delete: boolean;
+  resolve: boolean;
 };
 
 export type PayoutRunListItem = {
@@ -129,8 +133,8 @@ export type PayoutRunView = {
   review: PayoutReview | null;
   pinnedNonce: string | null;
   verifyingSince: string | null;
-  delayNotified: boolean;
   latestAttempt: PayoutAttemptView | null;
+  actions: PayoutRunActions;
 };
 
 export type PayoutItemView = {

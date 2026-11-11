@@ -431,8 +431,16 @@ describe('payout runs API', () => {
       review: null,
       pinnedNonce: null,
       verifyingSince: null,
-      delayNotified: false,
       latestAttempt: null,
+      actions: {
+        edit: true,
+        build: true,
+        propose: false,
+        release: false,
+        cancelReservation: false,
+        delete: true,
+        resolve: false,
+      },
     });
     expect(body.items).toEqual([
       {
@@ -805,20 +813,20 @@ describe('payout runs API', () => {
           name: 'x',
         },
       ).expect(409);
-      expect(patch.body.code).toBe('run_locked');
+      expect(patch.body).toMatchObject({ code: 'run_locked', status });
       const del = await write(
         'delete',
         `${orgA}/payout-runs/${run.id}`,
         member,
       ).expect(409);
-      expect(del.body.code).toBe('run_locked');
+      expect(del.body).toMatchObject({ code: 'run_locked', status });
       const build = await write(
         'post',
         `${orgA}/payout-runs/${run.id}/build`,
         member,
         { expectedVersion: 1 },
       ).expect(409);
-      expect(build.body.code).toBe('run_locked');
+      expect(build.body).toMatchObject({ code: 'run_locked', status });
     }
   });
 
@@ -923,17 +931,12 @@ describe('payout runs API', () => {
     );
     expect(asOther.body.run.latestAttempt.releasable).toBe(false);
 
-    await setRun(
-      orgA,
-      run.id,
-      `status = 'verifying', verifying_since = now(), delay_notified_at = now()`,
-    );
+    await setRun(orgA, run.id, `status = 'verifying', verifying_since = now()`);
     const verifying = await get(`${orgA}/payout-runs/${run.id}`, member).expect(
       200,
     );
     expect(verifying.body.run).toMatchObject({
       verifyingSince: expect.any(String),
-      delayNotified: true,
       latestAttempt: { releasable: false },
     });
     // nothing left to pay from the balance
@@ -1157,7 +1160,7 @@ describe('payout runs API', () => {
     ).toEqual([[], []]);
   });
 
-  it('exposes the attempt of the active proposal, not the newest one, after release A, claim and release B, late report of A', async () => {
+  it('exposes the attempt of the active proposal, not the newest one, after release A, claim and release B', async () => {
     const { run } = await createRun();
     const attempt = (): Promise<string> =>
       asOrg(orgA, async (em) => {
@@ -1194,21 +1197,6 @@ describe('payout runs API', () => {
     expect(draft.body.run.latestAttempt).toMatchObject({
       id: b,
       releasable: false,
-    });
-    const hash = `0x${'ab'.repeat(32)}`;
-    await setAttempt(a, `status = 'reported', safe_tx_hash = '${hash}'`);
-    await setRun(
-      orgA,
-      run.id,
-      `status = 'proposed', safe_tx_hash = '${hash}', nonce = 9`,
-    );
-    const proposed = await get(`${orgA}/payout-runs/${run.id}`, member).expect(
-      200,
-    );
-    expect(proposed.body.run.latestAttempt).toMatchObject({
-      id: a,
-      status: 'reported',
-      releasable: true,
     });
   });
 
