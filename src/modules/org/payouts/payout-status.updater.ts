@@ -209,7 +209,7 @@ export class PayoutStatusUpdater
         em.query(
           `SELECT chain_id, safe_address::text AS safe_address, status, pinned_nonce::text AS pinned_nonce,
                   (SELECT min(a.created_at) FROM payout_proposal_attempts a
-                    WHERE a.org_id = r.org_id AND a.run_id = r.id) AS first_attempt_at,
+                    WHERE a.org_id = r.org_id AND a.run_id = r.id AND a.nonce = r.pinned_nonce) AS first_attempt_at,
                   EXISTS (SELECT 1 FROM payout_proposal_attempts a
                     WHERE a.org_id = r.org_id AND a.run_id = r.id AND a.nonce = r.pinned_nonce
                       AND a.status = 'released' AND a.safe_tx_hash IS NULL) AS adoptable
@@ -690,15 +690,10 @@ export class PayoutStatusUpdater
                 ...(executedTxHash && { executedTxHash }),
               };
       } else if (stray) {
-        const review = strayReview(stray).review!;
         // the reviewer needs what happened at N and whether the copy already paid
         outcome = {
           status: 'needs_review',
-          review: {
-            ...review,
-            outcome: outcome.status,
-            strayExecuted: stray.isExecuted,
-          },
+          review: { ...strayReview(stray).review!, outcome: outcome.status },
           ...(executedTxHash && { executedTxHash }),
         };
       }
@@ -746,9 +741,11 @@ export class PayoutStatusUpdater
     stray: MultisigTransaction,
   ): Promise<void> {
     const review = strayReview(stray).review!;
+    // same copy, same state: already shown; queued → executed is news
     if (
       run.review?.reason === review.reason &&
-      run.review.safeTxHash === review.safeTxHash
+      run.review.safeTxHash === review.safeTxHash &&
+      run.review.strayExecuted === review.strayExecuted
     )
       return;
     await em.query(
@@ -761,6 +758,7 @@ export class PayoutStatusUpdater
       nonce: run.pinned_nonce,
       strayNonce: review.nonce,
       straySafeTxHash: review.safeTxHash,
+      strayExecuted: review.strayExecuted,
     });
   }
 
@@ -1047,17 +1045,22 @@ const strayReview = (stray: MultisigTransaction): Settlement => ({
     reason: 'stray_proposal',
     nonce: String(stray.nonce),
     safeTxHash: stray.safeTxHash,
+    strayExecuted: stray.isExecuted,
   },
 });
 
-/** When the run's first proposal attempt was claimed; null: none yet. */
+/**
+ * When the run's first proposal attempt at its current pin was claimed; null:
+ * unpinned or none yet. Earlier pins were checked when they settled.
+ */
 export async function firstAttemptAt(
   em: EntityManager,
-  run: Pick<PayoutRunRow, 'org_id' | 'id'>,
+  run: Pick<PayoutRunRow, 'org_id' | 'id' | 'pinned_nonce'>,
 ): Promise<Date | null> {
+  if (run.pinned_nonce === null) return null;
   const [{ first }]: Array<{ first: Date | null }> = await em.query(
-    `SELECT min(created_at) AS first FROM payout_proposal_attempts WHERE org_id = $1 AND run_id = $2`,
-    [run.org_id, run.id],
+    `SELECT min(created_at) AS first FROM payout_proposal_attempts WHERE org_id = $1 AND run_id = $2 AND nonce = $3`,
+    [run.org_id, run.id, run.pinned_nonce],
   );
   return first;
 }

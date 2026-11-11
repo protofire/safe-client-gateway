@@ -976,6 +976,7 @@ describe('PayoutStatusUpdater', () => {
       nonce: '5',
       strayNonce: '6',
       straySafeTxHash: copy.safeTxHash,
+      strayExecuted: false,
     });
     const { run } = await p.detail(orgA, r.runId, member);
     expect(run).toMatchObject({
@@ -984,6 +985,7 @@ describe('PayoutStatusUpdater', () => {
         reason: 'stray_proposal',
         nonce: '6',
         safeTxHash: copy.safeTxHash,
+        strayExecuted: false,
       },
     });
 
@@ -1020,6 +1022,7 @@ describe('PayoutStatusUpdater', () => {
       code: 'stray_proposal',
       nonce: '5',
       safeTxHash: copy.safeTxHash,
+      executed: true,
     });
     // N = 7 goes to a rejection
     p.chain.execute(p.chain.txs.find((t) => t.nonce === 6)!);
@@ -1033,6 +1036,46 @@ describe('PayoutStatusUpdater', () => {
       status: 'needs_review',
       review: { reason: 'stray_proposal', nonce: '5' },
     });
+  });
+
+  it('re-emits the stray warning of a proposed run when the queued copy executes', async () => {
+    // current nonce 5, two queued txs: the claim takes 7
+    p.chain.propose(SAFE_A, 5, [native(STRANGER, 1n)]);
+    p.chain.propose(SAFE_A, 6, [native(STRANGER, 2n)]);
+    const c = await claimed(ROWS, orgA, safeA, member, 7);
+    const tx = p.chain.propose(SAFE_A, 7, c.calls);
+    await p
+      .report(orgA, c.runId, member, {
+        attemptId: c.attemptId,
+        expectedVersion: c.version,
+        safeTxHash: tx.safeTxHash,
+      })
+      .expect(200);
+    const copy = p.chain.propose(SAFE_A, 5, c.calls, { trusted: false });
+    await p.updater.run();
+    expect((await p.runRow(orgA, c.runId)).review).toEqual({
+      reason: 'stray_proposal',
+      nonce: '5',
+      safeTxHash: copy.safeTxHash,
+      strayExecuted: false,
+    });
+    p.chain.execute(copy, { ago: 1000 });
+    await p.updater.run();
+    await p.updater.run();
+    expect(await p.runRow(orgA, c.runId)).toMatchObject({
+      status: 'proposed',
+      review: {
+        reason: 'stray_proposal',
+        nonce: '5',
+        safeTxHash: copy.safeTxHash,
+        strayExecuted: true,
+      },
+    });
+    const detected = await p.events('payout_run.stray_detected');
+    expect(detected.map((e) => e.payload)).toEqual([
+      expect.objectContaining({ strayExecuted: false }),
+      expect.objectContaining({ strayExecuted: true }),
+    ]);
   });
 
   it('clears the stray warning of a proposed run once a complete check finds no copy', async () => {

@@ -39,6 +39,7 @@ import {
   type NonceEvidence,
 } from '@/modules/org/payouts/payout-status.updater';
 import { verifyProposedTx } from '@/modules/org/payouts/payout-verify';
+import type { Evaluation } from '@/modules/org/policies/evaluate';
 import {
   EDITABLE_STATUSES,
   type PayoutRunDetail,
@@ -69,7 +70,13 @@ export const ReportProposalSchema = z.object({
 });
 export type ClaimProposal = z.infer<typeof ClaimProposalSchema>;
 export type ReportProposal = z.infer<typeof ReportProposalSchema>;
-export type ClaimResult = { attemptId: string; version: number; nonce: string };
+export type ClaimResult = {
+  attemptId: string;
+  version: number;
+  nonce: string;
+  /** The policy evaluation the claim recomputed and stored on the run. */
+  evaluation: Evaluation | null;
+};
 
 // abuse limits (milestone P): each claim and report reads the tx-service several times
 const CLAIMS_PER_USER_PER_MINUTE = 30;
@@ -244,7 +251,7 @@ export class PayoutProposalsService {
         attemptId,
         nonce: expected,
       });
-      return { attemptId, version, nonce: expected };
+      return { attemptId, version, nonce: expected, evaluation };
     }, orgId);
   }
 
@@ -675,9 +682,12 @@ async function assertNoStray(
   );
   if (stray) {
     throw conflictWith('stray_proposal', {
-      message: `This payout is also queued at nonce ${stray.nonce}; reject that transaction in the Safe queue before proposing it at ${nonce}`,
+      message: stray.isExecuted
+        ? `This payout already executed at nonce ${stray.nonce}; check that payment before proposing it at ${nonce}`
+        : `This payout is also queued at nonce ${stray.nonce}; reject that transaction in the Safe queue before proposing it at ${nonce}`,
       nonce: String(stray.nonce),
       safeTxHash: stray.safeTxHash,
+      executed: stray.isExecuted,
     });
   }
 }

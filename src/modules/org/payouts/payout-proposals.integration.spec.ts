@@ -114,6 +114,7 @@ describe('payout proposals API', () => {
         attemptId: expect.any(String),
         version: b.version + 1,
         nonce: '6',
+        evaluation: { status: 'ok' },
       });
       const { run } = await p.detail(orgA, b.runId, member);
       expect(run).toMatchObject({
@@ -155,11 +156,13 @@ describe('payout proposals API', () => {
           ],
         );
       });
-      await p
+      const res = await p
         .claim(orgA, b.runId, member, { expectedVersion: b.version, nonce: 5 })
         .expect(201);
       const row = await p.runRow(orgA, b.runId);
       expect(row.evaluation).toMatchObject({ status: 'violation' });
+      // returned with the claim, so the signing step shows what was stored
+      expect(res.body.evaluation).toEqual(row.evaluation);
     });
 
     it('answers 409 nonce_mismatch to a stale body nonce and to a re-claim of a pinned draft at another nonce', async () => {
@@ -250,6 +253,7 @@ describe('payout proposals API', () => {
         code: 'stray_proposal',
         nonce: '5',
         safeTxHash: stray.safeTxHash,
+        executed: false,
       });
     });
 
@@ -311,6 +315,38 @@ describe('payout proposals API', () => {
         code: 'tx_service_unavailable',
         message: expect.stringContaining('contact support'),
       });
+    });
+
+    it('looks for executed copies only from the first attempt at the current pin, so a run rebuilt after settlement does not fail closed', async () => {
+      const c = await claimed();
+      await p.release(orgA, c.runId, c.attemptId, member).expect(200);
+      // N goes to an unrelated tx: the draft loses its pin
+      p.chain.execute(
+        p.chain.propose(SAFE_A, 5, [
+          toCall({ recipient: CAROL, token: 'native', amountRaw: 1n }),
+        ]),
+      );
+      await p.updater.run();
+      expect(await p.runRow(orgA, c.runId)).toMatchObject({
+        status: 'draft',
+        pinned_nonce: null,
+      });
+      // more executed history since the old attempt than one read may page through
+      p.chain.txPageSize = 1;
+      for (let i = 6; i < 12; i++)
+        p.chain.execute(
+          p.chain.propose(SAFE_A, i, [
+            toCall({ recipient: CAROL, token: 'native', amountRaw: BigInt(i) }),
+          ]),
+          { ago: 1000 },
+        );
+      const { run } = await p.detail(orgA, c.runId, member);
+      await p
+        .claim(orgA, c.runId, member, {
+          expectedVersion: run.version,
+          nonce: 12,
+        })
+        .expect(201);
     });
 
     it('answers 409 proposal_open to a second claim from another tab', async () => {
