@@ -9,8 +9,11 @@ import type { DataSource, EntityManager } from 'typeorm';
 import type { PostgresConnectionOptions } from 'typeorm/driver/postgres/PostgresConnectionOptions';
 import {
   decodeFunctionData,
+  encodeErrorResult,
   erc20Abi,
   getAddress,
+  parseAbi,
+  size,
   type Address,
   type Hex,
 } from 'viem';
@@ -22,6 +25,7 @@ import {
   type RedisClientType,
 } from '@/datasources/cache/cache.module';
 import { DataSourceError } from '@/domain/errors/data-source.error';
+import { IBlockchainApiManager } from '@/domain/interfaces/blockchain-api.manager.interface';
 import { ITransactionApiManager } from '@/domain/interfaces/transaction-api.manager.interface';
 import { LoggingService } from '@/logging/logging.interface';
 import { IBalancesRepository } from '@/modules/balances/domain/balances.repository.interface';
@@ -38,6 +42,15 @@ import {
 import { ORG_DATA_SOURCE } from '@/modules/org/db/org-data-source';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import { CsvService } from '@/modules/csv-export/csv-utils/csv.service';
+import { multiSendCall } from '@/modules/org/common/__tests__/multisend.builder';
+import {
+  simulationReverted,
+  toCalls as toSafeCalls,
+} from '@/modules/org/payouts/__tests__/payout-test-app';
+import {
+  estimateRunGas,
+  TX_OVERHEAD_GAS,
+} from '@/modules/org/payouts/payout-calls';
 import { PayoutProposalsService } from '@/modules/org/payouts/payout-proposals.service';
 import { PayoutRunsController } from '@/modules/org/payouts/payout-runs.controller';
 import { PayoutRunsService } from '@/modules/org/payouts/payout-runs.service';
@@ -122,6 +135,8 @@ const chainsRepo = { getChain: jest.fn() };
 const txService = { getToken: jest.fn() };
 const txApiManager = { getApi: jest.fn() };
 const balancesRepo = { getBalances: jest.fn() };
+const rpc = { request: jest.fn() };
+const blockchainApis = { getApi: jest.fn() };
 
 type User = { cookie: string; userId: string };
 type Row = { address: string; amount: string; token: string; name?: string };
@@ -323,6 +338,7 @@ describe('payout runs API', () => {
         { provide: IChainsRepository, useValue: chainsRepo },
         { provide: ITransactionApiManager, useValue: txApiManager },
         { provide: IBalancesRepository, useValue: balancesRepo },
+        { provide: IBlockchainApiManager, useValue: blockchainApis },
         { provide: APP_FILTER, useClass: GlobalErrorFilter },
         { provide: APP_FILTER, useClass: ZodErrorFilter },
         ...ORG_APP_GUARDS,
@@ -384,6 +400,8 @@ describe('payout runs API', () => {
       },
     });
     txApiManager.getApi.mockResolvedValue(txService);
+    blockchainApis.getApi.mockResolvedValue(rpc);
+    rpc.request.mockRejectedValue(new Error('rpc down'));
     txService.getToken.mockImplementation((address: Address) => {
       const a = address.toLowerCase();
       if (a === USDC.toLowerCase())
@@ -425,6 +443,7 @@ describe('payout runs API', () => {
       estimatedGas: null,
       gasBound: 6_000_000,
       evaluation: null,
+      simulation: null,
       safeTxHash: null,
       nonce: null,
       executedTxHash: null,
@@ -674,6 +693,103 @@ describe('payout runs API', () => {
     ).expect(200);
     expect(res.body.run.evaluation.violations[0].callPath).toBe('');
     expect(res.body.items[0].warnings).toContain('policy');
+  });
+
+  describe('simulation', () => {
+    const build = (runId: string, version = 1): request.Test =>
+      write('post', `${orgA}/payout-runs/${runId}/build`, member, {
+        expectedVersion: version,
+      });
+    const errorString = (reason: string): Hex =>
+      encodeErrorResult({
+        abi: parseAbi(['error Error(string)']),
+        errorName: 'Error',
+        args: [reason],
+      });
+
+    it('simulates the MultiSendCallOnly delegatecall through the Safe and takes the gas from it', async () => {
+      rpc.request.mockRejectedValue(simulationReverted(100_000n));
+      const { run } = await createRun();
+      const res = await build(run.id).expect(200);
+      const [[{ params }]] = rpc.request.mock.calls;
+      expect(params[0].to).toBe(SAFE_A);
+      expect(params[1]).toBe('latest');
+      expect(res.body.run.simulation).toEqual({
+        ok: true,
+        gasUsed: '100000',
+        at: expect.any(String),
+      });
+      const calls = toSafeCalls((res.body as PayoutRunDetail).run.calls!);
+      const outer = multiSendCall(CALL_ONLY, calls);
+      // estimate × 1.1 + 10k + overhead + 16 gas per outer calldata byte
+      expect(res.body.run.estimatedGas).toBe(
+        Number(
+          110_000n + 10_000n + TX_OVERHEAD_GAS + 16n * BigInt(size(outer.data)),
+        ),
+      );
+      expect(res.body.runWarnings).toEqual([]);
+    });
+
+    it('warns simulation_failed with the revert reason and keeps the fixed gas estimate', async () => {
+      rpc.request.mockRejectedValue(
+        simulationReverted(50_000n, false, errorString('GS013')),
+      );
+      const { run } = await createRun();
+      const res = await build(run.id).expect(200);
+      expect(res.body.run.simulation).toEqual({
+        ok: false,
+        reason: 'GS013',
+        at: expect.any(String),
+      });
+      expect(res.body.runWarnings).toEqual([
+        { code: 'simulation_failed', message: 'GS013' },
+      ]);
+      expect(res.body.run.estimatedGas).toBe(
+        Number(
+          estimateRunGas(toSafeCalls((res.body as PayoutRunDetail).run.calls!)),
+        ),
+      );
+    });
+
+    it('warns simulation_failed with a generic message when the revert has no reason', async () => {
+      rpc.request.mockRejectedValue(simulationReverted(50_000n, false));
+      const { run } = await createRun();
+      const res = await build(run.id).expect(200);
+      expect(res.body.runWarnings).toEqual([
+        {
+          code: 'simulation_failed',
+          message: 'The transaction would fail on-chain',
+        },
+      ]);
+    });
+
+    it('warns simulation_unavailable when the RPC fails, and stores no result', async () => {
+      const { run } = await createRun();
+      const res = await build(run.id).expect(200);
+      expect(res.body.run.simulation).toBeNull();
+      expect(res.body.runWarnings).toEqual([
+        { code: 'simulation_unavailable' },
+      ]);
+      // an edit drops the transaction and its simulation
+      const edited = await write(
+        'patch',
+        `${orgA}/payout-runs/${run.id}`,
+        member,
+        { expectedVersion: 2, name: 'April' },
+      ).expect(200);
+      expect(edited.body.runWarnings).toEqual([]);
+    });
+
+    it('answers 422 run_too_large when the simulated gas exceeds the bound', async () => {
+      rpc.request.mockRejectedValue(simulationReverted(6_000_000n));
+      const { run } = await createRun();
+      const res = await build(run.id).expect(422);
+      expect(res.body).toMatchObject({
+        code: 'run_too_large',
+        maxRecipients: 1,
+        gasBound: 6_000_000,
+      });
+    });
   });
 
   it('answers 422 run_too_large with maxRecipients and estimatedGas and stores nothing when the run exceeds the gas bound', async () => {

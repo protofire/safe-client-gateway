@@ -1,9 +1,19 @@
 import { Module } from '@nestjs/common';
 import type request from 'supertest';
 import type { EntityManager } from 'typeorm';
-import { getAddress, zeroAddress, type Address, type Hex } from 'viem';
+import {
+  concatHex,
+  encodeAbiParameters,
+  getAddress,
+  numberToHex,
+  size,
+  zeroAddress,
+  type Address,
+  type Hex,
+} from 'viem';
 import { getSafeTxHash } from '@/domain/common/utils/safe';
 import { DataSourceError } from '@/domain/errors/data-source.error';
+import { IBlockchainApiManager } from '@/domain/interfaces/blockchain-api.manager.interface';
 import { ITransactionApiManager } from '@/domain/interfaces/transaction-api.manager.interface';
 import { IBalancesRepository } from '@/modules/balances/domain/balances.repository.interface';
 import { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
@@ -272,6 +282,25 @@ export class FakeChain {
   }
 }
 
+/** The RPC error of the Safe's `simulateAndRevert`: it reverts with the accessor's (estimate, success, returnData). */
+export function simulationReverted(
+  estimate: bigint,
+  success = true,
+  returnData: Hex = '0x',
+): Error {
+  const response = encodeAbiParameters(
+    [{ type: 'uint256' }, { type: 'bool' }, { type: 'bytes' }],
+    [estimate, success, returnData],
+  );
+  return Object.assign(new Error('execution reverted'), {
+    data: concatHex([
+      numberToHex(1, { size: 32 }),
+      numberToHex(size(response), { size: 32 }),
+      response,
+    ]),
+  });
+}
+
 export const toCalls = (calls: ReadonlyArray<StoredCall>): Array<SafeCall> =>
   calls.map((c) => ({
     to: getAddress(c.to),
@@ -293,6 +322,8 @@ export type PayoutTestApp = {
   chain: FakeChain;
   updater: PayoutStatusUpdater;
   chainsRepo: { getChain: jest.Mock };
+  /** The chain RPC; by default it fails, so the build simulation is unavailable. */
+  rpc: { request: jest.Mock };
   /** Called by `reset()`, before each test. */
   reset(): Promise<void>;
   user(): Promise<User>;
@@ -353,6 +384,8 @@ export async function createPayoutTestApp(
   const txService = { getToken: jest.fn() };
   const txApiManager = { getApi: jest.fn() };
   const balancesRepo = { getBalances: jest.fn() };
+  const rpc = { request: jest.fn() };
+  const blockchainApis = { getApi: jest.fn() };
 
   @Module({
     imports: [PermissionsModule],
@@ -370,6 +403,7 @@ export async function createPayoutTestApp(
       { provide: ITransactionApiManager, useValue: txApiManager },
       { provide: IBalancesRepository, useValue: balancesRepo },
       { provide: ISafeRepository, useValue: chain.repo },
+      { provide: IBlockchainApiManager, useValue: blockchainApis },
     ],
   })
   class PayoutTestModule {}
@@ -426,6 +460,7 @@ export async function createPayoutTestApp(
     chain,
     updater,
     chainsRepo,
+    rpc,
     asOrg,
     reset: async (): Promise<void> => {
       jest.clearAllMocks();
@@ -460,6 +495,8 @@ export async function createPayoutTestApp(
           : Promise.reject(new DataSourceError('Not found', 404)),
       );
       balancesRepo.getBalances.mockResolvedValue([]);
+      blockchainApis.getApi.mockResolvedValue(rpc);
+      rpc.request.mockRejectedValue(new Error('rpc down'));
     },
     user: () => seedUser(t.sql),
     createOrg: (users): Promise<string> =>
@@ -530,7 +567,7 @@ export async function createPayoutTestApp(
             await em.query(
               `SELECT status, version, pinned_nonce::text AS pinned_nonce, safe_tx_hash, nonce::text AS nonce,
                       executed_tx_hash, verifying_since, review, evaluation,
-                      resolved_by, resolved_at, resolution_note
+                      resolved_by, resolved_at, resolution_note, simulation
                  FROM payout_runs WHERE id = $1`,
               [runId],
             )

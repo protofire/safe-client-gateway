@@ -121,6 +121,7 @@ export class PoliciesPayouts1794614400000 implements MigrationInterface {
       calls jsonb,
       est_gas bigint,
       evaluation jsonb,
+      simulation jsonb,
       ${nonce('pinned_nonce', true)},
       safe_tx_hash text,
       ${nonce('nonce', true)},

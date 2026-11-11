@@ -21,6 +21,12 @@ import {
   type Address,
   type Hex,
 } from 'viem';
+import {
+  getRevertReason,
+  getSimulateTxAccessor,
+  simulateSafeCall,
+} from '@/domain/common/utils/simulate-tx-accessor';
+import { IBlockchainApiManager } from '@/domain/interfaces/blockchain-api.manager.interface';
 import { ITransactionApiManager } from '@/domain/interfaces/transaction-api.manager.interface';
 import { IBalancesRepository } from '@/modules/balances/domain/balances.repository.interface';
 import { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
@@ -48,9 +54,11 @@ import type { Permission } from '@/modules/org/permissions/permissions';
 import { evaluate, type Evaluation } from '@/modules/org/policies/evaluate';
 import { PolicyContextService } from '@/modules/org/policies/policy-context.service';
 import {
+  CALLDATA_BYTE_GAS,
   checkRunSize,
   PAYOUT_GAS_BOUND,
   toCall,
+  TX_OVERHEAD_GAS,
 } from '@/modules/org/payouts/payout-calls';
 import {
   checkPayoutRows,
@@ -73,9 +81,11 @@ import {
   type PayoutRunStatus,
   type PayoutRunView,
   type PayoutRunWarning,
+  type RunSimulation,
   type StoredCall,
   type UpdatePayoutRun,
 } from '@/modules/org/payouts/payout.schemas';
+import { multiSendCallOnlySet } from '@/modules/org/payouts/payout-verify';
 import { mapLimit } from '@/modules/org/safes/map-limit';
 
 /** A `payout_runs` row as read by {@link lockRun}. */
@@ -91,6 +101,7 @@ export type PayoutRunRow = {
   calls: Array<StoredCall> | null;
   est_gas: string | null;
   evaluation: Evaluation | null;
+  simulation: RunSimulation | null;
   pinned_nonce: string | null;
   safe_tx_hash: string | null;
   nonce: string | null;
@@ -118,13 +129,16 @@ export type PayoutItemRow = {
 };
 
 const RUN_COLUMNS = `id, org_id, chain_id, safe_address::text AS safe_address, name, status, version,
-  created_by, calls, est_gas::text AS est_gas, evaluation, pinned_nonce::text AS pinned_nonce,
+  created_by, calls, est_gas::text AS est_gas, evaluation, simulation, pinned_nonce::text AS pinned_nonce,
   safe_tx_hash, nonce::text AS nonce, executed_tx_hash, verifying_since,
   resolved_by, resolved_at, resolution_note, review, created_at`;
 
 // abuse limits (milestone P): creation is cheap to call and costly to serve
 const CREATES_PER_USER_PER_HOUR = 60;
 const CREATES_PER_ORG_PER_HOUR = 300;
+// each build simulates the run over RPC
+const BUILDS_PER_USER_PER_MINUTE = 30;
+const SIMULATION_FAILED = 'The transaction would fail on-chain';
 /** Runs not settled yet (`draft | proposing | proposed | verifying`) an org may hold. */
 export const MAX_OPEN_RUNS_PER_ORG = 500;
 const OPEN_RUN_STATUSES: ReadonlyArray<PayoutRunStatus> = [
@@ -301,9 +315,8 @@ const multiSendAbi = parseAbi(['function multiSend(bytes transactions)']);
  */
 const PREVIEW_MULTISEND: Address = zeroAddress;
 
-/** The outer shape the UI builds (SafeAppsTxFlow): one call direct, more as a MultiSend delegatecall. */
-function outerTx(calls: ReadonlyArray<SafeCall>): SafeCall {
-  if (calls.length === 1) return calls[0];
+/** `multiSend(calls)` calldata. */
+function multiSendData(calls: ReadonlyArray<SafeCall>): Hex {
   const packed = encodePacked(
     calls.flatMap(() => ['uint8', 'address', 'uint256', 'uint256', 'bytes']),
     calls.flatMap((c) => [
@@ -314,12 +327,46 @@ function outerTx(calls: ReadonlyArray<SafeCall>): SafeCall {
       c.data,
     ]),
   );
-  const data: Hex = encodeFunctionData({
+  return encodeFunctionData({
     abi: multiSendAbi,
     functionName: 'multiSend',
     args: [packed],
   });
+}
+
+/** The outer shape the UI builds (SafeAppsTxFlow): one call direct, more as a MultiSend delegatecall. */
+function outerTx(calls: ReadonlyArray<SafeCall>): SafeCall {
+  if (calls.length === 1) return calls[0];
+  const data = multiSendData(calls);
   return { to: PREVIEW_MULTISEND, value: 0n, data, operation: 1 };
+}
+
+/** Gas from a simulation with the relay's margins (×1.1 + 10k), plus the Safe overhead and the outer calldata. */
+function simulatedGas(gasUsed: string, calls: ReadonlyArray<SafeCall>): bigint {
+  const estimate = BigInt(gasUsed);
+  return (
+    estimate +
+    estimate / 10n +
+    10_000n +
+    TX_OVERHEAD_GAS +
+    CALLDATA_BYTE_GAS * BigInt(size(multiSendData(calls)))
+  );
+}
+
+/** Run warnings of the stored simulation; none before the run is built. */
+function simulationWarnings(
+  run: Pick<PayoutRunView, 'calls' | 'simulation'>,
+): Array<PayoutRunWarning> {
+  if (run.calls === null) return [];
+  if (run.simulation === null) return [{ code: 'simulation_unavailable' }];
+  return run.simulation.ok
+    ? []
+    : [
+        {
+          code: 'simulation_failed',
+          message: run.simulation.reason ?? SIMULATION_FAILED,
+        },
+      ];
 }
 
 /** Item index a violation belongs to: '' is the direct call of a one-item run, else the first path segment. */
@@ -364,17 +411,25 @@ function versionConflict(): ReturnType<typeof conflict> {
   );
 }
 
-/** Throws 422 `run_too_large` when the calls do not fit one transaction. */
-export function assertRunSize(calls: ReadonlyArray<SafeCall>): bigint {
+/** Throws 422 `run_too_large` when the calls do not fit one transaction: by the simulated gas if given, else the fixed estimate. */
+export function assertRunSize(
+  calls: ReadonlyArray<SafeCall>,
+  simulated?: bigint,
+): bigint {
   const size = checkRunSize(calls);
-  if (size.ok) return size.estimatedGas;
+  const estimatedGas = simulated ?? size.estimatedGas;
+  if (estimatedGas <= PAYOUT_GAS_BOUND) return estimatedGas;
+  // shortcut: with only a simulated total, the recipients that fit are prorated
+  const maxRecipients = size.ok
+    ? Number((BigInt(calls.length) * PAYOUT_GAS_BOUND) / estimatedGas)
+    : size.maxRecipients;
   const gasBound = Number(PAYOUT_GAS_BOUND);
   throw new UnprocessableEntityException({
     statusCode: 422,
     code: 'run_too_large',
-    message: `This run needs about ${size.estimatedGas} gas; one transaction allows ${gasBound}. Split the CSV into runs of at most ${size.maxRecipients} recipients.`,
-    maxRecipients: size.maxRecipients,
-    estimatedGas: Number(size.estimatedGas),
+    message: `This run needs about ${estimatedGas} gas; one transaction allows ${gasBound}. Split the CSV into runs of at most ${maxRecipients} recipients.`,
+    maxRecipients,
+    estimatedGas: Number(estimatedGas),
     gasBound,
   });
 }
@@ -435,6 +490,8 @@ export class PayoutRunsService {
     private readonly transactionApis: ITransactionApiManager,
     @Inject(IBalancesRepository)
     private readonly balances: IBalancesRepository,
+    @Inject(IBlockchainApiManager)
+    private readonly blockchain: IBlockchainApiManager,
   ) {}
 
   /** Keyset page, newest first: `(created_at, id)` below the cursor's. */
@@ -512,7 +569,10 @@ export class PayoutRunsService {
     );
     // balances over HTTP after the transaction
     const runWarnings = BALANCE_STATUSES.includes(run.status)
-      ? await this.runWarnings(run.chainId, run.safeAddress, rows)
+      ? [
+          ...(await this.runWarnings(run.chainId, run.safeAddress, rows)),
+          ...simulationWarnings(run),
+        ]
       : [];
     return { run, items, runWarnings };
   }
@@ -572,7 +632,7 @@ export class PayoutRunsService {
       await em.query(
         `UPDATE payout_runs
             SET name = $3, status = 'draft', version = version + 1, calls = NULL, est_gas = NULL,
-                evaluation = NULL, safe_tx_hash = NULL, nonce = NULL, executed_tx_hash = NULL,
+                evaluation = NULL, simulation = NULL, safe_tx_hash = NULL, nonce = NULL, executed_tx_hash = NULL,
                 review = NULL, verifying_since = NULL, updated_at = now()
           WHERE org_id = $1 AND id = $2`,
         [orgId, runId, name],
@@ -625,19 +685,36 @@ export class PayoutRunsService {
     expectedVersion: number,
     actor: Actor,
   ): Promise<PayoutRunDetail> {
+    await this.rateLimiter.enforce(
+      `payouts:build:user:${actor.userId}`,
+      BUILDS_PER_USER_PER_MINUTE,
+      60,
+    );
+    // RPC before the transaction; the version lock below guarantees the items did not change since
+    const before = await this.peek(orgId, runId, expectedVersion);
+    const simulation = await this.simulate(
+      before.chain_id,
+      before.safe_address,
+      itemCalls(
+        await this.tx.runInOrgTx((em) => readItems(em, orgId, runId), orgId),
+      ),
+    );
     await this.tx.runInOrgTx(async (em) => {
       await this.lockOrg(em, orgId, actor);
       const run = await this.lockEditable(em, orgId, runId, expectedVersion);
       await assertRunCapacity(em, orgId, run);
       const calls = itemCalls(await readItems(em, orgId, runId));
-      const estimatedGas = assertRunSize(calls);
+      const estimatedGas = assertRunSize(
+        calls,
+        simulation?.ok ? simulatedGas(simulation.gasUsed!, calls) : undefined,
+      );
       const evaluation = await this.evaluateCalls(em, run, calls);
       // a new transaction: earlier proposal fields go; the pin stays
       await em.query(
         `UPDATE payout_runs
             SET status = 'draft', version = version + 1, calls = $3::jsonb, est_gas = $4,
-                evaluation = $5::jsonb, safe_tx_hash = NULL, nonce = NULL, executed_tx_hash = NULL,
-                review = NULL, verifying_since = NULL, updated_at = now()
+                evaluation = $5::jsonb, simulation = $6::jsonb, safe_tx_hash = NULL, nonce = NULL,
+                executed_tx_hash = NULL, review = NULL, verifying_since = NULL, updated_at = now()
           WHERE org_id = $1 AND id = $2`,
         [
           orgId,
@@ -645,6 +722,7 @@ export class PayoutRunsService {
           JSON.stringify(storedCalls(calls)),
           estimatedGas.toString(),
           JSON.stringify(evaluation),
+          simulation && JSON.stringify(simulation),
         ],
       );
       await this.event(em, 'payout_run.updated', run, actor, {
@@ -652,6 +730,54 @@ export class PayoutRunsService {
       });
     }, orgId);
     return this.get(orgId, runId, actor.userId);
+  }
+
+  /**
+   * The run's transaction simulated on chain at latest: the Safe's `simulateAndRevert` running
+   * MultiSendCallOnly as a delegatecall. RPC, so never inside a transaction. Null when the chain
+   * cannot simulate it; a revert is a result (warning), never an error.
+   */
+  async simulate(
+    chainId: string,
+    safeAddress: string,
+    calls: ReadonlyArray<SafeCall>,
+  ): Promise<RunSimulation | null> {
+    const accessor = getSimulateTxAccessor(chainId);
+    if (!accessor) return null;
+    try {
+      const chain = await this.chains.getChain(chainId);
+      const [callOnly] = multiSendCallOnlySet(
+        chainId,
+        chain.contractAddresses.multiSendCallOnlyAddress ?? undefined,
+      );
+      if (!callOnly) return null;
+      const result = await simulateSafeCall(
+        await this.blockchain.getApi(chainId),
+        {
+          safeAddress: getAddress(safeAddress),
+          accessor,
+          to: getAddress(callOnly),
+          value: 0n,
+          data: multiSendData(calls),
+          operation: 1,
+        },
+      );
+      if (!result) return null;
+      const at = new Date().toISOString();
+      return result.success
+        ? { ok: true, gasUsed: result.estimate.toString(), at }
+        : {
+            ok: false,
+            // a token's revert text is shown to users: bounded
+            reason: getRevertReason(result.returnData, SIMULATION_FAILED).slice(
+              0,
+              200,
+            ),
+            at,
+          };
+    } catch {
+      return null;
+    }
   }
 
   // ---- helpers ----
@@ -938,6 +1064,7 @@ export class PayoutRunsService {
         estimatedGas: r.est_gas === null ? null : Number(r.est_gas),
         gasBound: Number(PAYOUT_GAS_BOUND),
         evaluation: r.calls ? (evaluation ?? null) : null,
+        simulation: r.simulation,
         safeTxHash: r.safe_tx_hash,
         nonce: r.nonce,
         executedTxHash: r.executed_tx_hash,

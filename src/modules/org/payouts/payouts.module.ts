@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TransactionApiManagerModule } from '@/domain/interfaces/transaction-api.manager.interface';
 import { BalancesModule } from '@/modules/balances/balances.module';
+import { BlockchainModule } from '@/modules/blockchain/blockchain.module';
 import { ChainsModule } from '@/modules/chains/chains.module';
 import { CsvService } from '@/modules/csv-export/csv-utils/csv.service';
 import { ActivityModule } from '@/modules/org/activity/activity.module';
@@ -20,6 +21,7 @@ import { SafeRepositoryModule } from '@/modules/safe/domain/safe.repository.inte
     PermissionsModule,
     PoliciesModule,
     BalancesModule,
+    BlockchainModule,
     ChainsModule,
     TransactionApiManagerModule,
     SafeRepositoryModule,

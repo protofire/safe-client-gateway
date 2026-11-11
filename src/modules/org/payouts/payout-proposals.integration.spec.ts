@@ -1,3 +1,4 @@
+import { encodeErrorResult, parseAbi } from 'viem';
 import {
   ALICE,
   BOB,
@@ -7,6 +8,7 @@ import {
   USDC,
   addr,
   createPayoutTestApp,
+  simulationReverted,
   toCalls,
   type PayoutTestApp,
   type Row,
@@ -99,6 +101,40 @@ describe('payout proposals API', () => {
   }
 
   describe('claim', () => {
+    it('simulates the run at claim and stores the result; a failed simulation only warns', async () => {
+      const b = await built();
+      expect((await p.runRow(orgA, b.runId)).simulation).toBeNull();
+      const reason = 'ERC20: transfer amount exceeds balance';
+      p.rpc.request.mockRejectedValue(
+        simulationReverted(
+          80_000n,
+          false,
+          encodeErrorResult({
+            abi: parseAbi(['error Error(string)']),
+            errorName: 'Error',
+            args: [reason],
+          }),
+        ),
+      );
+      await p
+        .claim(orgA, b.runId, member, { expectedVersion: b.version, nonce: 5 })
+        .expect(201);
+      expect(p.rpc.request).toHaveBeenCalledWith({
+        method: 'eth_call',
+        params: [{ to: SAFE_A, data: expect.any(String) }, 'latest'],
+      });
+      const d = await p.detail(orgA, b.runId, member);
+      expect(d.run.simulation).toEqual({
+        ok: false,
+        reason,
+        at: expect.any(String),
+      });
+      expect(d.runWarnings).toContainEqual({
+        code: 'simulation_failed',
+        message: reason,
+      });
+    });
+
     it('claims an attempt at the recommended nonce, pins it and moves the run to proposing', async () => {
       // a queued tx at 5 makes 6 the recommended nonce
       p.chain.propose(SAFE_A, 5, [
@@ -1133,6 +1169,18 @@ describe('payout proposals API', () => {
           rows: ROWS,
         })
         .expect(429);
+    });
+
+    it('rate-limits builds per user (30/min) before any RPC read', async () => {
+      const { run } = await p.createRun(orgA, safeA, member);
+      await p.t.redis.set(limitKey(`build:user:${member.userId}`), '30');
+      await p
+        .write('post', `${orgA}/payout-runs/${run.id}/build`, member, {
+          expectedVersion: run.version,
+        })
+        .expect(429);
+      expect(p.rpc.request).not.toHaveBeenCalled();
+      await p.build(orgA, run.id, member2);
     });
 
     it('rate-limits claims and reports per user (30/min) before any tx-service read', async () => {

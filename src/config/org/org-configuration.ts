@@ -6,8 +6,8 @@ const flag = (name: string): boolean =>
 
 /**
  * Secrets read by reused gateway code, besides the ORG_* ones (allowlist):
- * TX_SERVICE_API_KEY, ETHERSCAN_API_KEY, ORG_PRICES_PROVIDER_API_KEY and the
- * BLOCKLIST_* values. Nothing else, in particular not ZERION_API_KEY.
+ * TX_SERVICE_API_KEY, ETHERSCAN_API_KEY, ORG_PRICES_PROVIDER_API_KEY,
+ * ORG_INFURA_API_KEY and the BLOCKLIST_* values. Nothing else, in particular not ZERION_API_KEY.
  *
  * Configuration of cgw-org. Every key is read from an ORG_* variable (or a
  * shared compliance variable), never from the gateway's secrets. The `redis`,
@@ -181,6 +181,8 @@ export default () => ({
     blocklistSecretData: process.env.BLOCKLIST_ENCRYPTED_DATA,
     blocklistSecretKey: process.env.BLOCKLIST_SECRET_KEY,
     blocklistSecretSalt: process.env.BLOCKLIST_SECRET_SALT,
+    // only appended to Infura RPC URIs of the chain config (payout run simulation)
+    infura: { apiKey: process.env.ORG_INFURA_API_KEY ?? '' },
   },
   circuitBreaker: {
     failureThreshold: int(process.env.CIRCUIT_BREAKER_FAILURE_THRESHOLD, 20),
