@@ -15,13 +15,14 @@ import { client } from '@/modules/org/orgs/parse';
 import { ValidationPipe } from '@/validation/pipes/validation.pipe';
 import { OrgApiQuery } from '@/modules/org/common/org-api-body.decorator';
 
-export const OIDC_TX_COOKIE = 'org_oidc_tx';
+// __Host- (Secure, Path=/, no Domain): sibling subdomains such as Safe Apps cannot toss or shadow it
+export const OIDC_TX_COOKIE = '__Host-org_oidc_tx';
 const OIDC_TX_COOKIE_OPTIONS = {
   httpOnly: true,
   secure: true,
   // Lax: sent on the top-level GET redirect back from the issuer
   sameSite: 'lax',
-  path: '/v1/orgs/auth/oidc',
+  path: '/',
 } as const;
 
 export const AuthorizeQuerySchema = z.object({

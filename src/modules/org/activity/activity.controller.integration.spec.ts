@@ -122,11 +122,14 @@ describe('org activity log', () => {
       .set('X-Forwarded-For', nextIp())
       .send({ message, signature: await account.signMessage({ message }) })
       .expect(200);
-    const match = /org_session=([^;]+)/.exec(
+    const match = /__Host-org_session=([^;]+)/.exec(
       [res.headers['set-cookie']].flat().join(';'),
     );
-    if (!match) throw new Error('no org_session cookie');
-    return { cookie: `org_session=${match[1]}`, userId: res.body.user.id };
+    if (!match) throw new Error('no __Host-org_session cookie');
+    return {
+      cookie: `__Host-org_session=${match[1]}`,
+      userId: res.body.user.id,
+    };
   }
 
   async function createOrg(users: Array<[string, string]>): Promise<string> {

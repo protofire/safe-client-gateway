@@ -1808,7 +1808,7 @@
   },
   "info": {
     "title": "cgw-org",
-    "description": "Organization API. Cookie session `org_session`; non-GET requests need `X-Org-Request: 1`. SIWE accepts EOA signatures only in phase 1.",
+    "description": "Organization API. Cookie session `__Host-org_session`; non-GET requests need `X-Org-Request: 1`. SIWE accepts EOA signatures only in phase 1.",
     "version": "1.0.0",
     "contact": {}
   },

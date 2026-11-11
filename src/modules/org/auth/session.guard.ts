@@ -12,12 +12,13 @@ import { IS_PUBLIC, type OrgRequest } from '@/modules/org/auth/decorators';
 import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
 import { Clock, type IClock } from '@/modules/org/common/clock';
 
-export const SESSION_COOKIE = 'org_session';
+// __Host- (Secure, Path=/, no Domain): sibling subdomains such as Safe Apps cannot toss or shadow it
+export const SESSION_COOKIE = '__Host-org_session';
 export const SESSION_COOKIE_OPTIONS = {
   httpOnly: true,
   secure: true,
   sameSite: 'lax',
-  path: '/v1/orgs',
+  path: '/',
 } as const;
 
 /** Sets (or replaces, after rotation) the session cookie. */

@@ -326,7 +326,7 @@ describe('route order', () => {
     try {
       await request(app.getHttpServer())
         .get('/v1/orgs/auth/me')
-        .set('Cookie', 'org_session=token')
+        .set('Cookie', '__Host-org_session=token')
         .expect(200)
         .expect({ user: { id: 'user-1' } });
       expect(me).toHaveBeenCalledWith(
@@ -335,7 +335,7 @@ describe('route order', () => {
       // the stub is mounted and reachable for real org ids
       await request(app.getHttpServer())
         .get('/v1/orgs/7d3e/members')
-        .set('Cookie', 'org_session=token')
+        .set('Cookie', '__Host-org_session=token')
         .expect(200)
         .expect({ leaked: true });
     } finally {
@@ -460,12 +460,12 @@ describe('route order of static org routes', () => {
     try {
       await request(app.getHttpServer())
         .delete('/v1/orgs/account')
-        .set('Cookie', 'org_session=token')
+        .set('Cookie', '__Host-org_session=token')
         .expect(204);
       expect(deleteAccount).toHaveBeenCalledWith('user-1');
       await request(app.getHttpServer())
         .post('/v1/orgs/invitations/accept')
-        .set('Cookie', 'org_session=token')
+        .set('Cookie', '__Host-org_session=token')
         .send({ token: 'a'.repeat(43) })
         .expect(200)
         .expect({ orgId: 'org-1' });
@@ -476,7 +476,7 @@ describe('route order of static org routes', () => {
       // the stub is mounted and reachable for real org ids
       await request(app.getHttpServer())
         .delete('/v1/orgs/7d3e')
-        .set('Cookie', 'org_session=token')
+        .set('Cookie', '__Host-org_session=token')
         .expect(200)
         .expect({ leaked: true });
     } finally {

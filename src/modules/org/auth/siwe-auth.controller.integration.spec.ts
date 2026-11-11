@@ -201,9 +201,9 @@ describe('SIWE auth (org)', () => {
 
   function sessionCookie(res: request.Response): string {
     const raw = [res.headers['set-cookie']].flat().join(';');
-    const match = /org_session=([^;]+)/.exec(raw);
-    if (!match) throw new Error('no org_session cookie');
-    return `org_session=${match[1]}`;
+    const match = /__Host-org_session=([^;]+)/.exec(raw);
+    if (!match) throw new Error('no __Host-org_session cookie');
+    return `__Host-org_session=${match[1]}`;
   }
 
   async function signIn(pk: Hex): Promise<string> {
@@ -213,18 +213,19 @@ describe('SIWE auth (org)', () => {
     return sessionCookie(res);
   }
 
-  it('signs in with a valid SIWE message and sets an HttpOnly cookie scoped to /v1/orgs', async () => {
+  it('signs in with a valid SIWE message and sets a __Host- session cookie (HttpOnly, Secure, SameSite=Lax, Path=/, no Domain)', async () => {
     const pk = generatePrivateKey();
     const res = await post('/v1/orgs/auth/siwe')
       .send(await signed(pk))
       .expect(200);
 
     const cookie = [res.headers['set-cookie']].flat()[0];
-    expect(cookie).toMatch(/^org_session=[A-Za-z0-9_-]{43};/);
+    expect(cookie).toMatch(/^__Host-org_session=[A-Za-z0-9_-]{43};/);
     expect(cookie).toMatch(/; HttpOnly/);
     expect(cookie).toMatch(/; Secure/);
     expect(cookie).toMatch(/; SameSite=Lax/);
-    expect(cookie).toMatch(/; Path=\/v1\/orgs;/);
+    expect(cookie).toMatch(/; Path=\/;/);
+    expect(cookie).not.toMatch(/; Domain=/i);
     expect(res.body).toEqual({ user: { id: expect.any(String) } });
 
     const me = await http()
@@ -324,7 +325,7 @@ describe('SIWE auth (org)', () => {
     await http().get('/v1/orgs/auth/me').expect(401);
     await http()
       .get('/v1/orgs/auth/me')
-      .set('Cookie', 'org_session=not-a-session')
+      .set('Cookie', '__Host-org_session=not-a-session')
       .expect(401);
   });
 
@@ -418,7 +419,7 @@ describe('SIWE auth (org)', () => {
 
     const res = await http()
       .get('/v1/orgs/strong-test')
-      .set('Cookie', `org_session=${token}`)
+      .set('Cookie', `__Host-org_session=${token}`)
       .expect(403);
     expect(res.body).toEqual({
       statusCode: 403,
@@ -434,7 +435,10 @@ describe('SIWE auth (org)', () => {
     const res = await post('/v1/orgs/auth/logout')
       .set('Cookie', cookie)
       .expect(204);
-    expect([res.headers['set-cookie']].flat()[0]).toMatch(/^org_session=;/);
+    // a __Host- cookie is only cleared by a Set-Cookie with Secure and Path=/
+    expect([res.headers['set-cookie']].flat()[0]).toMatch(
+      /^__Host-org_session=; Path=\/; Expires=[^;]+; HttpOnly; Secure; SameSite=Lax$/,
+    );
 
     await http().get('/v1/orgs/auth/me').set('Cookie', cookie).expect(401);
   });
@@ -585,11 +589,13 @@ describe('SIWE auth (org)', () => {
   });
 
   it('logout without a valid session still answers 204 and clears the cookie', async () => {
-    for (const cookie of [undefined, 'org_session=unknown']) {
+    for (const cookie of [undefined, '__Host-org_session=unknown']) {
       const req = post('/v1/orgs/auth/logout');
       if (cookie) req.set('Cookie', cookie);
       const res = await req.expect(204);
-      expect([res.headers['set-cookie']].flat()[0]).toMatch(/^org_session=;/);
+      expect([res.headers['set-cookie']].flat()[0]).toMatch(
+        /^__Host-org_session=;/,
+      );
     }
   });
 });

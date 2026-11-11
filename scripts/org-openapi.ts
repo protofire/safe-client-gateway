@@ -87,7 +87,7 @@ export async function buildOrgOpenApiDocument(): Promise<OpenAPIObject> {
     new DocumentBuilder()
       .setTitle('cgw-org')
       .setDescription(
-        'Organization API. Cookie session `org_session`; non-GET requests need `X-Org-Request: 1`. SIWE accepts EOA signatures only in phase 1.',
+        'Organization API. Cookie session `__Host-org_session`; non-GET requests need `X-Org-Request: 1`. SIWE accepts EOA signatures only in phase 1.',
       )
       .build(),
   );

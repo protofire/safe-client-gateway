@@ -145,7 +145,7 @@ describe('identity linking (org)', () => {
        VALUES ($1, $2, '{oidc}', now(), now() + interval '1 day', now() + interval '1 day')`,
       [userId, sha256Hex(token)],
     );
-    return `org_session=${token}`;
+    return `__Host-org_session=${token}`;
   }
 
   describe('SIWE', () => {
@@ -172,7 +172,7 @@ describe('identity linking (org)', () => {
       const me = await t
         .http()
         .get('/v1/orgs/auth/me')
-        .set('Cookie', cookieFrom(stepUp, 'org_session'))
+        .set('Cookie', cookieFrom(stepUp, '__Host-org_session'))
         .expect(200);
       expect(me.body.lastStrongAuthAt).not.toBeNull();
 
@@ -249,7 +249,7 @@ describe('identity linking (org)', () => {
       const idp = await fetch(authorizeUrl, { redirect: 'manual' });
       const back = new URL(idp.headers.get('location')!);
       return {
-        txCookie: cookieFrom(res, 'org_oidc_tx'),
+        txCookie: cookieFrom(res, '__Host-org_oidc_tx'),
         code: back.searchParams.get('code')!,
         state: back.searchParams.get('state')!,
       };
@@ -300,8 +300,9 @@ describe('identity linking (org)', () => {
         .expect(200);
       const cookie = [res.headers['set-cookie']]
         .flat()
-        .find((c) => c.startsWith('org_oidc_tx='))!;
-      expect(cookie).toMatch(/; Path=\/v1\/orgs\/auth\/oidc;/);
+        .find((c) => c.startsWith('__Host-org_oidc_tx='))!;
+      expect(cookie).toMatch(/; Path=\/;/);
+      expect(cookie).not.toMatch(/; Domain=/i);
       expect(cookie).toMatch(/; HttpOnly/);
       expect(
         new URL(res.body.redirectUrl as string).searchParams.get('connection'),
@@ -316,7 +317,7 @@ describe('identity linking (org)', () => {
       expect(await countUsers()).toBe(usersBefore);
       expect(res.headers.location).toBe(`${APP_URL}/settings`);
       expect([res.headers['set-cookie']].flat().join()).not.toMatch(
-        /org_session=[^;]/,
+        /__Host-org_session=[^;]/,
       );
       expect(await liveSessions(u.userId)).toBe(1);
       expect(await identities(u)).toEqual([
@@ -419,9 +420,11 @@ describe('identity linking (org)', () => {
           code: back.searchParams.get('code')!,
           state: back.searchParams.get('state')!,
         },
-        [cookieFrom(res, 'org_oidc_tx')],
+        [cookieFrom(res, '__Host-org_oidc_tx')],
       ).expect(302);
-      expect(cookieFrom(done, 'org_session')).toMatch(/^org_session=/);
+      expect(cookieFrom(done, '__Host-org_session')).toMatch(
+        /^__Host-org_session=/,
+      );
     });
   });
 
