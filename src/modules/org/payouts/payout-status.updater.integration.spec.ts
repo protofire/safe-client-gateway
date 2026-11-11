@@ -383,6 +383,74 @@ describe('PayoutStatusUpdater', () => {
     });
   });
 
+  it('adds a queued copy to a partial_overlap review at N without replacing its reason', async () => {
+    const r = await proposed();
+    const copy = p.chain.propose(SAFE_A, 6, r.calls, { trusted: false });
+    p.chain.execute(
+      p.chain.propose(SAFE_A, 5, [usdcTransfer(BOB, 1n), native(STRANGER)]),
+    );
+    await p.updater.run();
+    expect(await p.runRow(orgA, r.runId)).toMatchObject({
+      status: 'needs_review',
+      review: {
+        reason: 'partial_overlap',
+        nonce: '6',
+        safeTxHash: copy.safeTxHash,
+        outcome: 'needs_review',
+        strayExecuted: false,
+      },
+      pinned_nonce: null,
+    });
+  });
+
+  it('adds an executed copy to a missing_transfers review at the deadline and keeps its lines', async () => {
+    const r = await proposed(USDC_ROWS);
+    p.chain.execute(r.tx); // no transfer indexed
+    await p.updater.run();
+    const copy = p.chain.propose(SAFE_A, 6, r.calls, { trusted: false });
+    // executed after the first attempt: inside the stray view's time window
+    p.chain.execute(copy, { ago: 0 });
+    await p.asOrg(orgA, (em) =>
+      em.query(
+        `UPDATE payout_runs SET verifying_since = now() - interval '24 hours 1 minute' WHERE id = $1`,
+        [r.runId],
+      ),
+    );
+    await p.updater.run();
+    expect(await p.runRow(orgA, r.runId)).toMatchObject({
+      status: 'needs_review',
+      review: {
+        reason: 'missing_transfers',
+        lines: [1],
+        nonce: '6',
+        safeTxHash: copy.safeTxHash,
+        outcome: 'needs_review',
+        strayExecuted: true,
+      },
+      pinned_nonce: null,
+    });
+  });
+
+  it('settles a partial_overlap at N while the queue cannot be read whole, marking only the outcome', async () => {
+    const r = await proposed();
+    p.chain.execute(
+      p.chain.propose(SAFE_A, 5, [usdcTransfer(BOB, 1n), native(STRANGER)]),
+    );
+    p.chain.txPageSize = 1;
+    for (let i = 0; i < 6; i++)
+      p.chain.propose(SAFE_A, 6 + i, [native(STRANGER, BigInt(i + 1))]);
+    await p.updater.run();
+    const row = await p.runRow(orgA, r.runId);
+    expect(row).toMatchObject({
+      status: 'needs_review',
+      pinned_nonce: null,
+    });
+    expect(row.review).toEqual({
+      reason: 'partial_overlap',
+      outcome: 'needs_review',
+    });
+  });
+
   it('marks the run replaced when an unrelated plain transfer executed at N and lets the next claim take a fresh nonce', async () => {
     const r = await proposed();
     p.chain.execute(p.chain.propose(SAFE_A, 5, [native(STRANGER)]));

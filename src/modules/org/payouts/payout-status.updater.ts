@@ -702,6 +702,27 @@ export class PayoutStatusUpdater
           ...(executedTxHash && { executedTxHash }),
         };
       }
+    } else if (outcome.status === 'needs_review') {
+      // the stray rule for a review outcome: its reason is kept, the copy (if any) is added
+      const view = ev.strayView;
+      const stray = view.complete
+        ? findStray(view.txs, ev.nonce, await knownCalls(em, run), ev.callOnly)
+        : undefined;
+      // an unreadable queue does not hold back a run that already needs review
+      if (!view.complete || stray) {
+        outcome = {
+          ...outcome,
+          review: {
+            ...outcome.review!,
+            ...(stray && {
+              nonce: String(stray.nonce),
+              safeTxHash: stray.safeTxHash,
+              strayExecuted: stray.isExecuted,
+            }),
+            outcome: 'needs_review',
+          },
+        };
+      }
     }
     if (outcome.status === 'verifying')
       return this.markVerifying(em, run, outcome, now, executed);
