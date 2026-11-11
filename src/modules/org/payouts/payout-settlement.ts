@@ -2,23 +2,13 @@ import { decodeFunctionData, parseAbi, type Address, type Hex } from 'viem';
 import { Operation } from '@/modules/safe/domain/entities/operation.entity';
 import type { MultisigTransaction } from '@/modules/safe/domain/entities/multisig-transaction.entity';
 import type { Transfer } from '@/modules/safe/domain/entities/transfer.entity';
-import { flattenCalls, type SafeCall } from '@/modules/org/common/multisend';
+import { walkCalls, type SafeCall } from '@/modules/org/common/multisend';
 import {
-  callsEqual,
   callsMismatch,
-  isZeroAddress,
   reorgMarginMs,
   toRaw,
 } from '@/modules/org/payouts/payout-verify';
-
-export type ReviewReason =
-  | 'missing_transfers'
-  | 'partial_overlap'
-  | 'undecodable'
-  | 'indirect_unproven'
-  | 'stray_proposal'
-  /** A warning on a settled run: its calls executed under another safeTxHash than the reported one. */
-  | 'executed_other_hash';
+import type { PayoutReview } from '@/modules/org/payouts/payout.schemas';
 
 export type Settlement = {
   status:
@@ -30,18 +20,7 @@ export type Settlement = {
     | 'verifying'
     | 'pending';
   executedTxHash?: Hex;
-  review?: {
-    reason: ReviewReason;
-    lines?: Array<number>;
-    /** `stray_proposal`: the queued copy owners must reject (absent if the queue could not be read whole). */
-    nonce?: string;
-    safeTxHash?: string;
-    /** `stray_proposal` on settlement: what happened at the run's nonce, and whether the copy executed too. */
-    outcome?: Settlement['status'];
-    strayExecuted?: boolean;
-    /** The reported safeTxHash when another hash with the run's calls executed. */
-    reportedSafeTxHash?: string;
-  };
+  review?: PayoutReview;
 };
 
 export type SettlementItem = {
@@ -65,7 +44,7 @@ export type SettlementInput = {
   executedAtNonce: MultisigTransaction | null;
   /** Whatever was read so far; a failed read = []. Records of another transactionHash are dropped here. */
   transfers: ReadonlyArray<Transfer>;
-  /** Lowercase MultiSend + MultiSendCallOnly addresses unpacked when flattening. */
+  /** Lowercase MultiSend + MultiSendCallOnly addresses unpacked when decoding. */
   trusted: ReadonlySet<string>;
   /** Lowercase MultiSendCallOnly addresses (`multiSendCallOnlySet`). */
   callOnly: ReadonlySet<string>;
@@ -74,67 +53,33 @@ export type SettlementInput = {
   deadline: Date | null;
 };
 
-const paymentAbi = parseAbi([
+const transferAbi = parseAbi([
   'function transfer(address to, uint256 amount)',
   'function transferFrom(address from, address to, uint256 amount)',
-  'function approve(address spender, uint256 amount)',
-  'function increaseAllowance(address spender, uint256 amount)',
 ]);
 
-/** ERC20 payment (or allowance) a call makes: `token` = call target, `recipient` = receiver or spender. */
-function decodePayment(call: Pick<SafeCall, 'to' | 'data'>): {
-  token: string;
-  recipient: string;
-  amount: bigint;
-  allowance: boolean;
-} | null {
+/** Receiver of an ERC20 transfer call, lowercase; null for anything else. */
+function transferRecipient(data: Hex): string | null {
   try {
     const { functionName, args } = decodeFunctionData({
-      abi: paymentAbi,
-      data: call.data,
+      abi: transferAbi,
+      data,
     });
-    const [recipient, amount] =
-      functionName === 'transferFrom' ? [args[1], args[2]] : [args[0], args[1]];
-    return {
-      token: call.to.toLowerCase(),
-      recipient: recipient.toLowerCase(),
-      amount,
-      allowance:
-        functionName === 'approve' || functionName === 'increaseAllowance',
-    };
+    return (functionName === 'transfer' ? args[0] : args[1]).toLowerCase();
   } catch {
     return null;
   }
 }
 
 const lower = (a: string): string => a.toLowerCase();
-const pairKey = (token: string, recipient: string): string =>
-  `${lower(token)}:${lower(recipient)}`;
 
-/** Everything the run (now or in an earlier attempt at N) pays or would pay. */
-function runTargets(input: SettlementInput): {
-  calls: Array<SafeCall>;
-  erc20: Set<string>;
-  native: Set<string>;
-  recipients: Set<string>;
-} {
-  const calls = [...(input.run.calls ?? []), ...input.attemptCalls.flat()];
-  const erc20 = new Set<string>();
-  const native = new Set<string>();
-  for (const item of input.run.items) {
-    if (item.token === 'native') native.add(lower(item.recipient));
-    else erc20.add(pairKey(item.token, item.recipient));
-  }
-  for (const call of calls) {
-    if (call.value > 0n) native.add(lower(call.to));
-    const payment = decodePayment(call);
-    if (payment) erc20.add(pairKey(payment.token, payment.recipient));
-  }
-  const recipients = new Set([
-    ...native,
-    ...[...erc20].map((key) => key.split(':')[1]),
-  ]);
-  return { calls, erc20, native, recipients };
+/** Who a call pays directly, lowercase: native value to `to`, an ERC20 transfer to its receiver. */
+function payees(call: Pick<SafeCall, 'to' | 'value' | 'data'>): Array<string> {
+  const token = transferRecipient(call.data);
+  return [
+    ...(call.value > 0n ? [lower(call.to)] : []),
+    ...(token === null ? [] : [token]),
+  ];
 }
 
 /** Lines of ERC20 items without their own transfer (multiset: duplicates need one each). */
@@ -163,9 +108,12 @@ function missingTransferLines(
 }
 
 /**
- * Outcome of the run once its pinned nonce N is consumed. Positive conclusions
- * any time after the reorg margin; negative ones only at `now >= deadline`.
- * When in doubt → `needs_review` or `verifying`, never `replaced`.
+ * Outcome of the run once its pinned nonce N is used, from the tx executed
+ * at N (after the reorg margin): rejection → rejected, reverted → failed,
+ * the run's calls → executed (every ERC20 item needs its transfer; at the
+ * deadline missing ones → needs_review missing_transfers), an earlier
+ * attempt's calls or a decoded direct payment to a run recipient →
+ * needs_review partial_overlap, anything else → replaced.
  */
 export function settlementOutcome(input: SettlementInput): Settlement {
   const { run, now, deadline } = input;
@@ -173,14 +121,12 @@ export function settlementOutcome(input: SettlementInput): Settlement {
   if (tx === null || !tx.isExecuted || tx.isSuccessful === null)
     return { status: 'pending' };
   const value = toRaw(tx.value);
-  // unknown or unreadable tx-service numbers: no decision
-  const gasPrice = tx.gasPrice === null ? null : toRaw(tx.gasPrice);
-  if (value === null || gasPrice === null) return { status: 'pending' };
+  if (value === null) return { status: 'pending' };
 
   const txHash = tx.transactionHash;
   const settle = (
     status: Settlement['status'],
-    review?: Settlement['review'],
+    review?: PayoutReview,
   ): Settlement => ({
     status,
     ...(txHash !== null && { executedTxHash: txHash }),
@@ -192,94 +138,51 @@ export function settlementOutcome(input: SettlementInput): Settlement {
     now.getTime() - tx.executionDate.getTime() < reorgMarginMs(run.chainId)
   )
     return settle('verifying');
-  const atDeadline = deadline !== null && now.getTime() >= deadline.getTime();
-  const unproven = (): Settlement =>
-    atDeadline
-      ? settle('needs_review', { reason: 'indirect_unproven' })
-      : settle('verifying');
-  // the tx-service filter is not trusted: only records of this execution count, each once
-  const seen = new Set<string>();
-  const transfers = input.transfers.filter((t) => {
-    if (txHash === null || lower(t.transactionHash) !== lower(txHash))
-      return false;
-    if (seen.has(t.transferId)) return false;
-    seen.add(t.transferId);
-    return true;
-  });
+
   const data = tx.data ?? '0x';
-  const safe = run.safeAddress;
-  const targets = runTargets(input);
-
-  // gasPrice > 0: the Safe refunds gas (gasToken or native) to refundReceiver, or to the executor if zero
-  const refund = gasPrice > 0n;
-  if (refund) {
-    const receiver = isZeroAddress(tx.refundReceiver)
-      ? tx.executor
-      : tx.refundReceiver;
-    if (receiver === null) return unproven();
-    // any run recipient, whatever the refund token: the money flow cannot be told apart
-    if (targets.recipients.has(lower(receiver)))
-      return settle('needs_review', { reason: 'partial_overlap' });
-  }
-
   if (
-    lower(tx.to) === lower(safe) &&
+    lower(tx.to) === lower(run.safeAddress) &&
     value === 0n &&
     data === '0x' &&
     tx.operation === Operation.CALL
   )
-    // shortcut: a guard or module that pays on its own is outside this check (owner-installed code; accepted residual risk)
-    return refund ? unproven() : settle('rejected');
+    return settle('rejected');
+  if (tx.isSuccessful === false) return settle('failed');
 
   if (
     run.calls !== null &&
-    lower(tx.safe) === lower(safe) &&
     callsMismatch(tx, run.calls, input.callOnly) === null
   ) {
-    // the run's calls plus a refund: money left beyond the items, never a clean outcome
-    if (refund) return settle('needs_review', { reason: 'partial_overlap' });
-    if (tx.isSuccessful === false) return settle('failed');
-    const lines = missingTransferLines(run.items, transfers, safe);
+    // the tx-service filter is not trusted: only records of this execution count, each once
+    const seen = new Set<string>();
+    const transfers = input.transfers.filter((t) => {
+      if (txHash === null || lower(t.transactionHash) !== lower(txHash))
+        return false;
+      if (seen.has(t.transferId)) return false;
+      seen.add(t.transferId);
+      return true;
+    });
+    const lines = missingTransferLines(run.items, transfers, run.safeAddress);
     if (lines.length === 0) return settle('executed');
-    return atDeadline
+    return deadline !== null && now.getTime() >= deadline.getTime()
       ? settle('needs_review', { reason: 'missing_transfers', lines })
       : settle('verifying');
   }
 
-  // a reverted tx without a refund moved nothing
-  if (tx.isSuccessful === false)
-    return refund ? unproven() : settle('replaced');
-
-  const flat = flattenCalls(
+  const earlierAttempt = input.attemptCalls.some(
+    (calls) => callsMismatch(tx, calls, input.callOnly) === null,
+  );
+  // recipients of the items and of every earlier attempt at N (the run may have been edited since)
+  const recipients = new Set([
+    ...run.items.map((i) => lower(i.recipient)),
+    ...input.attemptCalls.flat().flatMap(payees),
+  ]);
+  // whatever part of the tx decodes; indirect payments (contracts, guards, modules) are an accepted residual risk
+  const paysRecipient = walkCalls(
     { to: tx.to, value, data, operation: tx.operation },
     input.trusted,
-  );
-  // zero calls (`multiSend(0x)`) cannot be matched to anything: undecodable
-  if (!flat.ok || flat.calls.length === 0)
-    return settle('needs_review', { reason: 'undecodable' });
-
-  const callOverlaps = flat.calls.some((call) => {
-    if (targets.calls.some((known) => callsEqual(call, known))) return true;
-    if (call.value > 0n && targets.native.has(lower(call.to))) return true;
-    const payment = decodePayment(call);
-    // an allowance > 0 to a run recipient enables a later pull; approve(x, 0) is a revocation
-    return (
-      payment !== null &&
-      (!payment.allowance || payment.amount > 0n) &&
-      targets.erc20.has(pairKey(payment.token, payment.recipient))
-    );
-  });
-  // the Safe's own transfer records (the only ones read) in this execution
-  const transferOverlaps = transfers.some(
-    (t) =>
-      (t.type === 'ERC20_TRANSFER' &&
-        targets.erc20.has(pairKey(t.tokenAddress, t.to))) ||
-      (t.type === 'ETHER_TRANSFER' && targets.native.has(lower(t.to))),
-  );
-  if (callOverlaps || transferOverlaps)
+  ).calls.some((call) => payees(call).some((to) => recipients.has(to)));
+  if (earlierAttempt || paysRecipient)
     return settle('needs_review', { reason: 'partial_overlap' });
-
-  // never `replaced`: a guard's post-execution hook runs external code on any Safe tx, settings-only ones too
-  // shortcut: almost any real tx at N ends verifying → indirect_unproven; add trace inspection to prove more
-  return unproven();
+  return settle('replaced');
 }

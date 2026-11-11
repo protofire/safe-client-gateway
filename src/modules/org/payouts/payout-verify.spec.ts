@@ -131,20 +131,16 @@ describe('verifyProposedTx', () => {
     expect(verify({ ...multiTx(), nonce: 8 })).toEqual(mismatch('nonce'));
   });
 
-  it('rejects plain MultiSend as multisend_unknown', () => {
-    expect(verify(txOf(multiSendCall(PLAIN_MULTISEND, CALLS)))).toEqual({
-      ok: false,
-      code: 'multisend_unknown',
-      field: 'to',
-    });
+  it('rejects plain MultiSend as a multisend mismatch', () => {
+    expect(verify(txOf(multiSendCall(PLAIN_MULTISEND, CALLS)))).toEqual(
+      mismatch('multisend'),
+    );
   });
 
-  it('rejects an unknown outer target as multisend_unknown', () => {
-    expect(verify(txOf(multiSendCall(BOB, CALLS)))).toEqual({
-      ok: false,
-      code: 'multisend_unknown',
-      field: 'to',
-    });
+  it('rejects an unknown outer target as a multisend mismatch', () => {
+    expect(verify(txOf(multiSendCall(BOB, CALLS)))).toEqual(
+      mismatch('multisend'),
+    );
   });
 
   it('rejects outer operation 0 for a multi-call run', () => {

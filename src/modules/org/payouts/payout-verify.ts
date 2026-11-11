@@ -7,7 +7,7 @@ import { unpackMultiSend, type SafeCall } from '@/modules/org/common/multisend';
 
 export type VerifyResult =
   | { ok: true }
-  | { ok: false; code: 'tx_mismatch' | 'multisend_unknown'; field: string };
+  | { ok: false; code: 'tx_mismatch'; field: string };
 
 /** Lowercase MultiSendCallOnly addresses of every Safe version on the chain; the chain config's only where safe-deployments has none. Plain MultiSend is not in it. */
 export function multiSendCallOnlySet(
@@ -95,8 +95,7 @@ export function callsMismatch(
     return diff === null ? null : mismatch(diff);
   }
   if (calls.length === 0) return mismatch('calls');
-  if (!callOnly.has(tx.to.toLowerCase()))
-    return { ok: false, code: 'multisend_unknown', field: 'to' };
+  if (!callOnly.has(tx.to.toLowerCase())) return mismatch('multisend');
   if (tx.operation !== Operation.DELEGATE) return mismatch('operation');
   if (value !== 0n) return mismatch('value');
   const inner = tx.data === null ? null : unpackMultiSend(tx.data);
