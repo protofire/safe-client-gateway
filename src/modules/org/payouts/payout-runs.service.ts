@@ -789,6 +789,16 @@ export class PayoutRunsService {
       );
       if (!callOnly) return null;
       const client = await this.blockchain.getApi(chainId);
+      // the shape the Safe tx takes (outerTx); MultiSendCallOnly 1.4.1 reverts without the inner reason
+      const outer =
+        calls.length === 1
+          ? calls[0]
+          : {
+              to: callOnly,
+              value: 0n,
+              data: multiSendData(calls),
+              operation: 1,
+            };
       const result = await simulateSafeCall(
         // no transport retries: the overall deadline is short
         {
@@ -800,10 +810,10 @@ export class PayoutRunsService {
         {
           safeAddress: getAddress(safeAddress),
           accessor,
-          to: getAddress(callOnly),
-          value: 0n,
-          data: multiSendData(calls),
-          operation: 1,
+          to: getAddress(outer.to),
+          value: outer.value,
+          data: outer.data,
+          operation: outer.operation,
         },
       );
       if (!result) return null;

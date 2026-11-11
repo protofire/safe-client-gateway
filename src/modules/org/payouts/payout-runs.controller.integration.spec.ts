@@ -730,6 +730,37 @@ describe('payout runs API', () => {
       expect(res.body.runWarnings).toEqual([]);
     });
 
+    it('simulates a single-call run as the direct call, so the token revert reason survives', async () => {
+      // MultiSendCallOnly 1.4.1 reverts with no data on a failing call; the direct call keeps the reason
+      rpc.request.mockRejectedValue(
+        simulationReverted(
+          17_563n,
+          false,
+          errorString('ERC20: transfer amount exceeds balance'),
+        ),
+      );
+      const { run } = await createRun([rows[1]]);
+      const res = await build(run.id).expect(200);
+      const [[{ params }]] = rpc.request.mock.calls;
+      const { args: outer } = decodeFunctionData({
+        abi: parseAbi([
+          'function simulateAndRevert(address targetContract, bytes calldataPayload)',
+        ]),
+        data: params[0].data,
+      });
+      const { args: inner } = decodeFunctionData({
+        abi: parseAbi([
+          'function simulate(address to, uint256 value, bytes data, uint8 operation)',
+        ]),
+        data: outer[1],
+      });
+      const [call] = toSafeCalls((res.body as PayoutRunDetail).run.calls!);
+      expect(inner).toEqual([getAddress(call.to), 0n, call.data, 0]);
+      expect(res.body.run.simulation.reason).toBe(
+        'ERC20: transfer amount exceeds balance',
+      );
+    });
+
     it('warns simulation_failed with the revert reason and keeps the fixed gas estimate', async () => {
       rpc.request.mockRejectedValue(
         simulationReverted(50_000n, false, errorString('GS013')),
