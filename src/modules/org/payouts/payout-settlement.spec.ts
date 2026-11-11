@@ -636,6 +636,36 @@ describe('settlementOutcome', () => {
     ).toEqual({ reason: 'partial_overlap' });
   });
 
+  it('returns partial_overlap for a plain native send to a contract that forwards to a run recipient (transfer not from the Safe)', () => {
+    const tx = executed({
+      to: SOME_CONTRACT,
+      value: 1n,
+      data: '0x',
+      operation: 0,
+    });
+    const native = {
+      ...nativeTokenTransferBuilder()
+        .with('from', SOME_CONTRACT)
+        .with('to', ALICE)
+        .with('value', '1')
+        .with('transactionHash', TX_HASH)
+        .build(),
+    } as Transfer;
+    const token = transferOf(ITEMS[1], {
+      from: SOME_CONTRACT,
+      value: '1',
+    } as Partial<Transfer>);
+    for (const record of [native, token]) {
+      expect(
+        settlementOutcome(input({ executedAtNonce: tx, transfers: [record] })),
+      ).toEqual({
+        status: 'needs_review',
+        executedTxHash: TX_HASH,
+        review: { reason: 'partial_overlap' },
+      });
+    }
+  });
+
   it('makes no decision when tx-service numbers are not integers', () => {
     expect(
       settlementOutcome(input({ executedAtNonce: runTx({ value: '1.5' }) })),

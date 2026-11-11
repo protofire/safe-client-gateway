@@ -268,17 +268,17 @@ export function settlementOutcome(input: SettlementInput): Settlement {
       targets.erc20.has(pairKey(payment.token, payment.recipient))
     );
   });
+  // any sender: a contract called at N may forward the Safe's money to a run recipient
   const transferOverlaps = transfers.some(
     (t) =>
-      lower(t.from) === lower(safe) &&
-      ((t.type === 'ERC20_TRANSFER' &&
+      (t.type === 'ERC20_TRANSFER' &&
         targets.erc20.has(pairKey(t.tokenAddress, t.to))) ||
-        (t.type === 'ETHER_TRANSFER' && targets.native.has(lower(t.to)))),
+      (t.type === 'ETHER_TRANSFER' && targets.native.has(lower(t.to))),
   );
   if (callOverlaps || transferOverlaps)
     return settle('needs_review', { reason: 'partial_overlap' });
 
-  // shortcut: a native recipient or an ERC20 "token" may be a contract that pays on (receive hook, non-standard token); the decoded shape is trusted, add trace inspection if that matters
+  // shortcut: forwarding the tx-service does not index (internal calls it misses, non-standard tokens without Transfer events) is not seen; a plain send to a contract is trusted by its decoded shape, add trace inspection if that matters
   const plain = flat.calls.every(
     (c) => c.data === '0x' || (c.value === 0n && decodePayment(c) !== null),
   );
