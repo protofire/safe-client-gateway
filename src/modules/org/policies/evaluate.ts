@@ -1,4 +1,5 @@
 import { decodeFunctionData, parseAbi, type Address } from 'viem';
+import { formatAmount } from '@/modules/org/common/amounts';
 import {
   walkCalls,
   type FlatCall,
@@ -134,6 +135,12 @@ function checkRule(
       const caps = rule.caps.filter((cap) => cap.chainId === ctx.chainId);
       const capsOf = (token: string): typeof caps =>
         caps.filter((cap) => cap.token === token);
+      // "1,000.5 USDC": the cap's token metadata words both amounts
+      const units = (raw: bigint, cap: (typeof caps)[number]): string => {
+        const [whole, fraction] = formatAmount(raw, cap.decimals).split('.');
+        const grouped = whole.replace(/\B(?=(\d{3})+$)/g, ',');
+        return `${fraction ? `${grouped}.${fraction}` : grouped} ${cap.symbol || cap.token}`;
+      };
       if (rule.capMode !== 'per_transfer') {
         // an allowance is not spent yet, so only transfers count towards the total
         const totals = new Map<
@@ -157,7 +164,7 @@ function checkRule(
                   rule: rule.kind,
                   callPath: c.callPath,
                   to: c.to,
-                  detail: `total ${total} of ${token} in this transaction exceeds the per-transaction cap ${cap.maxRaw}`,
+                  detail: `total ${units(total, cap)} in this transaction exceeds the per-transaction cap ${units(BigInt(cap.maxRaw), cap)}`,
                 });
       }
       if (rule.capMode !== 'per_transaction')
@@ -169,7 +176,7 @@ function checkRule(
                   rule: rule.kind,
                   callPath: c.callPath,
                   to: c.to,
-                  detail: `amount ${p.amount} of ${p.token} exceeds the per-transfer cap ${cap.maxRaw}`,
+                  detail: `${units(p.amount, cap)} exceeds the per-transfer cap ${units(BigInt(cap.maxRaw), cap)}`,
                 });
       return out;
     }

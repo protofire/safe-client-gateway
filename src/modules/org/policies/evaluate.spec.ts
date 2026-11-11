@@ -323,8 +323,8 @@ describe('evaluate', () => {
       r.status === 'violation' &&
         r.violations.map((v) => [v.callPath, v.to, v.detail]),
     ).toEqual([
-      ['0', USDC, expect.stringContaining('total 120')],
-      ['4', USDC, expect.stringContaining('total 120')],
+      ['0', USDC, expect.stringContaining('total 0.00012 USDC')],
+      ['4', USDC, expect.stringContaining('total 0.00012 USDC')],
     ]);
     expect(
       rulesOf(
@@ -335,6 +335,23 @@ describe('evaluate', () => {
         ),
       ),
     ).toEqual([['amount_cap', '']]);
+  });
+
+  it('words cap violations in token units with the cap symbol, not raw units and addresses', () => {
+    const details = (capMode: 'per_transfer' | 'per_transaction'): unknown => {
+      const r = evaluate(
+        [policy(cap(capMode, '1000500000'))],
+        erc20('transfer', ALLOWED, 2_000_000_000n),
+        ctx,
+      );
+      return r.status === 'violation' && r.violations.map((v) => v.detail);
+    };
+    expect(details('per_transfer')).toEqual([
+      '2,000 USDC exceeds the per-transfer cap 1,000.5 USDC',
+    ]);
+    expect(details('per_transaction')).toEqual([
+      'total 2,000 USDC in this transaction exceeds the per-transaction cap 1,000.5 USDC',
+    ]);
   });
 
   it('sums native value across calls per transaction', () => {
