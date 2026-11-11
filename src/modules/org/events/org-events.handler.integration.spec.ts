@@ -326,9 +326,7 @@ describe('OrgEventsHandler', () => {
     const payouts = {
       onExecuted: jest
         .fn()
-        .mockReturnValueOnce(
-          new Promise<void>((resolve) => (finish = resolve)),
-        )
+        .mockReturnValueOnce(new Promise<void>((resolve) => (finish = resolve)))
         .mockRejectedValueOnce(new Error('updater down')),
     };
     const withPayouts = new OrgEventsHandler(

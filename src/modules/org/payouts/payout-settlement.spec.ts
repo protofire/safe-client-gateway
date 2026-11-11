@@ -186,7 +186,7 @@ describe('settlementOutcome', () => {
     );
   });
 
-  it('never returns executed for equal calls with a gas refund (H reported, H\' with a refund executed)', () => {
+  it("never returns executed for equal calls with a gas refund (H reported, H' with a refund executed)", () => {
     const tx = runTx({
       safeTxHash: OTHER_TX_HASH,
       gasPrice: '5',

@@ -114,17 +114,17 @@ describe('org migrations entry (org-migrate)', () => {
     try {
       await ds.initialize();
       // the grant step fails (unknown role): the migrations must roll back with it
-      await expect(
-        runOrgMigrations(ds, 'no_such_app_role'),
-      ).rejects.toThrow(/does not exist/);
+      await expect(runOrgMigrations(ds, 'no_such_app_role')).rejects.toThrow(
+        /does not exist/,
+      );
       const [{ n }] = await ds.query(
         `SELECT count(*)::int AS n FROM information_schema.tables WHERE table_schema = 'public'`,
       );
       expect(n).toBe(0);
 
-      expect((await runOrgMigrations(ds, other.appUser)).length).toBeGreaterThan(
-        0,
-      );
+      expect(
+        (await runOrgMigrations(ds, other.appUser)).length,
+      ).toBeGreaterThan(0);
       const [grants] = await ds.query(
         `SELECT has_table_privilege($1, 'payout_proposal_attempts', 'DELETE') AS del,
                 has_column_privilege($1, 'payout_proposal_attempts', 'calls', 'UPDATE') AS upd`,

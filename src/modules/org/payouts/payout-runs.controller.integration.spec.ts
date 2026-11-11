@@ -43,7 +43,10 @@ import { PayoutRunsController } from '@/modules/org/payouts/payout-runs.controll
 import { PayoutRunsService } from '@/modules/org/payouts/payout-runs.service';
 import { PayoutStatusUpdater } from '@/modules/org/payouts/payout-status.updater';
 import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
-import type { PayoutRunDetail } from '@/modules/org/payouts/payout.schemas';
+import type {
+  PayoutRunDetail,
+  PayoutRunPage,
+} from '@/modules/org/payouts/payout.schemas';
 import { PermissionsModule } from '@/modules/org/permissions/permissions.module';
 import { PolicyContextService } from '@/modules/org/policies/policy-context.service';
 import { ORG_APP_GUARDS } from '@/org-app.module';
@@ -992,9 +995,10 @@ describe('payout runs API', () => {
         `${orgA}/payout-runs?limit=3${cursor ? `&cursor=${cursor}` : ''}`,
         member,
       ).expect(200);
-      expect(res.body.items.length).toBeLessThanOrEqual(3);
-      seen.push(...res.body.items.map((i: { id: string }) => i.id));
-      cursor = res.body.nextCursor;
+      const page = res.body as PayoutRunPage;
+      expect(page.items.length).toBeLessThanOrEqual(3);
+      seen.push(...page.items.map((i) => i.id));
+      cursor = page.nextCursor;
       pages++;
     } while (cursor !== null);
     expect(pages).toBe(3);
@@ -1002,7 +1006,7 @@ describe('payout runs API', () => {
     expect(seen[0]).toBe(run.id);
 
     const all = await get(`${orgA}/payout-runs`, member).expect(200);
-    expect(all.body.items.map((i: { id: string }) => i.id)).toEqual(seen);
+    expect((all.body as PayoutRunPage).items.map((i) => i.id)).toEqual(seen);
     expect(all.body.nextCursor).toBeNull();
 
     await get(`${orgA}/payout-runs?limit=101`, member).expect(400);
