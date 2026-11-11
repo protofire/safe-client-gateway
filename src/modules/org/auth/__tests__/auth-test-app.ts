@@ -266,5 +266,5 @@ export async function seedUser(
     );
     return id as string;
   });
-  return { userId, cookie: `org_session=${token}` };
+  return { userId, cookie: `__Host-org_session=${token}` };
 }

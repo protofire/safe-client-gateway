@@ -68,7 +68,7 @@ describe('OIDC sign-in (org)', () => {
     const idp = await fetch(authorizeUrl, { redirect: 'manual' });
     const back = new URL(idp.headers.get('location')!);
     return {
-      txCookie: cookieFrom(res, 'org_oidc_tx'),
+      txCookie: cookieFrom(res, '__Host-org_oidc_tx'),
       code: back.searchParams.get('code')!,
       state: back.searchParams.get('state')!,
       authorizeUrl,
@@ -96,12 +96,12 @@ describe('OIDC sign-in (org)', () => {
     const res = await test.expect(302);
     expect(res.headers.location).toBe(`${APP_URL}${path}?orgAuthError=${code}`);
     expect([res.headers['set-cookie']].flat().join()).not.toMatch(
-      /org_session=[^;]/,
+      /__Host-org_session=[^;]/,
     );
     return res;
   }
 
-  it('redirects to the issuer with PKCE S256, state, nonce, scope and connection, and sets org_oidc_tx', async () => {
+  it('redirects to the issuer with PKCE S256, state, nonce, scope and connection, and sets __Host-org_oidc_tx', async () => {
     const res = await t
       .http()
       .get('/v1/orgs/auth/oidc/authorize?connection=google-oauth2&returnTo=/x')
@@ -123,11 +123,12 @@ describe('OIDC sign-in (org)', () => {
     });
     const cookie = [res.headers['set-cookie']]
       .flat()
-      .find((c) => c.startsWith('org_oidc_tx='))!;
+      .find((c) => c.startsWith('__Host-org_oidc_tx='))!;
     expect(cookie).toMatch(/; HttpOnly/);
     expect(cookie).toMatch(/; Secure/);
     expect(cookie).toMatch(/; SameSite=Lax/);
-    expect(cookie).toMatch(/; Path=\/v1\/orgs\/auth\/oidc;/);
+    expect(cookie).toMatch(/; Path=\/;/);
+    expect(cookie).not.toMatch(/; Domain=/i);
     expect(cookie).toMatch(/; Max-Age=600;/);
   });
 
@@ -143,10 +144,10 @@ describe('OIDC sign-in (org)', () => {
     const res = await callback(s, s.txCookie).expect(302);
     expect(res.headers.location).toBe(`${APP_URL}/orgs/abc?tab=1`);
     const setCookies = [res.headers['set-cookie']].flat();
-    expect(setCookies.find((c) => c.startsWith('org_oidc_tx='))).toMatch(
-      /^org_oidc_tx=;/,
+    expect(setCookies.find((c) => c.startsWith('__Host-org_oidc_tx='))).toMatch(
+      /^__Host-org_oidc_tx=;/,
     );
-    const session = cookieFrom(res, 'org_session');
+    const session = cookieFrom(res, '__Host-org_session');
 
     const me = await t
       .http()
@@ -193,7 +194,7 @@ describe('OIDC sign-in (org)', () => {
         await t
           .http()
           .get('/v1/orgs/auth/me')
-          .set('Cookie', cookieFrom(res, 'org_session'))
+          .set('Cookie', cookieFrom(res, '__Host-org_session'))
       ).body.user.id;
     const alice = await idOf(a);
     expect(await idOf(b)).toBe(alice);
@@ -251,7 +252,7 @@ describe('OIDC sign-in (org)', () => {
     await failsWith(callback(s, s.txCookie), 'expired');
   });
 
-  it('rejects a callback without the org_oidc_tx cookie', async () => {
+  it('rejects a callback without the __Host-org_oidc_tx cookie', async () => {
     const s = await start();
     await failsWith(callback(s), 'failed');
   });

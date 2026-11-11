@@ -44,7 +44,7 @@ const SUPPORTED_SUBJECT = /^(?:email|google-oauth2)\|./;
 type OidcTx = {
   verifier: string;
   nonce: string;
-  /** SHA-256 of the `org_oidc_tx` cookie that binds the flow to one browser. */
+  /** SHA-256 of the `__Host-org_oidc_tx` cookie that binds the flow to one browser. */
   txHash: string;
   returnTo: string;
   /** Set by linking flows (Task 12): the callback must come from this session. */
@@ -159,7 +159,7 @@ export class OidcService {
     code: unknown;
     state: unknown;
     tx: unknown;
-    /** The `org_session` cookie; only read in linking flows. */
+    /** The `__Host-org_session` cookie; only read in linking flows. */
     sessionToken: unknown;
     ip: string;
     userAgent: string | null;

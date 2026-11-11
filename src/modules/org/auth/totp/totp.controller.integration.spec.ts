@@ -44,7 +44,7 @@ async function addSession(sql: DataSource, userId: string): Promise<string> {
      VALUES ($1, $2, '{oidc}', now() + interval '1 day', now() + interval '1 day')`,
     [userId, sha256Hex(token)],
   );
-  return `org_session=${token}`;
+  return `__Host-org_session=${token}`;
 }
 
 describe('TOTP factors (org)', () => {
@@ -84,7 +84,7 @@ describe('TOTP factors (org)', () => {
     // confirm rotates the session token (F2)
     return {
       ...user,
-      cookie: cookieFrom(confirm, 'org_session'),
+      cookie: cookieFrom(confirm, '__Host-org_session'),
       secret: body.secret,
       recoveryCodes: confirm.body.recoveryCodes,
     };
@@ -116,7 +116,7 @@ describe('TOTP factors (org)', () => {
       .set('Cookie', user.cookie)
       .send({ code: totpCode(res.body.secret as string, at()) })
       .expect(200);
-    const after = await me(cookieFrom(confirm, 'org_session'));
+    const after = await me(cookieFrom(confirm, '__Host-org_session'));
     expect(after.hasTotp).toBe(true);
     expect(after.lastStrongAuthAt).not.toBeNull();
     const [session] = await t.sql.query(
@@ -201,7 +201,7 @@ describe('TOTP factors (org)', () => {
     expect(results.map((r) => r.status).sort()).toEqual([200, 401]);
     const rotated = cookieFrom(
       results.find((r) => r.status === 200)!,
-      'org_session',
+      '__Host-org_session',
     );
     await use(rotated).expect(401);
 
@@ -263,7 +263,7 @@ describe('TOTP factors (org)', () => {
         .set('Cookie', cookie)
         .send({ code: totpCode(user.secret, at()) })
         .expect(200);
-      cookie = cookieFrom(res, 'org_session');
+      cookie = cookieFrom(res, '__Host-org_session');
     }
   });
 
@@ -298,7 +298,7 @@ describe('TOTP factors (org)', () => {
       .set('Cookie', user.cookie)
       .send({ code: totpCode(user.secret, at()) })
       .expect(200);
-    const cookie = cookieFrom(stepUp, 'org_session');
+    const cookie = cookieFrom(stepUp, '__Host-org_session');
     await t.del('/v1/orgs/auth/totp').set('Cookie', cookie).expect(204);
 
     expect((await me(cookie)).hasTotp).toBe(false);
@@ -335,11 +335,13 @@ describe('TOTP factors (org)', () => {
         .set('Cookie', user.cookie)
         .send(proof(user))
         .expect(200);
-      expect(cookieFrom(res, 'org_session')).not.toBe(copy);
+      expect(cookieFrom(res, '__Host-org_session')).not.toBe(copy);
 
       const denied = await t.del('/v1/orgs/auth/totp').set('Cookie', copy);
       expect([401, 403]).toContain(denied.status);
-      expect((await me(cookieFrom(res, 'org_session'))).hasTotp).toBe(true);
+      expect((await me(cookieFrom(res, '__Host-org_session'))).hasTotp).toBe(
+        true,
+      );
     },
   );
 
@@ -373,7 +375,7 @@ describe('TOTP factors (org)', () => {
       .set('Cookie', user.cookie)
       .send({ code: totpCode(body.secret as string, at()) })
       .expect(200);
-    const current = cookieFrom(confirm, 'org_session');
+    const current = cookieFrom(confirm, '__Host-org_session');
     await t.http().get('/v1/orgs/auth/me').set('Cookie', other).expect(401);
 
     const later = await addSession(t.sql, user.userId);

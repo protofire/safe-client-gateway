@@ -53,7 +53,7 @@ export class LinkIdentityController {
   /**
    * Same flow as sign-in; the shared callback attaches the identity to this
    * session's user. POST (CsrfGuard), answering the URL for the browser to
-   * open, since it creates the state record and sets `org_oidc_tx`.
+   * open, since it creates the state record and sets `__Host-org_oidc_tx`.
    */
   @Post('link/oidc/authorize')
   @HttpCode(200)
