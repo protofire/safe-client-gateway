@@ -28,6 +28,7 @@ import { ControlsController } from '@/modules/org/controls/controls.controller';
 import { ControlsService } from '@/modules/org/controls/controls.service';
 import {
   OrgTransactionsExportService,
+  TX_EXPORT_MAX_PAGES,
   TX_EXPORT_MAX_ROWS,
 } from '@/modules/org/controls/org-transactions-export.service';
 import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
@@ -318,6 +319,7 @@ describe('Controls and org-wide transactions CSV', () => {
         PolicyContextService,
         { provide: OVERVIEW_SAFE_TIMEOUT_MS, useValue: 300 },
         { provide: TX_EXPORT_MAX_ROWS, useValue: 250 },
+        { provide: TX_EXPORT_MAX_PAGES, useValue: 5 },
         { provide: ISafeRepository, useValue: safeRepo },
         { provide: IDelegatesV2Repository, useValue: delegatesRepo },
         { provide: IChainsRepository, useValue: chainsRepo },
@@ -549,7 +551,12 @@ describe('Controls and org-wide transactions CSV', () => {
         [CHAIN, SAFE_A],
       );
       const res = await controls().expect(200);
-      expect(res.body[0].scanStatus.stale).toBe(false);
+      // no covering policy: no scan timestamps either (nothing of this org is scanned)
+      expect(res.body[0].scanStatus).toEqual({
+        lastSuccessAt: null,
+        lastErrorAt: null,
+        stale: false,
+      });
     });
 
     it('returns other Safes when one is unavailable', async () => {
@@ -714,6 +721,36 @@ describe('Controls and org-wide transactions CSV', () => {
       const res = await csv().expect(200);
       const rows = lines(res.body as string);
       expect(rows).toHaveLength(1 + 250 + 1);
+      expect(rows[rows.length - 1].endsWith(',truncated')).toBe(true);
+    });
+
+    it('stops a Safe on an empty page even when the server says there is more', async () => {
+      await link(orgA, SAFE_A, CHAIN, 'Ops');
+      exportApi.export.mockResolvedValue({
+        count: 10,
+        next: 'next',
+        previous: null,
+        results: [],
+      });
+      const rows = lines((await csv().expect(200)).body as string);
+      expect(rows).toHaveLength(1);
+      expect(exportApi.export).toHaveBeenCalledTimes(1);
+    });
+
+    it('stops at the page cap with a truncated row, independent of the row cap', async () => {
+      await link(orgA, SAFE_A, CHAIN, 'Ops');
+      // one row per page, always "more": only the request cap ends it
+      exportApi.export.mockImplementation(({ offset }: { offset: number }) =>
+        Promise.resolve({
+          count: null,
+          next: 'next',
+          previous: null,
+          results: [exportRow(SAFE_A, offset)],
+        }),
+      );
+      const rows = lines((await csv().expect(200)).body as string);
+      expect(exportApi.export).toHaveBeenCalledTimes(5);
+      expect(rows).toHaveLength(1 + 5 + 1);
       expect(rows[rows.length - 1].endsWith(',truncated')).toBe(true);
     });
 

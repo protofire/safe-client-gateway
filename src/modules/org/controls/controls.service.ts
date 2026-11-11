@@ -154,7 +154,11 @@ export class ControlsService {
         const policies = active
           .filter((p) => inScope(p.scope, { chainId: r.chain_id, address }))
           .map((p) => ({ id: p.id, name: p.name, version: p.version }));
-        const scan = scanOf.get(`${r.chain_id}:${address.toLowerCase()}`);
+        // scan state is shared across orgs: only shown where this org has a covering policy
+        const scan =
+          policies.length > 0
+            ? scanOf.get(`${r.chain_id}:${address.toLowerCase()}`)
+            : undefined;
         const lastSuccess = scan?.last_success_at ?? null;
         out.push({
           linkedSafeId: r.id,

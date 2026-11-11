@@ -252,12 +252,20 @@ describe('callsEqual', () => {
 });
 
 describe('multiSendCallOnlySet', () => {
-  it('contains the canonical MultiSendCallOnly and the chain config address, not plain MultiSend', () => {
-    const custom = getAddress('0x00000000000000000000000000000000000c0de1');
+  const custom = getAddress('0x00000000000000000000000000000000000c0de1');
+
+  it('contains the canonical MultiSendCallOnly, not plain MultiSend, and ignores the chain config where deployments exist', () => {
     const set = multiSendCallOnlySet('84532', custom);
     expect(set.has(CALL_ONLY.toLowerCase())).toBe(true);
-    expect(set.has(custom.toLowerCase())).toBe(true);
+    expect(set.has(custom.toLowerCase())).toBe(false);
     expect(set.has(PLAIN_MULTISEND.toLowerCase())).toBe(false);
+  });
+
+  it('uses the chain config address only for a chain without deployments', () => {
+    expect([...multiSendCallOnlySet('424242424242', custom)]).toEqual([
+      custom.toLowerCase(),
+    ]);
+    expect(multiSendCallOnlySet('424242424242').size).toBe(0);
   });
 });
 

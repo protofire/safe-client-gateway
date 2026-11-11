@@ -1,5 +1,5 @@
 import { extname, join } from 'path';
-import { DataSource } from 'typeorm';
+import { DataSource, MigrationExecutor } from 'typeorm';
 import type { PostgresConnectionOptions } from 'typeorm/driver/postgres/PostgresConnectionOptions';
 
 /**
@@ -70,8 +70,9 @@ export const APP_GRANT_EXCEPTIONS: ReadonlyArray<{
 
 /**
  * Runs pending org migrations under a session advisory lock (concurrent
- * runners wait, then find nothing pending), then grants the app login DML
- * with {@link APP_GRANT_EXCEPTIONS}. Returns the names applied.
+ * runners wait, then find nothing pending) and grants the app login DML
+ * with {@link APP_GRANT_EXCEPTIONS} in the SAME transaction: a new table is
+ * never committed with the default privileges. Returns the names applied.
  */
 export async function runOrgMigrations(
   dataSource: DataSource,
@@ -83,29 +84,41 @@ export async function runOrgMigrations(
     await lock.query('SELECT pg_advisory_lock(hashtext($1))', [LOCK_KEY]);
     try {
       await assertOwnsPublicSchema(dataSource);
-      const applied = await dataSource.runMigrations();
       const app = quoteIdent(appUser);
-      await dataSource.transaction(async (em) => {
-        await em.query(
+      const runner = dataSource.createQueryRunner();
+      await runner.connect();
+      try {
+        await runner.startTransaction();
+        // the executor sees the open transaction and neither starts nor commits one
+        const executor = new MigrationExecutor(dataSource, runner);
+        executor.transaction = 'all';
+        const applied = await executor.executePendingMigrations();
+        await runner.query(
           `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${app}`,
         );
-        await em.query(
+        await runner.query(
           `GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${app}`,
         );
-        await em.query(
+        await runner.query(
           `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${app}`,
         );
         for (const { table, privileges } of APP_GRANT_EXCEPTIONS) {
           // also drops column grants, so re-runs converge
-          await em.query(`REVOKE ALL ON ${quoteIdent(table)} FROM ${app}`);
+          await runner.query(`REVOKE ALL ON ${quoteIdent(table)} FROM ${app}`);
           if (privileges) {
-            await em.query(
+            await runner.query(
               `GRANT ${privileges} ON ${quoteIdent(table)} TO ${app}`,
             );
           }
         }
-      });
-      return applied.map((m) => m.name);
+        await runner.commitTransaction();
+        return applied.map((m) => m.name);
+      } catch (error) {
+        if (runner.isTransactionActive) await runner.rollbackTransaction();
+        throw error;
+      } finally {
+        await runner.release();
+      }
     } finally {
       await lock.query('SELECT pg_advisory_unlock(hashtext($1))', [LOCK_KEY]);
     }

@@ -16,7 +16,9 @@ export type ReviewReason =
   | 'partial_overlap'
   | 'undecodable'
   | 'indirect_unproven'
-  | 'stray_proposal';
+  | 'stray_proposal'
+  /** A warning on a settled run: its calls executed under another safeTxHash than the reported one. */
+  | 'executed_other_hash';
 
 export type Settlement = {
   status:
@@ -34,6 +36,11 @@ export type Settlement = {
     /** `stray_proposal`: the queued copy owners must reject (absent if the queue could not be read whole). */
     nonce?: string;
     safeTxHash?: string;
+    /** `stray_proposal` on settlement: what happened at the run's nonce, and whether the copy executed too. */
+    outcome?: Settlement['status'];
+    strayExecuted?: boolean;
+    /** The reported safeTxHash when another hash with the run's calls executed. */
+    reportedSafeTxHash?: string;
   };
 };
 
@@ -228,8 +235,9 @@ export function settlementOutcome(input: SettlementInput): Settlement {
     lower(tx.safe) === lower(safe) &&
     callsMismatch(tx, run.calls, input.callOnly) === null
   ) {
-    if (tx.isSuccessful === false)
-      return refund ? unproven() : settle('failed');
+    // the run's calls plus a refund: money left beyond the items, never a clean outcome
+    if (refund) return settle('needs_review', { reason: 'partial_overlap' });
+    if (tx.isSuccessful === false) return settle('failed');
     const lines = missingTransferLines(run.items, transfers, safe);
     if (lines.length === 0) return settle('executed');
     return atDeadline

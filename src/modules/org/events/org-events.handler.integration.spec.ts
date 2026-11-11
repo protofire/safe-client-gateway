@@ -321,6 +321,42 @@ describe('OrgEventsHandler', () => {
     ]);
   });
 
+  it('awaits the payout status updater (backpressure) and logs its failure without throwing', async () => {
+    let finish: () => void = () => undefined;
+    const payouts = {
+      onExecuted: jest
+        .fn()
+        .mockReturnValueOnce(new Promise<void>((resolve) => (finish = resolve)))
+        .mockRejectedValueOnce(new Error('updater down')),
+    };
+    const withPayouts = new OrgEventsHandler(
+      safeRepo as never,
+      balancesRepo as never,
+      new OrgTransaction(sql),
+      new ActivityLog({} as FieldEncryptionService),
+      logger as never,
+      undefined,
+      payouts as never,
+    );
+    let done = false;
+    const handling = withPayouts
+      .handle(executed({ address: OTHER }))
+      .then(() => (done = true));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(payouts.onExecuted).toHaveBeenCalledTimes(1);
+    expect(done).toBe(false);
+    finish();
+    await handling;
+    expect(done).toBe(true);
+
+    await expect(
+      withPayouts.handle(executed({ address: OTHER })),
+    ).resolves.toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'org_events_payout_settle_failed' }),
+    );
+  });
+
   it('does not touch another Safe', async () => {
     await seed();
     await handler.handle(executed({ address: OTHER }));

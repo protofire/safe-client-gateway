@@ -965,14 +965,25 @@ describe('policies API and evaluation context', () => {
       .map((a) => a.toLowerCase());
     expect(expected.length).toBeGreaterThan(2);
     for (const a of expected) expect(ctx.trustedMultiSend.has(a)).toBe(true);
-    expect(ctx.trustedMultiSend.has(CUSTOM_MULTISEND.toLowerCase())).toBe(true);
-    expect(ctx.trustedMultiSend.has(CUSTOM_CALL_ONLY.toLowerCase())).toBe(true);
+    // chain 1 has deployments: custom config addresses are ignored and logged
+    expect(ctx.trustedMultiSend.has(CUSTOM_MULTISEND.toLowerCase())).toBe(
+      false,
+    );
+    expect(ctx.trustedMultiSend.has(CUSTOM_CALL_ONLY.toLowerCase())).toBe(
+      false,
+    );
     expect(ctx.chainId).toBe('1');
     expect(chainsRepo.getChain).toHaveBeenCalledWith('1');
-    // custom addresses are kept but logged: they are not official deployments
     expect(logger.error).toHaveBeenCalledTimes(2);
     expect(logger.error).toHaveBeenCalledWith(
       expect.stringContaining(CUSTOM_MULTISEND),
+    );
+
+    // a chain without deployments: the configured addresses are all there is
+    expect(
+      [...(await context.trustedMultiSend('424242424242'))].sort(),
+    ).toEqual(
+      [CUSTOM_MULTISEND.toLowerCase(), CUSTOM_CALL_ONLY.toLowerCase()].sort(),
     );
 
     logger.error.mockClear();

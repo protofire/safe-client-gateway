@@ -180,10 +180,23 @@ describe('settlementOutcome', () => {
   });
 
   it('returns executed for a tx with another hash but equal calls at the nonce', () => {
-    const tx = runTx({ safeTxHash: OTHER_TX_HASH, gasPrice: '5' });
+    const tx = runTx({ safeTxHash: OTHER_TX_HASH, safeTxGas: 99 });
     expect(settlementOutcome(input({ executedAtNonce: tx })).status).toBe(
       'executed',
     );
+  });
+
+  it("never returns executed for equal calls with a gas refund (H reported, H' with a refund executed)", () => {
+    const tx = runTx({
+      safeTxHash: OTHER_TX_HASH,
+      gasPrice: '5',
+      executor: STRANGER,
+    });
+    expect(settlementOutcome(input({ executedAtNonce: tx }))).toEqual({
+      status: 'needs_review',
+      executedTxHash: TX_HASH,
+      review: { reason: 'partial_overlap' },
+    });
   });
 
   it('needs two transfers for two duplicate rows', () => {
@@ -489,12 +502,11 @@ describe('settlementOutcome', () => {
 
     it('C: equal calls that failed with a refund are never failed', () => {
       const tx = runTx({ ...refund, isSuccessful: false });
-      expect(settlementOutcome(input({ executedAtNonce: tx })).status).toBe(
-        'verifying',
-      );
-      expect(
-        settlementOutcome(input({ executedAtNonce: tx, now: DEADLINE })).review,
-      ).toEqual({ reason: 'indirect_unproven' });
+      expect(settlementOutcome(input({ executedAtNonce: tx }))).toEqual({
+        status: 'needs_review',
+        executedTxHash: TX_HASH,
+        review: { reason: 'partial_overlap' },
+      });
     });
 
     it('returns partial_overlap when the refund goes to a run recipient', () => {
@@ -549,10 +561,14 @@ describe('settlementOutcome', () => {
       ).toEqual({ reason: 'indirect_unproven' });
     });
 
-    it('still settles executed for equal successful calls with an unrelated refund', () => {
+    it('returns partial_overlap, never executed, for equal successful calls with an unrelated refund', () => {
       expect(
-        settlementOutcome(input({ executedAtNonce: runTx(refund) })).status,
-      ).toBe('executed');
+        settlementOutcome(input({ executedAtNonce: runTx(refund) })),
+      ).toEqual({
+        status: 'needs_review',
+        executedTxHash: TX_HASH,
+        review: { reason: 'partial_overlap' },
+      });
     });
   });
 

@@ -55,6 +55,8 @@ const STRAY_SKEW_MS = 10 * MINUTE;
 const MAX_QUEUED_PAGES = 5;
 const MAX_TRANSFER_PAGES = 10;
 const SAFE_CONCURRENCY = 5;
+/** Periodic polls of a pinned draft that never had a reported tx: nothing of ours is queued at N. */
+const IDLE_POLL_MS = 30 * MINUTE;
 // two-int4 advisory key space: never collides with the per-Safe bigint locks
 const RUN_LOCK = [0x6f7267, 3] as const;
 
@@ -97,6 +99,14 @@ export class PayoutStatusUpdater
 {
   private timer: NodeJS.Timeout | undefined;
   private bootTimer: NodeJS.Timeout | undefined;
+  /** Per run: the handling in progress, and whether another was asked for meanwhile. */
+  private readonly inFlight = new Map<
+    string,
+    { done: Promise<void>; again: boolean; idleBackoff: boolean }
+  >();
+  /** Run id → last periodic poll of it as an idle pinned draft. */
+  // shortcut: per process; after a replica switch an idle draft is polled once early
+  private readonly idlePolledAt = new Map<string, number>();
 
   constructor(
     @InjectDataSource(ORG_DATA_SOURCE) private readonly db: DataSource,
@@ -146,7 +156,8 @@ export class PayoutStatusUpdater
         for (const r of rows)
           bySafe.set(r.safe, [...(bySafe.get(r.safe) ?? []), r]);
         await mapLimit([...bySafe.values()], SAFE_CONCURRENCY, async (runs) => {
-          for (const r of runs) await this.handleSafely(r.org_id, r.run_id);
+          for (const r of runs)
+            await this.handleSafely(r.org_id, r.run_id, { idleBackoff: true });
         });
         return rows.length;
       } finally {
@@ -171,29 +182,49 @@ export class PayoutStatusUpdater
         ),
       );
     for (const r of rows) {
-      await this.handleSafely(r.org_id, r.run_id, safeTxHash);
+      await this.handleSafely(r.org_id, r.run_id, { safeTxHash });
     }
   }
 
-  /** One run: evidence read without a DB connection, then applied under the locks. */
-  async handle(orgId: string, runId: string): Promise<void> {
+  /**
+   * One run: evidence read without a DB connection, then applied under the
+   * locks. `idleBackoff` (periodic pass): a pinned draft that never had a
+   * reported tx is read at most every {@link IDLE_POLL_MS}.
+   */
+  async handle(
+    orgId: string,
+    runId: string,
+    opts: { idleBackoff?: boolean } = {},
+  ): Promise<void> {
     const [peek]: Array<{
       chain_id: string;
       safe_address: string;
+      status: PayoutRunStatus;
       pinned_nonce: string | null;
       first_attempt_at: Date | null;
+      ever_reported: boolean;
     }> = await this.tx.runInOrgTx(
       (em) =>
         em.query(
-          `SELECT chain_id, safe_address::text AS safe_address, pinned_nonce::text AS pinned_nonce,
+          `SELECT chain_id, safe_address::text AS safe_address, status, pinned_nonce::text AS pinned_nonce,
                   (SELECT min(a.created_at) FROM payout_proposal_attempts a
-                    WHERE a.org_id = r.org_id AND a.run_id = r.id) AS first_attempt_at
+                    WHERE a.org_id = r.org_id AND a.run_id = r.id) AS first_attempt_at,
+                  EXISTS (SELECT 1 FROM payout_proposal_attempts a
+                    WHERE a.org_id = r.org_id AND a.run_id = r.id AND a.reported_at IS NOT NULL) AS ever_reported
              FROM payout_runs r WHERE org_id = $1 AND id = $2`,
           [orgId, runId],
         ),
       orgId,
     );
     if (!peek || peek.pinned_nonce === null) return;
+    if (opts.idleBackoff && peek.status === 'draft' && !peek.ever_reported) {
+      const now = this.clock.now().getTime();
+      const last = this.idlePolledAt.get(runId);
+      if (last !== undefined && now - last < IDLE_POLL_MS) return;
+      this.idlePolledAt.set(runId, now);
+    } else {
+      this.idlePolledAt.delete(runId);
+    }
     const evidence = await this.readEvidence(
       peek.chain_id,
       peek.safe_address,
@@ -432,13 +463,49 @@ export class PayoutStatusUpdater
 
   // ---- helpers ----
 
-  private async handleSafely(
+  /**
+   * Coalesced per run: while one handling runs, any number of further
+   * requests (events, the periodic pass) become one rerun after it, so a
+   * burst of events never handles one run concurrently or N times.
+   */
+  private handleSafely(
     orgId: string,
     runId: string,
-    safeTxHash?: string,
+    opts: { safeTxHash?: string; idleBackoff?: boolean } = {},
+  ): Promise<void> {
+    const idleBackoff = opts.idleBackoff ?? false;
+    const current = this.inFlight.get(runId);
+    if (current) {
+      current.again = true;
+      // an event among the coalesced requests is never backed off
+      current.idleBackoff &&= idleBackoff;
+      return current.done;
+    }
+    const entry = { done: Promise.resolve(), again: false, idleBackoff };
+    entry.done = (async (): Promise<void> => {
+      try {
+        do {
+          const backoff = entry.idleBackoff;
+          entry.again = false;
+          entry.idleBackoff = true;
+          await this.handleOnce(orgId, runId, opts.safeTxHash, backoff);
+        } while (entry.again);
+      } finally {
+        this.inFlight.delete(runId);
+      }
+    })();
+    this.inFlight.set(runId, entry);
+    return entry.done;
+  }
+
+  private async handleOnce(
+    orgId: string,
+    runId: string,
+    safeTxHash: string | undefined,
+    idleBackoff: boolean,
   ): Promise<void> {
     try {
-      await this.handle(orgId, runId);
+      await this.handle(orgId, runId, { idleBackoff });
     } catch (error) {
       this.logger.warn({
         type: 'payout_status_run_failed',
@@ -608,7 +675,7 @@ export class PayoutStatusUpdater
           deadline !== null && now >= deadline
             ? {
                 status: 'needs_review',
-                review: { reason: 'stray_proposal' },
+                review: { reason: 'stray_proposal', outcome: outcome.status },
                 ...(executedTxHash && { executedTxHash }),
               }
             : {
@@ -616,15 +683,28 @@ export class PayoutStatusUpdater
                 ...(executedTxHash && { executedTxHash }),
               };
       } else if (stray) {
+        const review = strayReview(stray).review!;
+        // the reviewer needs what happened at N and whether the copy already paid
         outcome = {
-          ...strayReview(stray),
+          status: 'needs_review',
+          review: {
+            ...review,
+            outcome: outcome.status,
+            strayExecuted: stray.isExecuted,
+          },
           ...(executedTxHash && { executedTxHash }),
         };
       }
     }
     if (outcome.status === 'verifying')
       return this.markVerifying(em, run, outcome, now, executed);
-    await this.finish(em, run, outcome, executed, items.length);
+    // the run's own calls executed (maybe under another hash than the reported one)
+    const ownTx =
+      executed !== null &&
+      run.calls !== null &&
+      lower(executed.safe) === lower(run.safe_address) &&
+      callsMismatch(executed, fromStoredCalls(run.calls), ev.callOnly) === null;
+    await this.finish(em, run, outcome, ownTx ? executed : null, items.length);
   }
 
   /**
@@ -719,12 +799,17 @@ export class PayoutStatusUpdater
     return attempts.some((a) => a.status === 'open') ? 'proposing' : 'draft';
   }
 
-  /** A final outcome: pin cleared, open attempt released (`nonce_used`), watch row gone, `payout_run.settled`. */
+  /**
+   * A final outcome: pin cleared, open attempt released (`nonce_used`), watch
+   * row gone, `payout_run.settled`. `ownTx`: the executed tx at N carrying the
+   * run's calls; its safeTxHash is recorded, and a reported hash that differs
+   * is kept in `review.reportedSafeTxHash`.
+   */
   private async finish(
     em: EntityManager,
     run: PayoutRunRow,
     settlement: Settlement,
-    executed: MultisigTransaction | null,
+    ownTx: MultisigTransaction | null,
     itemCount: number,
   ): Promise<void> {
     let outcome = settlement;
@@ -744,24 +829,30 @@ export class PayoutStatusUpdater
       await this.unwatch(em, run);
       return;
     }
-    const ownTx = outcome.status === 'executed' || outcome.status === 'failed';
-    let safeTxHash =
-      run.safe_tx_hash ??
-      (ownTx && executed ? lower(executed.safeTxHash) : null);
-    if (safeTxHash !== null && run.safe_tx_hash === null) {
+    let safeTxHash = ownTx ? lower(ownTx.safeTxHash) : run.safe_tx_hash;
+    if (safeTxHash !== null && safeTxHash !== run.safe_tx_hash) {
       const taken: Array<unknown> = await em.query(
         `SELECT 1 FROM payout_runs WHERE org_id = $1 AND safe_tx_hash = $2 AND id <> $3`,
         [run.org_id, safeTxHash, run.id],
       );
       if (taken.length > 0) {
         // another run of the org records this tx: both cannot own one payment
-        safeTxHash = null;
+        safeTxHash = run.safe_tx_hash;
         outcome = {
           status: 'needs_review',
           review: { reason: 'partial_overlap' },
           ...(outcome.executedTxHash && {
             executedTxHash: outcome.executedTxHash,
           }),
+        };
+      } else if (run.safe_tx_hash !== null) {
+        // H reported, H' executed: the record follows the chain, the warning keeps H
+        outcome = {
+          ...outcome,
+          review: {
+            ...(outcome.review ?? { reason: 'executed_other_hash' }),
+            reportedSafeTxHash: run.safe_tx_hash,
+          },
         };
       }
     }

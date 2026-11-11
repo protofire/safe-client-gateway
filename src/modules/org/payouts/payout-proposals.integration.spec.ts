@@ -603,6 +603,45 @@ describe('payout proposals API', () => {
       });
     });
 
+    it('rejects an untrusted tx with tx_mismatch field trusted', async () => {
+      const c = await claimed();
+      const tx = p.chain.propose(SAFE_A, 5, c.calls, { trusted: false });
+      const res = await p
+        .report(orgA, c.runId, member, {
+          attemptId: c.attemptId,
+          expectedVersion: c.version,
+          safeTxHash: tx.safeTxHash,
+        })
+        .expect(422);
+      expect(res.body).toMatchObject({ code: 'tx_mismatch', field: 'trusted' });
+      expect(await p.runRow(orgA, c.runId)).toMatchObject({
+        status: 'proposing',
+      });
+    });
+
+    it('rejects a tx whose returned fields do not hash to the reported safeTxHash', async () => {
+      const c = await claimed();
+      // the tx-service copy claims a hash its fields do not produce
+      const tx = p.chain.propose(SAFE_A, 5, c.calls, {
+        safeTxHash: `0x${'5a'.repeat(32)}`,
+      });
+      const res = await p
+        .report(orgA, c.runId, member, {
+          attemptId: c.attemptId,
+          expectedVersion: c.version,
+          safeTxHash: tx.safeTxHash,
+        })
+        .expect(422);
+      expect(res.body).toMatchObject({
+        code: 'tx_mismatch',
+        field: 'safeTxHash',
+      });
+      expect(p.chain.repo.getSafe).toHaveBeenCalledWith({
+        chainId: '1',
+        address: SAFE_A,
+      });
+    });
+
     it('answers 422 multisend_unknown when the outer target is not a MultiSendCallOnly', async () => {
       const c = await claimed();
       const tx = p.chain.propose(SAFE_A, 5, c.calls, { to: addr(0xbad) });
@@ -927,6 +966,249 @@ describe('payout proposals API', () => {
       await p
         .get(`${orgB}/payout-runs/${b.runId}/export.csv`, adminB)
         .expect(404);
+    });
+  });
+
+  describe('abuse limits', () => {
+    const limitKey = (name: string): string =>
+      `${p.t.prefix}ratelimit:payouts:${name}`;
+
+    it('rate-limits run creation per user (60/h) and per org (300/h)', async () => {
+      await p.t.redis.set(limitKey(`create:user:${member.userId}`), '60');
+      await p
+        .write('post', `${orgA}/payout-runs`, member, {
+          linkedSafeId: safeA,
+          name: 'x',
+          rows: ROWS,
+        })
+        .expect(429);
+      // another user of the org is not affected by member's budget
+      await p.createRun(orgA, safeA, member2);
+      await p.t.redis.set(limitKey(`create:org:${orgA}`), '300');
+      await p
+        .write('post', `${orgA}/payout-runs`, admin, {
+          linkedSafeId: safeA,
+          name: 'x',
+          rows: ROWS,
+        })
+        .expect(429);
+    });
+
+    it('rate-limits claims and reports per user (30/min) before any tx-service read', async () => {
+      const b = await built();
+      await p.t.redis.set(limitKey(`claim:user:${member.userId}`), '30');
+      p.chain.repo.getNonces.mockClear();
+      await p
+        .claim(orgA, b.runId, member, { expectedVersion: b.version, nonce: 5 })
+        .expect(429);
+      expect(p.chain.repo.getNonces).not.toHaveBeenCalled();
+
+      const c = await claimed(member2);
+      const tx = p.chain.propose(SAFE_A, 5, c.calls);
+      await p.t.redis.set(limitKey(`report:user:${member2.userId}`), '30');
+      p.chain.repo.getMultiSigTransaction.mockClear();
+      await p
+        .report(orgA, c.runId, member2, {
+          attemptId: c.attemptId,
+          expectedVersion: c.version,
+          safeTxHash: tx.safeTxHash,
+        })
+        .expect(429);
+      expect(p.chain.repo.getMultiSigTransaction).not.toHaveBeenCalled();
+    });
+
+    it('checks a pinned re-claim nonce and another pinned run from the DB before any tx-service read', async () => {
+      const c = await claimed();
+      await p.release(orgA, c.runId, c.attemptId, member).expect(200);
+      const { run } = await p.detail(orgA, c.runId, member);
+      p.chain.repo.getNonces.mockClear();
+      p.chain.repo.clearSafe.mockClear();
+      const wrong = await p
+        .claim(orgA, c.runId, member, {
+          expectedVersion: run.version,
+          nonce: 6,
+        })
+        .expect(409);
+      expect(wrong.body).toMatchObject({
+        code: 'nonce_mismatch',
+        expectedNonce: '5',
+      });
+      const other = await built();
+      const taken = await p
+        .claim(orgA, other.runId, member, {
+          expectedVersion: other.version,
+          nonce: 6,
+        })
+        .expect(409);
+      expect(taken.body).toMatchObject({ code: 'nonce_taken', runId: c.runId });
+      expect(p.chain.repo.getNonces).not.toHaveBeenCalled();
+      expect(p.chain.repo.clearSafe).not.toHaveBeenCalled();
+    });
+
+    it('answers 409 run_limit at 500 outstanding runs of the org', async () => {
+      await p.asOrg(orgA, (em) =>
+        em.query(
+          `INSERT INTO payout_runs (org_id, chain_id, safe_address, name)
+           SELECT $1, '1', $2, 'r' || g FROM generate_series(1, 500) g`,
+          [orgA, SAFE_A.toLowerCase()],
+        ),
+      );
+      const res = await p
+        .write('post', `${orgA}/payout-runs`, member, {
+          linkedSafeId: safeA,
+          name: 'x',
+          rows: ROWS,
+        })
+        .expect(409);
+      expect(res.body.code).toBe('run_limit');
+      // settled runs do not count
+      await p.asOrg(orgA, (em) =>
+        em.query(
+          `UPDATE payout_runs SET status = 'executed' WHERE name = 'r1'`,
+        ),
+      );
+      await p.createRun(orgA, safeA, member);
+    });
+
+    it('answers 409 pin_limit at 50 pinned runs of the org', async () => {
+      await p.asOrg(orgA, (em) =>
+        em.query(
+          `INSERT INTO payout_runs (org_id, chain_id, safe_address, name, status, pinned_nonce)
+           SELECT $1, '1', '0x' || lpad(to_hex(4096 + g), 40, '0'), 'r' || g, 'proposing', 1
+             FROM generate_series(1, 50) g`,
+          [orgA],
+        ),
+      );
+      const b = await built();
+      const res = await p
+        .claim(orgA, b.runId, member, { expectedVersion: b.version, nonce: 5 })
+        .expect(409);
+      expect(res.body.code).toBe('pin_limit');
+    });
+
+    it('polls an idle pinned draft (never reported) at most every 30 minutes', async () => {
+      const c = await claimed();
+      await p.release(orgA, c.runId, c.attemptId, member).expect(200);
+      p.chain.repo.getNonces.mockClear();
+      await p.updater.run();
+      await p.updater.run();
+      expect(p.chain.repo.getNonces).toHaveBeenCalledTimes(1);
+      p.t.setOffset(31 * 60_000);
+      await p.updater.run();
+      expect(p.chain.repo.getNonces).toHaveBeenCalledTimes(2);
+      // an executed-transaction event is never backed off
+      await p.updater.onExecuted('1', SAFE_A, `0x${'1'.repeat(64)}`);
+      expect(p.chain.repo.getNonces).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  describe('stale authorization', () => {
+    const revoke = (who: User): Promise<unknown> =>
+      p.asOrg(orgA, (em) =>
+        em.query(
+          `DELETE FROM role_bindings WHERE member_id IN
+             (SELECT id FROM members WHERE org_id = $1 AND user_id = $2)`,
+          [orgA, who.userId],
+        ),
+      );
+
+    afterEach(() =>
+      p.asOrg(orgA, (em) =>
+        em.query(
+          `INSERT INTO role_bindings (member_id, role_id, scope)
+           SELECT m.id, r.id, 'org' FROM members m, roles r
+            WHERE m.org_id = $1 AND m.user_id = $2 AND r.org_id IS NULL AND r.key = 'member'
+              AND NOT EXISTS (SELECT 1 FROM role_bindings b WHERE b.member_id = m.id)`,
+          [orgA, member.userId],
+        ),
+      ),
+    );
+
+    it('re-checks the permission after the tx-service reads of a claim and stores nothing', async () => {
+      const b = await built();
+      p.chain.repo.getNonces.mockImplementationOnce(async () => {
+        await revoke(member);
+        return { currentNonce: 5, recommendedNonce: 5 };
+      });
+      await p
+        .claim(orgA, b.runId, member, { expectedVersion: b.version, nonce: 5 })
+        .expect(403);
+      expect(await p.runRow(orgA, b.runId)).toMatchObject({
+        status: 'draft',
+        pinned_nonce: null,
+      });
+    });
+
+    it('re-checks the permission after the tx-service reads of a report', async () => {
+      const c = await claimed();
+      const tx = p.chain.propose(SAFE_A, 5, c.calls);
+      p.chain.repo.getSafe.mockImplementationOnce(async () => {
+        await revoke(member);
+        return { address: SAFE_A, version: '1.3.0' } as never;
+      });
+      await p
+        .report(orgA, c.runId, member, {
+          attemptId: c.attemptId,
+          expectedVersion: c.version,
+          safeTxHash: tx.safeTxHash,
+        })
+        .expect(403);
+      expect(await p.runRow(orgA, c.runId)).toMatchObject({
+        status: 'proposing',
+        safe_tx_hash: null,
+      });
+    });
+
+    it('re-checks the permission after the token reads of a PATCH', async () => {
+      const b = await built();
+      p.chainsRepo.getChain.mockImplementationOnce(async () => {
+        await revoke(member);
+        return {
+          chainId: '1',
+          nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+          contractAddresses: {
+            multiSendAddress: null,
+            multiSendCallOnlyAddress: null,
+          },
+        };
+      });
+      await p
+        .write('patch', `${orgA}/payout-runs/${b.runId}`, member, {
+          expectedVersion: b.version,
+          rows: [{ address: CAROL, amount: '1', token: 'native' }],
+        })
+        .expect(403);
+      expect(await p.runRow(orgA, b.runId)).toMatchObject({
+        version: b.version,
+      });
+    });
+
+    it('requires payouts.manage to delete a run that has a proposal attempt', async () => {
+      const c = await claimed();
+      await p.release(orgA, c.runId, c.attemptId, member).expect(200);
+      // N goes to an unrelated tx: the draft loses its pin, the attempt stays
+      p.chain.execute(
+        p.chain.propose(SAFE_A, 5, [
+          toCall({ recipient: CAROL, token: 'native', amountRaw: 1n }),
+        ]),
+      );
+      await p.updater.run();
+      expect(await p.runRow(orgA, c.runId)).toMatchObject({
+        status: 'draft',
+        pinned_nonce: null,
+      });
+      const res = await p
+        .write('delete', `${orgA}/payout-runs/${c.runId}`, member)
+        .expect(403);
+      expect(res.body.code).toBe('forbidden');
+      await p
+        .write('delete', `${orgA}/payout-runs/${c.runId}`, admin)
+        .expect(204);
+      // without attempts a member may still delete a draft
+      const b = await built();
+      await p
+        .write('delete', `${orgA}/payout-runs/${b.runId}`, member)
+        .expect(204);
     });
   });
 });
