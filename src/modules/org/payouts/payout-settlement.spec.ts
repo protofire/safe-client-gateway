@@ -2,6 +2,7 @@ import {
   encodeFunctionData,
   erc20Abi,
   getAddress,
+  parseAbi,
   zeroAddress,
   type Address,
   type Hex,
@@ -69,6 +70,28 @@ const erc20 = (
     functionName: fn,
     args: [to, amount],
   }),
+  operation: 0,
+});
+
+const safeSettingsAbi = parseAbi([
+  'function changeThreshold(uint256 threshold)',
+  'function addOwnerWithThreshold(address owner, uint256 threshold)',
+  'function execTransactionFromModule(address to, uint256 value, bytes data, uint8 operation)',
+]);
+const safeSelf = (
+  functionName:
+    | 'changeThreshold'
+    | 'addOwnerWithThreshold'
+    | 'execTransactionFromModule',
+  args: ReadonlyArray<unknown>,
+): SafeCall => ({
+  to: SAFE,
+  value: 0n,
+  data: encodeFunctionData({
+    abi: safeSettingsAbi,
+    functionName,
+    args,
+  } as never),
   operation: 0,
 });
 
@@ -324,18 +347,49 @@ describe('settlementOutcome', () => {
     }
   });
 
-  it('returns replaced at once for a tx at N that moves nothing out of the Safe', () => {
+  it('never settles replaced for a call to an external contract, even one that looks harmless: verifying, then indirect_unproven', () => {
+    // any external call runs code that can pull the Safe's tokens through an earlier allowance
     for (const call of [
       erc20('transfer', USDC, STRANGER, 0n),
       erc20('transfer', USDC, SAFE, 5n),
-      { to: SAFE, value: 1n, data: '0x' as Hex, operation: 0 as const },
+      erc20('approve', USDC, STRANGER, 0n),
       { to: STRANGER, value: 0n, data: '0x' as Hex, operation: 0 as const },
+    ]) {
+      const tx = executed(call);
+      expect(
+        settlementOutcome(input({ executedAtNonce: tx, transfers: [] })),
+      ).toEqual({ status: 'verifying', executedTxHash: TX_HASH });
+      expect(
+        settlementOutcome(
+          input({ executedAtNonce: tx, transfers: [], now: DEADLINE }),
+        ).review,
+      ).toEqual({ reason: 'indirect_unproven' });
+    }
+  });
+
+  it('returns replaced at once for a tx at N whose every call is a Safe settings call on itself', () => {
+    const changeThreshold = safeSelf('changeThreshold', [2n]);
+    const addOwner = safeSelf('addOwnerWithThreshold', [STRANGER, 2n]);
+    for (const tx of [
+      executed(changeThreshold),
+      executed({ to: SAFE, value: 1n, data: '0x', operation: 0 }),
+      executed(multiSendCall(CALL_ONLY, [changeThreshold, addOwner])),
+    ])
+      expect(
+        settlementOutcome(input({ executedAtNonce: tx, transfers: [] })),
+      ).toEqual({ status: 'replaced', executedTxHash: TX_HASH });
+  });
+
+  it('never settles replaced for a Safe self-call that can run other code: a module execution or the fallback handler', () => {
+    for (const call of [
+      safeSelf('execTransactionFromModule', [USDC, 0n, '0x', 0]),
+      { to: SAFE, value: 0n, data: '0x12345678' as Hex, operation: 0 as const },
     ])
       expect(
         settlementOutcome(
           input({ executedAtNonce: executed(call), transfers: [] }),
-        ),
-      ).toEqual({ status: 'replaced', executedTxHash: TX_HASH });
+        ).status,
+      ).toBe('verifying');
   });
 
   it('returns needs_review partial_overlap for a different-amount ERC20 transfer to a run recipient at N', () => {
@@ -464,7 +518,7 @@ describe('settlementOutcome', () => {
       executedTxHash: TX_HASH,
       review: { reason: 'partial_overlap' },
     });
-    edited.executedAtNonce = executed(erc20('approve', USDC, STRANGER, 0n));
+    edited.executedAtNonce = executed(safeSelf('changeThreshold', [2n]));
     expect(settlementOutcome(edited).status).toBe('replaced');
     edited.executedAtNonce = executed(erc20('transfer', USDC, STRANGER, 5n));
     expect(settlementOutcome(edited).status).toBe('verifying');
@@ -623,11 +677,11 @@ describe('settlementOutcome', () => {
     });
   });
 
-  it('does not treat an approve(recipient, 0) revocation as overlap', () => {
+  it('does not treat an approve(recipient, 0) revocation as overlap, but cannot prove it harmless either', () => {
     const tx = executed(erc20('approve', DAI, CAROL, 0n));
     expect(
-      settlementOutcome(input({ executedAtNonce: tx, transfers: [] })).status,
-    ).toBe('replaced');
+      settlementOutcome(input({ executedAtNonce: tx, transfers: [] })),
+    ).toEqual({ status: 'verifying', executedTxHash: TX_HASH });
   });
 
   it('does not treat a payment-shaped call that also sends value as unable to pay indirectly', () => {

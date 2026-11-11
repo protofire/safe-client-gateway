@@ -107,6 +107,27 @@ function decodePayment(call: Pick<SafeCall, 'to' | 'data'>): {
   }
 }
 
+// Safe calls that only change its own storage; module executions, execTransaction and unknown selectors (fallback handler) run other code
+const safeSettingsAbi = parseAbi([
+  'function addOwnerWithThreshold(address owner, uint256 threshold)',
+  'function removeOwner(address prevOwner, address owner, uint256 threshold)',
+  'function swapOwner(address prevOwner, address oldOwner, address newOwner)',
+  'function changeThreshold(uint256 threshold)',
+  'function enableModule(address module)',
+  'function disableModule(address prevModule, address module)',
+  'function setFallbackHandler(address handler)',
+  'function approveHash(bytes32 hashToApprove)',
+]);
+
+function isSafeSettingsCall(call: Pick<SafeCall, 'data'>): boolean {
+  try {
+    decodeFunctionData({ abi: safeSettingsAbi, data: call.data });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const lower = (a: string): string => a.toLowerCase();
 const pairKey = (token: string, recipient: string): string =>
   `${lower(token)}:${lower(recipient)}`;
@@ -278,18 +299,11 @@ export function settlementOutcome(input: SettlementInput): Settlement {
   if (callOverlaps || transferOverlaps)
     return settle('needs_review', { reason: 'partial_overlap' });
 
-  // `replaced` only if no call moves the Safe's money: a recipient may forward it to a run recipient, which the Safe's transfers never show
-  // shortcut: only the Safe itself counts as a harmless receiver, so almost any real payment at N ends verifying → indirect_unproven; add trace inspection to prove more
+  // `replaced` only if every call is a settings call on the Safe itself: any external call runs code that can pull the Safe's tokens through an earlier allowance
+  // shortcut: almost any real payment at N ends verifying → indirect_unproven; add trace inspection to prove more
   const self = lower(safe);
-  const movesNothing = flat.calls.every((c) => {
-    if (c.value > 0n && lower(c.to) !== self) return false;
-    if (c.data === '0x') return true;
-    const payment = decodePayment(c);
-    return (
-      c.value === 0n &&
-      payment !== null &&
-      (payment.amount === 0n || payment.recipient === self)
-    );
-  });
-  return movesNothing && !refund ? settle('replaced') : unproven();
+  const onlySafeSettings = flat.calls.every(
+    (c) => lower(c.to) === self && (c.data === '0x' || isSafeSettingsCall(c)),
+  );
+  return onlySafeSettings && !refund ? settle('replaced') : unproven();
 }
