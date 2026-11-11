@@ -145,12 +145,6 @@ export class PayoutProposalsService {
         throw runLocked(before.status, usedMessage(before.pinned_nonce));
       nonces = await this.nonces(before.chain_id, safeAddress);
     }
-    // RPC before the transaction; the version check under the lock keeps the calls it saw
-    const simulation = await this.runs.simulate(
-      before.chain_id,
-      before.safe_address,
-      fromStoredCalls(before.calls!),
-    );
 
     return this.tx.runInOrgTx(async (em) => {
       await lockOrgFor(
@@ -202,17 +196,11 @@ export class PayoutProposalsService {
       const [[{ version }]]: [Array<{ version: number }>, number] =
         await em.query(
           `UPDATE payout_runs
-            SET status = 'proposing', pinned_nonce = $3, evaluation = $4::jsonb, simulation = $5::jsonb,
+            SET status = 'proposing', pinned_nonce = $3, evaluation = $4::jsonb,
                 safe_tx_hash = NULL, nonce = NULL, executed_tx_hash = NULL, review = NULL,
                 verifying_since = NULL, version = version + 1, updated_at = now()
           WHERE org_id = $1 AND id = $2 RETURNING version`,
-          [
-            orgId,
-            run.id,
-            expected,
-            JSON.stringify(evaluation),
-            simulation && JSON.stringify(simulation),
-          ],
+          [orgId, run.id, expected, JSON.stringify(evaluation)],
         );
       await em.query(
         `INSERT INTO payout_watch (run_id, org_id, chain_id, safe_address)

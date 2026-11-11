@@ -1,4 +1,3 @@
-import { encodeErrorResult, parseAbi } from 'viem';
 import {
   ALICE,
   BOB,
@@ -8,7 +7,6 @@ import {
   USDC,
   addr,
   createPayoutTestApp,
-  simulationReverted,
   toCalls,
   type PayoutTestApp,
   type Row,
@@ -101,38 +99,14 @@ describe('payout proposals API', () => {
   }
 
   describe('claim', () => {
-    it('simulates the run at claim and stores the result; a failed simulation only warns', async () => {
+    it('does not simulate at claim and keeps the build-time result', async () => {
       const b = await built();
-      expect((await p.runRow(orgA, b.runId)).simulation).toBeNull();
-      const reason = 'ERC20: transfer amount exceeds balance';
-      p.rpc.request.mockRejectedValue(
-        simulationReverted(
-          80_000n,
-          false,
-          encodeErrorResult({
-            abi: parseAbi(['error Error(string)']),
-            errorName: 'Error',
-            args: [reason],
-          }),
-        ),
-      );
+      p.rpc.request.mockClear();
       await p
         .claim(orgA, b.runId, member, { expectedVersion: b.version, nonce: 5 })
         .expect(201);
-      expect(p.rpc.request).toHaveBeenCalledWith({
-        method: 'eth_call',
-        params: [{ to: SAFE_A, data: expect.any(String) }, 'latest'],
-      });
-      const d = await p.detail(orgA, b.runId, member);
-      expect(d.run.simulation).toEqual({
-        ok: false,
-        reason,
-        at: expect.any(String),
-      });
-      expect(d.runWarnings).toContainEqual({
-        code: 'simulation_failed',
-        message: reason,
-      });
+      expect(p.rpc.request).not.toHaveBeenCalled();
+      expect((await p.runRow(orgA, b.runId)).simulation).toBeNull();
     });
 
     it('claims an attempt at the recommended nonce, pins it and moves the run to proposing', async () => {

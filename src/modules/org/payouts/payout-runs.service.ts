@@ -20,6 +20,7 @@ import {
   zeroAddress,
   type Address,
   type Hex,
+  type PublicClient,
 } from 'viem';
 import {
   getRevertReason,
@@ -139,6 +140,20 @@ const CREATES_PER_ORG_PER_HOUR = 300;
 // each build simulates the run over RPC
 const BUILDS_PER_USER_PER_MINUTE = 30;
 const SIMULATION_FAILED = 'The transaction would fail on-chain';
+/** Overall deadline of the build simulation; past it the run builds with `simulation_unavailable`. */
+export const SIMULATION_TIMEOUT_MS = 5_000;
+const REASON_MAX = 200;
+
+/** A revert text safe to store: no control characters (NUL breaks jsonb), bounded, no lone surrogate. */
+export function sanitizeReason(reason: string): string {
+  return (
+    reason
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
+      .slice(0, REASON_MAX)
+      .toWellFormed()
+  );
+}
 /** Runs not settled yet (`draft | proposing | proposed | verifying`) an org may hold. */
 export const MAX_OPEN_RUNS_PER_ORG = 500;
 const OPEN_RUN_STATUSES: ReadonlyArray<PayoutRunStatus> = [
@@ -421,7 +436,10 @@ export function assertRunSize(
   if (estimatedGas <= PAYOUT_GAS_BOUND) return estimatedGas;
   // shortcut: with only a simulated total, the recipients that fit are prorated
   const maxRecipients = size.ok
-    ? Number((BigInt(calls.length) * PAYOUT_GAS_BOUND) / estimatedGas)
+    ? Math.max(
+        1,
+        Number((BigInt(calls.length) * PAYOUT_GAS_BOUND) / estimatedGas),
+      )
     : size.maxRecipients;
   const gasBound = Number(PAYOUT_GAS_BOUND);
   throw new UnprocessableEntityException({
@@ -742,6 +760,25 @@ export class PayoutRunsService {
     safeAddress: string,
     calls: ReadonlyArray<SafeCall>,
   ): Promise<RunSimulation | null> {
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), SIMULATION_TIMEOUT_MS);
+    });
+    try {
+      return await Promise.race([
+        this.simulateOnChain(chainId, safeAddress, calls),
+        deadline,
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async simulateOnChain(
+    chainId: string,
+    safeAddress: string,
+    calls: ReadonlyArray<SafeCall>,
+  ): Promise<RunSimulation | null> {
     const accessor = getSimulateTxAccessor(chainId);
     if (!accessor) return null;
     try {
@@ -751,8 +788,15 @@ export class PayoutRunsService {
         chain.contractAddresses.multiSendCallOnlyAddress ?? undefined,
       );
       if (!callOnly) return null;
+      const client = await this.blockchain.getApi(chainId);
       const result = await simulateSafeCall(
-        await this.blockchain.getApi(chainId),
+        // no transport retries: the overall deadline is short
+        {
+          request: ((args: Parameters<PublicClient['request']>[0]) =>
+            client.request(args, {
+              retryCount: 0,
+            })) as PublicClient['request'],
+        },
         {
           safeAddress: getAddress(safeAddress),
           accessor,
@@ -768,10 +812,9 @@ export class PayoutRunsService {
         ? { ok: true, gasUsed: result.estimate.toString(), at }
         : {
             ok: false,
-            // a token's revert text is shown to users: bounded
-            reason: getRevertReason(result.returnData, SIMULATION_FAILED).slice(
-              0,
-              200,
+            // a token's revert text is shown to users: sanitized and bounded
+            reason: sanitizeReason(
+              getRevertReason(result.returnData, SIMULATION_FAILED),
             ),
             at,
           };

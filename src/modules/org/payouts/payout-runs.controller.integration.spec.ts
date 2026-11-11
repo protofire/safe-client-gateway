@@ -751,6 +751,29 @@ describe('payout runs API', () => {
       );
     });
 
+    it('stores a revert reason without control characters, bounded to 200', async () => {
+      rpc.request.mockRejectedValue(
+        simulationReverted(
+          50_000n,
+          false,
+          errorString(`a\u0000b${'x'.repeat(300)}`),
+        ),
+      );
+      const { run } = await createRun();
+      const res = await build(run.id).expect(200);
+      expect(res.body.run.simulation.reason).toBe(`ab${'x'.repeat(198)}`);
+    });
+
+    it('simulates without transport retries', async () => {
+      rpc.request.mockRejectedValue(simulationReverted(100_000n));
+      const { run } = await createRun();
+      await build(run.id).expect(200);
+      expect(rpc.request).toHaveBeenCalledWith(
+        { method: 'eth_call', params: expect.any(Array) },
+        { retryCount: 0 },
+      );
+    });
+
     it('warns simulation_failed with a generic message when the revert has no reason', async () => {
       rpc.request.mockRejectedValue(simulationReverted(50_000n, false));
       const { run } = await createRun();
