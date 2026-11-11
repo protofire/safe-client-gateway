@@ -152,9 +152,8 @@
                 "payout_run.proposal_claimed",
                 "payout_run.proposal_released",
                 "payout_run.proposed",
-                "payout_run.verification_delayed",
-                "payout_run.stray_detected",
-                "payout_run.settled"
+                "payout_run.settled",
+                "payout_run.resolved"
               ]
             }
           },
@@ -242,9 +241,8 @@
                 "payout_run.proposal_claimed",
                 "payout_run.proposal_released",
                 "payout_run.proposed",
-                "payout_run.verification_delayed",
-                "payout_run.stray_detected",
-                "payout_run.settled"
+                "payout_run.settled",
+                "payout_run.resolved"
               ]
             }
           },
@@ -1165,6 +1163,46 @@
                   }
                 },
                 "required": ["attemptId", "safeTxHash"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["PayoutRuns"]
+      }
+    },
+    "/v1/orgs/{orgId}/payout-runs/{runId}/resolve": {
+      "post": {
+        "operationId": "PayoutRunsController_resolve_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "runId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedVersion": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "note": { "type": "string", "maxLength": 500 }
+                },
+                "required": ["expectedVersion"]
               }
             }
           }
