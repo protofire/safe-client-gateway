@@ -133,6 +133,10 @@ export type PayoutRunView = {
   review: PayoutReview | null;
   pinnedNonce: string | null;
   verifyingSince: string | null;
+  /** `resolved`: who closed the review (user id), when, and their note; `review` is kept */
+  resolvedBy: string | null;
+  resolvedAt: string | null;
+  resolutionNote: string | null;
   latestAttempt: PayoutAttemptView | null;
   actions: PayoutRunActions;
 };

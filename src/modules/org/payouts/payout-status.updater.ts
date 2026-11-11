@@ -394,7 +394,10 @@ export class PayoutStatusUpdater
       [run.org_id, run.id, run.pinned_nonce],
     );
     const now = this.clock.now();
-    const outcome = settlementOutcome({
+    const deadline = run.verifying_since
+      ? new Date(run.verifying_since.getTime() + DEADLINE_MS)
+      : null;
+    let outcome = settlementOutcome({
       run: {
         chainId: run.chain_id,
         safeAddress: getAddress(run.safe_address),
@@ -412,11 +415,17 @@ export class PayoutStatusUpdater
       trusted: ev.trusted,
       callOnly: ev.callOnly,
       now,
-      deadline: run.verifying_since
-        ? new Date(run.verifying_since.getTime() + DEADLINE_MS)
-        : null,
+      deadline,
     });
-    // pending: N is used but the execution is not visible or decided yet
+    // pending: N is used but the execution is not visible or decided yet; at the deadline no transfer is proven
+    if (outcome.status === 'pending' && deadline !== null && now >= deadline)
+      outcome = {
+        status: 'needs_review',
+        review: { reason: 'missing_transfers' },
+        ...(ev.executed?.transactionHash && {
+          executedTxHash: ev.executed.transactionHash,
+        }),
+      };
     if (outcome.status === 'pending' || outcome.status === 'verifying')
       return this.markVerifying(em, run, now, outcome.executedTxHash ?? null);
     await this.finish(em, run, outcome, ev, items.length);

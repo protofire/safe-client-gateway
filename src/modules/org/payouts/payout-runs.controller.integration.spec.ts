@@ -431,6 +431,9 @@ describe('payout runs API', () => {
       review: null,
       pinnedNonce: null,
       verifyingSince: null,
+      resolvedBy: null,
+      resolvedAt: null,
+      resolutionNote: null,
       latestAttempt: null,
       actions: {
         edit: true,

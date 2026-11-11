@@ -96,6 +96,9 @@ export type PayoutRunRow = {
   nonce: string | null;
   executed_tx_hash: string | null;
   verifying_since: Date | null;
+  resolved_by: string | null;
+  resolved_at: Date | null;
+  resolution_note: string | null;
   review: PayoutReview | null;
   created_at: Date;
 };
@@ -117,7 +120,7 @@ export type PayoutItemRow = {
 const RUN_COLUMNS = `id, org_id, chain_id, safe_address::text AS safe_address, name, status, version,
   created_by, calls, est_gas::text AS est_gas, evaluation, pinned_nonce::text AS pinned_nonce,
   safe_tx_hash, nonce::text AS nonce, executed_tx_hash, verifying_since,
-  review, created_at`;
+  resolved_by, resolved_at, resolution_note, review, created_at`;
 
 // abuse limits (milestone P): creation is cheap to call and costly to serve
 const CREATES_PER_USER_PER_HOUR = 60;
@@ -941,6 +944,9 @@ export class PayoutRunsService {
         review: r.review,
         pinnedNonce: r.pinned_nonce,
         verifyingSince: r.verifying_since?.toISOString() ?? null,
+        resolvedBy: r.resolved_by,
+        resolvedAt: r.resolved_at?.toISOString() ?? null,
+        resolutionNote: r.resolution_note,
         latestAttempt,
         actions: {
           edit: prepare && editable && linked,

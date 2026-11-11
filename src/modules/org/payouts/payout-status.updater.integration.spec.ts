@@ -512,7 +512,7 @@ describe('PayoutStatusUpdater', () => {
     expect(await status(r.runId)).toBe('executed');
   });
 
-  it('keeps a used nonce whose execution the tx-service does not show verifying, also past the deadline', async () => {
+  it('moves a used nonce whose execution the tx-service does not show to verifying and to needs_review missing_transfers without lines at the deadline', async () => {
     const r = await proposed();
     p.chain.setNonce(SAFE_A, 6); // N used on-chain, nothing indexed yet
     await p.updater.run();
@@ -522,15 +522,26 @@ describe('PayoutStatusUpdater', () => {
     });
     await p.asOrg(orgA, (em) =>
       em.query(
+        `UPDATE payout_runs SET verifying_since = now() - interval '23 hours 59 minutes' WHERE id = $1`,
+        [r.runId],
+      ),
+    );
+    await p.updater.run();
+    expect(await status(r.runId)).toBe('verifying');
+    await p.asOrg(orgA, (em) =>
+      em.query(
         `UPDATE payout_runs SET verifying_since = now() - interval '24 hours 1 minute' WHERE id = $1`,
         [r.runId],
       ),
     );
     await p.updater.run();
     expect(await p.runRow(orgA, r.runId)).toMatchObject({
-      status: 'verifying',
-      pinned_nonce: '5',
+      status: 'needs_review',
+      review: { reason: 'missing_transfers' },
+      executed_tx_hash: null,
+      pinned_nonce: null,
     });
+    expect(await p.watchRows()).toEqual([]);
   });
 
   it('adopts a matching queued tx for a new open attempt even if an earlier attempt released that hash', async () => {

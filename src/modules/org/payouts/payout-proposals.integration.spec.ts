@@ -825,6 +825,11 @@ describe('payout proposals API', () => {
       expect(res.body.run).toMatchObject({
         status: 'resolved',
         version: r.version + 1,
+        // kept as history
+        review: { reason: 'partial_overlap' },
+        resolvedBy: admin.userId,
+        resolvedAt: expect.any(String),
+        resolutionNote: 'checked on-chain, Bob paid in full',
         actions: {
           edit: false,
           build: false,
@@ -868,7 +873,10 @@ describe('payout proposals API', () => {
 
     it('stores a missing note as null', async () => {
       const r = await needsReview();
-      await resolve(r.runId, admin, { expectedVersion: r.version }).expect(200);
+      const res = await resolve(r.runId, admin, {
+        expectedVersion: r.version,
+      }).expect(200);
+      expect(res.body.run.resolutionNote).toBeNull();
       expect(await p.runRow(orgA, r.runId)).toMatchObject({
         status: 'resolved',
         resolution_note: null,
