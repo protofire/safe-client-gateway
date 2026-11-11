@@ -164,12 +164,12 @@ export type PayoutRunWarning =
       required: string;
       available?: string;
     }
-  /** the run's transaction reverts in the on-chain simulation; `message` is the revert reason */
-  | { code: 'simulation_failed'; message: string }
+  /** the run's transaction reverts in the on-chain simulation; `message` is the revert reason, present only when one was decoded */
+  | { code: 'simulation_failed'; message?: string }
   /** built, but the chain could not simulate it (RPC down, no SimulateTxAccessor, Safe < 1.3.0) */
   | { code: 'simulation_unavailable' };
 
-/** Newest on-chain simulation of the run's transaction (build or claim); `gasUsed` when ok, `reason` when not. */
+/** Newest on-chain simulation of the run's transaction (build or claim); `gasUsed` when ok, `reason` (a decoded revert reason only) when not. */
 export type RunSimulation = {
   ok: boolean;
   reason?: string;

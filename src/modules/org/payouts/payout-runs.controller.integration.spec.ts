@@ -805,16 +805,15 @@ describe('payout runs API', () => {
       );
     });
 
-    it('warns simulation_failed with a generic message when the revert has no reason', async () => {
+    it('warns simulation_failed without a message and stores no reason when the revert has none', async () => {
       rpc.request.mockRejectedValue(simulationReverted(50_000n, false));
       const { run } = await createRun();
       const res = await build(run.id).expect(200);
-      expect(res.body.runWarnings).toEqual([
-        {
-          code: 'simulation_failed',
-          message: 'The transaction would fail on-chain',
-        },
-      ]);
+      expect(res.body.run.simulation).toEqual({
+        ok: false,
+        at: expect.any(String),
+      });
+      expect(res.body.runWarnings).toEqual([{ code: 'simulation_failed' }]);
     });
 
     it('warns simulation_unavailable when the RPC fails, and stores no result', async () => {

@@ -139,7 +139,6 @@ const CREATES_PER_USER_PER_HOUR = 60;
 const CREATES_PER_ORG_PER_HOUR = 300;
 // each build simulates the run over RPC
 const BUILDS_PER_USER_PER_MINUTE = 30;
-const SIMULATION_FAILED = 'The transaction would fail on-chain';
 /** Overall deadline of the build simulation; past it the run builds with `simulation_unavailable`. */
 export const SIMULATION_TIMEOUT_MS = 5_000;
 const REASON_MAX = 200;
@@ -379,7 +378,7 @@ function simulationWarnings(
     : [
         {
           code: 'simulation_failed',
-          message: run.simulation.reason ?? SIMULATION_FAILED,
+          ...(run.simulation.reason && { message: run.simulation.reason }),
         },
       ];
 }
@@ -818,16 +817,12 @@ export class PayoutRunsService {
       );
       if (!result) return null;
       const at = new Date().toISOString();
-      return result.success
-        ? { ok: true, gasUsed: result.estimate.toString(), at }
-        : {
-            ok: false,
-            // a token's revert text is shown to users: sanitized and bounded
-            reason: sanitizeReason(
-              getRevertReason(result.returnData, SIMULATION_FAILED),
-            ),
-            at,
-          };
+      if (result.success) {
+        return { ok: true, gasUsed: result.estimate.toString(), at };
+      }
+      // a token's revert text is shown to users: sanitized and bounded; '' when none was decoded
+      const reason = sanitizeReason(getRevertReason(result.returnData, ''));
+      return { ok: false, ...(reason && { reason }), at };
     } catch {
       return null;
     }
