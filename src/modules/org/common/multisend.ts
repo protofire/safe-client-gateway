@@ -97,20 +97,3 @@ export function walkCalls(
   visit(tx, '', 0);
   return { calls, issues };
 }
-
-/**
- * All plain calls of a Safe transaction, or why it cannot be fully decoded.
- * An empty `multiSend(0x)` decodes to zero calls (`ok: true, calls: []`);
- * B7 must treat zero calls as undecodable, since nothing in it can match a run.
- */
-export function flattenCalls(
-  tx: SafeCall,
-  trustedMultiSend: ReadonlySet<string>,
-):
-  | { ok: true; calls: Array<FlatCall> }
-  | { ok: false; reason: FlattenIssue['reason'] } {
-  const { calls, issues } = walkCalls(tx, trustedMultiSend);
-  return issues.length === 0
-    ? { ok: true, calls }
-    : { ok: false, reason: issues[0].reason };
-}

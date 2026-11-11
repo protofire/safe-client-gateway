@@ -5,7 +5,6 @@ import { multiSendCall } from '@/modules/org/common/__tests__/multisend.builder'
 import type { SafeCall } from '@/modules/org/common/multisend';
 import { toCall } from '@/modules/org/payouts/payout-calls';
 import {
-  callsEqual,
   multiSendCallOnlySet,
   reorgMarginMs,
   verifyProposedTx,
@@ -231,19 +230,6 @@ describe('verifyProposedTx', () => {
     expect(verify({ ...tx, value: '1' }, run([native]))).toEqual(
       mismatch('value'),
     );
-  });
-});
-
-describe('callsEqual', () => {
-  it('normalises address case and data case', () => {
-    const a = CALLS[1];
-    const b = {
-      ...a,
-      to: a.to.toLowerCase() as Address,
-      data: a.data.toUpperCase().replace('0X', '0x') as SafeCall['data'],
-    };
-    expect(callsEqual(a, b)).toBe(true);
-    expect(callsEqual(a, { ...a, value: 1n })).toBe(false);
   });
 });
 

@@ -1,11 +1,6 @@
 import { encodeFunctionData, erc20Abi, getAddress, type Hex } from 'viem';
+import { unpackMultiSend, type SafeCall } from '@/modules/org/common/multisend';
 import {
-  flattenCalls,
-  unpackMultiSend,
-  type SafeCall,
-} from '@/modules/org/common/multisend';
-import {
-  multiSendCall,
   multiSendData,
   packCalls as pack,
 } from '@/modules/org/common/__tests__/multisend.builder';
@@ -68,57 +63,5 @@ describe('unpackMultiSend', () => {
     expect(unpackMultiSend(`0xdeadbeef${data.slice(10)}` as Hex)).toBeNull();
     expect(unpackMultiSend('0x')).toBeNull();
     expect(unpackMultiSend('0x8d80ff0a')).toBeNull();
-  });
-});
-
-describe('flattenCalls', () => {
-  const MS = getAddress('0x0000000000000000000000000000000000003e5d');
-  const trusted = new Set([MS.toLowerCase()]);
-
-  it('flattens nested trusted MultiSends with call paths', () => {
-    const tx = multiSendCall(MS, [native, multiSendCall(MS, [erc20])]);
-    expect(flattenCalls(tx, trusted)).toEqual({
-      ok: true,
-      calls: [
-        { ...native, callPath: '0' },
-        { ...erc20, callPath: '1.0' },
-      ],
-    });
-    expect(flattenCalls(native, trusted)).toEqual({
-      ok: true,
-      calls: [{ ...native, callPath: '' }],
-    });
-  });
-
-  it('returns delegatecall for an inner delegatecall to a non-MultiSend target', () => {
-    const tx = multiSendCall(MS, [native, { ...erc20, operation: 1 }]);
-    expect(flattenCalls(tx, trusted)).toEqual({
-      ok: false,
-      reason: 'delegatecall',
-    });
-    expect(flattenCalls(multiSendCall(alice, [native]), trusted)).toEqual({
-      ok: false,
-      reason: 'delegatecall',
-    });
-  });
-
-  it('returns nesting_too_deep at depth 3 and undecodable for bad packing', () => {
-    const deep = multiSendCall(MS, [
-      multiSendCall(MS, [multiSendCall(MS, [native])]),
-    ]);
-    expect(flattenCalls(deep, trusted)).toEqual({
-      ok: false,
-      reason: 'nesting_too_deep',
-    });
-    const bad = {
-      to: MS,
-      value: 0n,
-      data: multiSendData(`${pack([native])}00` as Hex),
-      operation: 1 as const,
-    };
-    expect(flattenCalls(bad, trusted)).toEqual({
-      ok: false,
-      reason: 'undecodable',
-    });
   });
 });

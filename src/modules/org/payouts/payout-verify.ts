@@ -57,11 +57,6 @@ const sameAddress = (a: string | null, b: string): boolean =>
 export const isZeroAddress = (a: string | null): boolean =>
   a === null || sameAddress(a, zeroAddress);
 
-/** Same call after normalising `to` case, `data` case and null data. */
-export function callsEqual(a: SafeCall, b: SafeCall): boolean {
-  return a.operation === b.operation && firstDifference(a, b) === null;
-}
-
 function firstDifference(
   actual: Pick<SafeCall, 'to' | 'value'> & { data: Hex | null },
   expected: SafeCall,

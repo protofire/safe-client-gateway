@@ -40,6 +40,8 @@ export const MINUTE = 60_000;
 export type AuthTestApp = {
   app: NestExpressApplication;
   sql: DataSource;
+  /** A fresh, uninitialised table-owner connection (the app login cannot write roles). */
+  owner(): DataSource;
   redis: ReturnType<typeof createClient>;
   /** Random per app; every org Redis key of this app starts with it. */
   prefix: string;
@@ -171,6 +173,7 @@ export async function createAuthTestApp(args: {
   return {
     app,
     sql,
+    owner: (): DataSource => db.owner(),
     redis,
     prefix,
     setOffset: (ms): void => {

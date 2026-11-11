@@ -268,6 +268,18 @@ export class PayoutStatusUpdater
       return; // the pin changed after the read: the next pass reads again
     if (ev.currentNonce > ev.nonce) return this.settle(em, run, ev);
     if (run.status === 'proposing') await this.adopt(em, run, ev);
+    else if (run.status === 'verifying') await this.reopen(em, run);
+  }
+
+  /** N reads unused again (e.g. a reorg dropped the execution): back to draft, the pin and the attempts stay. */
+  private async reopen(em: EntityManager, run: PayoutRunRow): Promise<void> {
+    await em.query(
+      `UPDATE payout_runs
+          SET status = 'draft', verifying_since = NULL, executed_tx_hash = NULL,
+              safe_tx_hash = NULL, nonce = NULL, version = version + 1, updated_at = now()
+        WHERE org_id = $1 AND id = $2`,
+      [run.org_id, run.id],
+    );
   }
 
   /** Report accepted (report route or adoption): attempt reported, run proposed. */

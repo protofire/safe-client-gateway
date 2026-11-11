@@ -952,7 +952,7 @@ export class PayoutRunsService {
           edit: prepare && editable && linked,
           build: prepare && editable && linked,
           propose: prepare && editable && linked && r.calls !== null,
-          release: releasable,
+          release: prepare && releasable,
           // the UI's on-chain rejection at the pin; an active attempt is released first
           cancelReservation:
             prepare &&

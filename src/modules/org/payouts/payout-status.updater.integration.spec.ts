@@ -544,6 +544,30 @@ describe('PayoutStatusUpdater', () => {
     expect(await p.watchRows()).toEqual([]);
   });
 
+  it('returns a verifying run to draft, pin and attempts kept, when N reads unused again', async () => {
+    const r = await proposed();
+    p.chain.setNonce(SAFE_A, 6);
+    await p.updater.run();
+    expect(await status(r.runId)).toBe('verifying');
+    p.chain.setNonce(SAFE_A, 5); // a reorg dropped the execution
+    await p.updater.run();
+    expect(await p.runRow(orgA, r.runId)).toMatchObject({
+      status: 'draft',
+      pinned_nonce: '5',
+      verifying_since: null,
+      executed_tx_hash: null,
+      safe_tx_hash: null,
+    });
+    expect(await p.watchRows()).toHaveLength(1);
+    const attempts = await p.asOrg(orgA, (em) =>
+      em.query(
+        `SELECT status FROM payout_proposal_attempts WHERE run_id = $1`,
+        [r.runId],
+      ),
+    );
+    expect(attempts).toEqual([{ status: 'reported' }]);
+  });
+
   it('adopts a matching queued tx for a new open attempt even if an earlier attempt released that hash', async () => {
     const r = await proposed();
     await p.release(orgA, r.runId, r.attemptId, member).expect(200);

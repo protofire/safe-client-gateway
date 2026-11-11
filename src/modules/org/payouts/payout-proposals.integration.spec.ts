@@ -975,6 +975,37 @@ describe('payout proposals API', () => {
       expect(await actionsOf(c.runId, member2)).toEqual(none);
     });
 
+    it('does not offer release to a claimer who lost payouts.prepare, though the attempt stays releasable', async () => {
+      const c = await claimed(member);
+      // payouts.view only: the claimer can read the run but not act on it
+      const owner = p.t.owner();
+      await owner.initialize();
+      const [{ id }]: Array<{ id: string }> = await owner.query(
+        `INSERT INTO roles (org_id, key, name, permissions)
+         VALUES ($1, 'viewer', 'Viewer', ARRAY['payouts.view']) RETURNING id`,
+        [orgA],
+      );
+      const [{ id: memberRole }]: Array<{ id: string }> = await owner.query(
+        `SELECT id FROM roles WHERE org_id IS NULL AND key = 'member'`,
+      );
+      const bind = (roleId: string): Promise<unknown> =>
+        owner.query(
+          `UPDATE role_bindings SET role_id = $3
+            WHERE member_id = (SELECT id FROM members WHERE org_id = $1 AND user_id = $2)`,
+          [orgA, member.userId, roleId],
+        );
+      await bind(id);
+      try {
+        const run = (await p.detail(orgA, c.runId, member)).run;
+        expect(run.latestAttempt!.releasable).toBe(true);
+        expect(run.actions.release).toBe(false);
+      } finally {
+        await bind(memberRole);
+        await owner.query(`DELETE FROM roles WHERE id = $1`, [id]);
+        await owner.destroy();
+      }
+    });
+
     it('keeps a released pinned draft editable and cancellable but not deletable', async () => {
       const c = await claimed();
       await p.release(orgA, c.runId, c.attemptId, member).expect(200);
