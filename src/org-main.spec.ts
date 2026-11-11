@@ -245,7 +245,7 @@ describe('configureOrgApp', () => {
       'Content-Type,X-Org-Request',
     );
     expect(res.headers['access-control-allow-methods']).toBe(
-      'GET,POST,PATCH,DELETE',
+      'GET,POST,PUT,PATCH,DELETE',
     );
   });
 

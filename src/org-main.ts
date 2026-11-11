@@ -43,7 +43,7 @@ export function configureOrgApp(app: NestExpressApplication): void {
     origin: config.getOrThrow<string>('org.publicAppUrl'),
     credentials: true,
     allowedHeaders: ['Content-Type', 'X-Org-Request'],
-    methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   });
   app.use(json({ limit: config.getOrThrow<string>('express.jsonLimit') }));
   app.use(cookieParser());
