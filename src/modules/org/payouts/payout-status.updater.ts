@@ -756,6 +756,18 @@ export class PayoutStatusUpdater
       `UPDATE payout_runs SET review = $3::jsonb, updated_at = now() WHERE org_id = $1 AND id = $2`,
       [run.org_id, run.id, JSON.stringify(review)],
     );
+    // an edit or build clears `review`; the same copy re-found is not news
+    const [last]: Array<{ payload: Record<string, unknown> }> = await em.query(
+      `SELECT payload FROM activity_events
+        WHERE org_id = $1 AND target_type = 'payout_run' AND target_id = $2 AND type = 'payout_run.stray_detected'
+        ORDER BY created_at DESC, id DESC LIMIT 1`,
+      [run.org_id, run.id],
+    );
+    if (
+      last?.payload.straySafeTxHash === review.safeTxHash &&
+      last.payload.strayExecuted === review.strayExecuted
+    )
+      return;
     await this.event(em, run, 'payout_run.stray_detected', {
       name: run.name,
       safeTxHash: run.safe_tx_hash,

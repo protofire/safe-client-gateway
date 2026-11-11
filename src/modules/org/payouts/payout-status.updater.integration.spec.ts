@@ -1148,6 +1148,31 @@ describe('PayoutStatusUpdater', () => {
     expect(await p.events('payout_run.stray_detected')).toHaveLength(2);
   });
 
+  it('re-warns but does not re-log the same copy after a rebuild of the pinned draft clears the review', async () => {
+    p.chain.propose(SAFE_A, 5, [native(STRANGER, 1n)]);
+    p.chain.propose(SAFE_A, 6, [native(STRANGER, 2n)]);
+    const c = await claimed(ROWS, orgA, safeA, member, 7);
+    const copy = p.chain.propose(SAFE_A, 5, c.calls, { trusted: false });
+    await p.updater.run();
+    await p.release(orgA, c.runId, c.attemptId, member).expect(200);
+    await p.build(orgA, c.runId, member);
+    expect((await p.runRow(orgA, c.runId)).review).toBeNull();
+    await p.updater.run();
+    expect(await p.runRow(orgA, c.runId)).toMatchObject({
+      status: 'draft',
+      review: {
+        reason: 'stray_proposal',
+        safeTxHash: copy.safeTxHash,
+        strayExecuted: false,
+      },
+    });
+    expect(await p.events('payout_run.stray_detected')).toHaveLength(1);
+    // queued → executed is still news
+    p.chain.execute(copy, { ago: 1000 });
+    await p.updater.run();
+    expect(await p.events('payout_run.stray_detected')).toHaveLength(2);
+  });
+
   it('warns on a proposing run and clears the warning when owners reject the queued copy', async () => {
     p.chain.propose(SAFE_A, 5, [native(STRANGER, 1n)]);
     p.chain.propose(SAFE_A, 6, [native(STRANGER, 2n)]);
