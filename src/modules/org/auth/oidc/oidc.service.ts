@@ -1,13 +1,7 @@
-import {
-  ForbiddenException,
-  HttpException,
-  HttpStatus,
-  Inject,
-  Injectable,
-} from '@nestjs/common';
+import { HttpException, HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { createHash, timingSafeEqual } from 'node:crypto';
-import type { DataSource, EntityManager } from 'typeorm';
+import type { DataSource } from 'typeorm';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import {
   type ILoggingService,
@@ -19,7 +13,10 @@ import {
   type OrgRedisClient,
 } from '@/modules/org/auth/nonce.store';
 import { OidcClient } from '@/modules/org/auth/oidc/oidc.client';
-import { attachIdentity } from '@/modules/org/auth/identities';
+import {
+  attachIdentity,
+  lockLinkingSession,
+} from '@/modules/org/auth/identities';
 import { SecurityEvents } from '@/modules/org/auth/security-events';
 import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
 import { Clock, type IClock } from '@/modules/org/common/clock';
@@ -323,7 +320,13 @@ export class OidcService {
     client: Client,
   ): Promise<void> {
     const linked = await this.db.transaction(async (em) => {
-      await this.lockLinkingSession(em, userId, sessionId);
+      // the flow outlived its checks (token exchange, mailed code)
+      await lockLinkingSession(em, {
+        userId,
+        sessionId,
+        now: this.clock.now(),
+        strongWindowMs: this.strongAuthWindowMs,
+      });
       const added = await attachIdentity(em, userId, {
         kind: 'oidc',
         issuer: identity.issuer,
@@ -351,35 +354,6 @@ export class OidcService {
         client.ip,
         client.userAgent,
       );
-    }
-  }
-
-  /**
-   * The flow outlived its checks (token exchange, mailed code): the session
-   * must still be live, the user's, and strong-fresh. FOR UPDATE serialises
-   * with a concurrent revocation (an UPDATE of the same row).
-   */
-  private async lockLinkingSession(
-    em: EntityManager,
-    userId: string,
-    sessionId: string,
-  ): Promise<void> {
-    const now = this.clock.now();
-    const [session]: Array<{ lastStrongAuthAt: Date | null }> = await em.query(
-      `SELECT s.last_strong_auth_at AS "lastStrongAuthAt"
-       FROM sessions s JOIN users u ON u.id = s.user_id
-       WHERE s.id = $1 AND s.user_id = $2 AND s.revoked_at IS NULL
-         AND s.expires_at > $3 AND s.idle_expires_at > $3 AND u.status = 'active'
-       FOR UPDATE OF s`,
-      [sessionId, userId, now],
-    );
-    const strong = session?.lastStrongAuthAt;
-    if (!strong || now.getTime() - strong.getTime() > this.strongAuthWindowMs) {
-      throw new ForbiddenException({
-        statusCode: 403,
-        message: 'Sign in again and confirm with a strong factor to link',
-        code: 'reauth_required',
-      });
     }
   }
 

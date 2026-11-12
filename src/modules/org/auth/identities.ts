@@ -1,5 +1,48 @@
+import { ForbiddenException } from '@nestjs/common';
 import type { EntityManager } from 'typeorm';
 import { conflict } from '@/modules/org/orgs/org-lock';
+
+/**
+ * Lock order for every transaction that changes a user's identities,
+ * factors or sessions: the user row first, then session rows. Locks the
+ * user (must be active: account deletion updates it under the same lock),
+ * then the linking session, which must still be live, the user's and
+ * strong-fresh; 403 `reauth_required` otherwise. A concurrent revocation
+ * or deletion either commits first (seen here) or waits for this one.
+ */
+export async function lockLinkingSession(
+  em: Pick<EntityManager, 'query'>,
+  args: {
+    userId: string;
+    sessionId: string;
+    now: Date;
+    strongWindowMs: number;
+  },
+): Promise<void> {
+  const { userId, sessionId, now, strongWindowMs } = args;
+  const [user]: Array<{ status: string }> = await em.query(
+    `SELECT status FROM users WHERE id = $1 FOR UPDATE`,
+    [userId],
+  );
+  const [session]: Array<{ lastStrongAuthAt: Date | null }> =
+    user?.status === 'active'
+      ? await em.query(
+          `SELECT last_strong_auth_at AS "lastStrongAuthAt" FROM sessions
+           WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
+             AND expires_at > $3 AND idle_expires_at > $3
+           FOR UPDATE`,
+          [sessionId, userId, now],
+        )
+      : [];
+  const strong = session?.lastStrongAuthAt;
+  if (!strong || now.getTime() - strong.getTime() > strongWindowMs) {
+    throw new ForbiddenException({
+      statusCode: 403,
+      message: 'Sign in again and confirm with a strong factor to link',
+      code: 'reauth_required',
+    });
+  }
+}
 
 export type NewIdentity =
   | { kind: 'wallet'; walletAddress: string }

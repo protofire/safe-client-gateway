@@ -327,6 +327,10 @@ export class MembersService {
           code: 'support_required',
         });
       }
+      // lock order: user row, then its sessions (see lockLinkingSession)
+      await em.query(`SELECT 1 FROM users WHERE id = $1 FOR UPDATE`, [
+        member.userId,
+      ]);
       await em.query(`DELETE FROM factors WHERE user_id = $1`, [member.userId]);
       await em.query(`DELETE FROM recovery_codes WHERE user_id = $1`, [
         member.userId,

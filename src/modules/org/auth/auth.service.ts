@@ -16,7 +16,10 @@ import {
 } from 'viem/siwe';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import type { OrgSession } from '@/modules/org/auth/decorators';
-import { attachIdentity } from '@/modules/org/auth/identities';
+import {
+  attachIdentity,
+  lockLinkingSession,
+} from '@/modules/org/auth/identities';
 import { NonceStore } from '@/modules/org/auth/nonce.store';
 import { SecurityEvents } from '@/modules/org/auth/security-events';
 import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
@@ -54,6 +57,7 @@ export class AuthService {
   private readonly nonceTtlSeconds: number;
   private readonly idleTtlSeconds: number;
   private readonly absoluteTtlSeconds: number;
+  private readonly strongAuthWindowMs: number;
   // ORG_CREATE_ALLOWLIST; null = anyone may create
   private readonly createAllowlist: {
     wallets: Array<string>;
@@ -80,6 +84,8 @@ export class AuthService {
     this.absoluteTtlSeconds = config.getOrThrow<number>(
       'org.session.absoluteTtlSeconds',
     );
+    this.strongAuthWindowMs =
+      config.getOrThrow<number>('org.session.strongAuthWindowSeconds') * 1000;
     // absent (test configs) or empty: no gate
     const { wallets = [], emails = [] } =
       config.get<{ wallets: Array<string>; emails: Array<string> }>(
@@ -181,6 +187,12 @@ export class AuthService {
   ): Promise<void> {
     const address = await this.verifySiwe(attempt);
     const linked = await this.db.transaction(async (em) => {
+      await lockLinkingSession(em, {
+        userId: session.userId,
+        sessionId: session.sessionId,
+        now: this.clock.now(),
+        strongWindowMs: this.strongAuthWindowMs,
+      });
       const added = await attachIdentity(em, session.userId, {
         kind: 'wallet',
         walletAddress: address,

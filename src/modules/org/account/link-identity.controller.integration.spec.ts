@@ -6,6 +6,8 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { createSiweMessage } from 'viem/siwe';
 import { NetworkService } from '@/datasources/network/network.service.interface';
 import { OrgAccountModule } from '@/modules/org/account/account.module';
+import { AccountService } from '@/modules/org/account/account.service';
+import { AuthService } from '@/modules/org/auth/auth.service';
 import {
   APP_URL,
   cookieFrom,
@@ -199,6 +201,40 @@ describe('identity linking (org)', () => {
       expect(event.payload).toEqual({ kind: 'wallet' });
     });
 
+    it('re-checks the session in the attach transaction: a wallet link after revocation is reauth_required', async () => {
+      const u = await user({ email: true, totp: true });
+      const [{ id: sessionId }]: Array<{ id: string }> = await t.sql.query(
+        `SELECT id FROM sessions WHERE user_id = $1`,
+        [u.userId],
+      );
+      await t.sql.query(
+        `UPDATE sessions SET revoked_at = now() WHERE id = $1`,
+        [sessionId],
+      );
+      await expect(
+        t.app.get(AuthService).linkWallet(
+          {
+            userId: u.userId,
+            sessionId,
+            amr: ['oidc'],
+            lastStrongAuthAt: new Date(),
+          },
+          {
+            ...(await signed(generatePrivateKey())),
+            ip: ip(),
+            userAgent: null,
+          },
+        ),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'reauth_required' }),
+      });
+      const [{ n }] = await t.sql.query(
+        `SELECT count(*)::int AS n FROM identities WHERE user_id = $1`,
+        [u.userId],
+      );
+      expect(n).toBe(1);
+    });
+
     it('refuses a wallet owned by another user with 409 identity_taken', async () => {
       const pk = generatePrivateKey();
       const owner = await user({ wallet: true });
@@ -386,6 +422,75 @@ describe('identity linking (org)', () => {
         [u.userId],
       );
       expect(n).toBe(1);
+    });
+
+    const newIdentity = (): {
+      issuer: string;
+      subject: string;
+      email: string;
+    } => ({
+      issuer: mock.issuer,
+      subject: randomBytes(6).toString('hex'),
+      email: `${randomBytes(4).toString('hex')}@example.com`,
+    });
+    const sessionIds = async (userId: string): Promise<Array<string>> => {
+      const rows: Array<{ id: string }> = await t.sql.query(
+        `SELECT id FROM sessions WHERE user_id = $1 ORDER BY created_at`,
+        [userId],
+      );
+      return rows.map((r) => r.id);
+    };
+
+    it('serialises concurrent links from two sessions of one user without a deadlock', async () => {
+      const oidc = t.app.get(OidcService);
+      const client = { ip: '10.6.98.1', userAgent: null };
+      for (let round = 0; round < 5; round++) {
+        const u = await user({ wallet: true });
+        await secondSession(u.userId);
+        const [a, b] = await sessionIds(u.userId);
+        const results = await Promise.allSettled([
+          oidc.link(u.userId, a, newIdentity(), client),
+          oidc.link(u.userId, b, newIdentity(), client),
+        ]);
+        // the first link revokes the other session: that one is refused
+        expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+        const [rejected] = results.filter((r) => r.status === 'rejected');
+        expect(rejected.reason).toMatchObject({
+          response: expect.objectContaining({ code: 'reauth_required' }),
+        });
+        const [{ n }] = await t.sql.query(
+          `SELECT count(*)::int AS n FROM identities WHERE user_id = $1`,
+          [u.userId],
+        );
+        expect(n).toBe(2);
+      }
+    });
+
+    it('leaves no identity when the account is deleted concurrently with a link', async () => {
+      const oidc = t.app.get(OidcService);
+      const account = t.app.get(AccountService);
+      for (let round = 0; round < 5; round++) {
+        const u = await user({ wallet: true });
+        const [sessionId] = await sessionIds(u.userId);
+        const results = await Promise.allSettled([
+          oidc.link(u.userId, sessionId, newIdentity(), {
+            ip: '10.6.97.1',
+            userAgent: null,
+          }),
+          account.delete(u.userId),
+        ]);
+        expect(results[1].status).toBe('fulfilled');
+        if (results[0].status === 'rejected') {
+          expect(results[0].reason).toMatchObject({
+            response: expect.objectContaining({ code: 'reauth_required' }),
+          });
+        }
+        const [{ n }] = await t.sql.query(
+          `SELECT count(*)::int AS n FROM identities WHERE user_id = $1`,
+          [u.userId],
+        );
+        expect(n).toBe(0);
+      }
     });
 
     it('re-checks the session when attaching: revoked or no longer strong-fresh after the callback started attaches nothing', async () => {
