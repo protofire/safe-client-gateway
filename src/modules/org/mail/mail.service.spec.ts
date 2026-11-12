@@ -1,7 +1,10 @@
 import type { IConfigurationService } from '@/config/configuration.service.interface';
 import type { INetworkService } from '@/datasources/network/network.service.interface';
 import type { ILoggingService } from '@/logging/logging.interface';
-import { MailService } from '@/modules/org/mail/mail.service';
+import {
+  mailFailureReason,
+  MailService,
+} from '@/modules/org/mail/mail.service';
 
 const mail = {
   orgName: 'Acme',
@@ -65,5 +68,23 @@ describe('MailService sign-in codes without an API key', () => {
       'org mail is not configured',
     );
     expect(JSON.stringify(logger.info.mock.calls)).not.toContain('12345678');
+  });
+});
+
+describe('mailFailureReason', () => {
+  it('reports the HTTP status of a provider answer, never its body', () => {
+    const error = Object.assign(new Error(), {
+      response: { status: 422 },
+      data: { message: 'to: alice@example.com is invalid' },
+    });
+    expect(mailFailureReason(error)).toBe('HTTP 422');
+  });
+
+  it('falls back to the message, then the error class', () => {
+    expect(mailFailureReason(new Error('org mail is not configured'))).toBe(
+      'org mail is not configured',
+    );
+    expect(mailFailureReason(new TypeError())).toBe('TypeError');
+    expect(mailFailureReason('x')).toBe('unknown error');
   });
 });

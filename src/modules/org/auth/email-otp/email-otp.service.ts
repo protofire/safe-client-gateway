@@ -35,7 +35,10 @@ import {
   sha256Hex,
 } from '@/modules/org/crypto/hashing';
 import { ORG_DATA_SOURCE } from '@/modules/org/db/org-data-source';
-import { MailService } from '@/modules/org/mail/mail.service';
+import {
+  mailFailureReason,
+  MailService,
+} from '@/modules/org/mail/mail.service';
 
 export const EMAIL_CODE_TTL_SECONDS = 600;
 const CODE_DIGITS = 8;
@@ -45,11 +48,10 @@ const START_IP_WINDOW_SECONDS = 600;
 const VERIFY_PER_IP = 30;
 const VERIFY_IP_WINDOW_SECONDS = 60;
 const LINK_STARTS_PER_USER_PER_HOUR = 5;
-/** Codes mailed to one address: 1/min, 5/hour, 10/day. */
+/** Codes mailed to one address: 1/min, 5/hour (no daily cap: anyone can spend it). */
 const SENDS_PER_EMAIL: Array<[limit: number, windowSeconds: number]> = [
   [1, 60],
   [5, 3600],
-  [10, 86400],
 ];
 
 /** Redis record, keyed by the SHA-256 of the browser's tx cookie (never by email). */
@@ -150,9 +152,7 @@ export class EmailOtpService implements OnApplicationShutdown {
     const sending = new Promise<void>((resolve) => setImmediate(resolve))
       .then(() => this.deliver(email, tx, sessionId))
       .catch((error: unknown) =>
-        this.logger.error(
-          `email code not sent: ${error instanceof Error ? error.message : String(error)}`,
-        ),
+        this.logger.error(`email code not sent: ${mailFailureReason(error)}`),
       )
       .finally(() => this.pending.delete(sending));
     this.pending.add(sending);
@@ -201,8 +201,16 @@ export class EmailOtpService implements OnApplicationShutdown {
     if (sessionId === undefined && !(await this.mayReceive(emailHash))) return;
     for (const [limit, window] of SENDS_PER_EMAIL) {
       const key = `email-otp:send:email:${emailHash}:${window}`;
-      if (!(await this.rateLimiter.hit(key, limit, window))) return;
+      if (!(await this.rateLimiter.hit(key, limit, window))) {
+        if (window === 3600) {
+          this.logger.warn(
+            `email code sends for address ${emailHash.slice(0, 8)}… over the hourly quota`,
+          );
+        }
+        return;
+      }
     }
+    // shortcut: breaker counts only eligible sends (weak cross-request eligibility oracle); revisit with separate budgets before opening sign-up
     if (
       !(await this.rateLimiter.hit(
         'email-otp:send:global',

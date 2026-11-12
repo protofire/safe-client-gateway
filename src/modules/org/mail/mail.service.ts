@@ -17,6 +17,18 @@ import {
   signInCodeTemplate,
 } from '@/modules/org/mail/templates';
 
+/**
+ * Loggable reason of a failed send: the HTTP status for a provider answer
+ * (NetworkResponseError carries no message), never the body or the address.
+ */
+export function mailFailureReason(error: unknown): string {
+  const status = (error as { response?: { status?: unknown } } | null)?.response
+    ?.status;
+  if (typeof status === 'number') return `HTTP ${status}`;
+  if (error instanceof Error && error.message) return error.message;
+  return error instanceof Error ? error.constructor.name : 'unknown error';
+}
+
 /** Transactional mail through the Resend HTTP API (`POST {baseUrl}/emails`). */
 @Injectable()
 export class MailService {

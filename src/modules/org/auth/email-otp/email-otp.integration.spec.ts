@@ -248,7 +248,9 @@ describe('email one-time code, sign-up gated by ORG_CREATE_ALLOWLIST', () => {
     expect(h.codeMails(invited)).toHaveLength(1);
   });
 
-  it('limits sends per address (1/min, 5/hour, 10/day) silently, and starts per IP with 429', async () => {
+  it('limits sends per address (1/min, 5/hour, no daily cap) silently with a warn without the address, and starts per IP with 429', async () => {
+    const logger = t.app.get<{ warn: jest.Mock }>(LoggingService);
+    logger.warn.mockClear();
     await h.start(ALLOWED);
     const limited = await h.start(ALLOWED);
     expect(limited.res.status).toBe(200);
@@ -258,8 +260,14 @@ describe('email one-time code, sign-up gated by ORG_CREATE_ALLOWLIST', () => {
       await h.start(ALLOWED);
     }
     expect(h.codeMails(ALLOWED)).toHaveLength(5);
-    // the hour window passes, the day window keeps counting
     const hash = hmacEmail(ALLOWED, h.emailKey());
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining(hash.slice(0, 8)),
+    );
+    const warned = JSON.stringify(logger.warn.mock.calls);
+    expect(warned).not.toContain(hash);
+    expect(warned).not.toContain(ALLOWED);
+    // a new hour: sending resumes, nothing caps the day
     for (let i = 0; i < 7; i++) {
       await t.redis.del([
         `${t.prefix}ratelimit:email-otp:send:email:${hash}:60`,
@@ -267,7 +275,7 @@ describe('email one-time code, sign-up gated by ORG_CREATE_ALLOWLIST', () => {
       ]);
       await h.start(ALLOWED);
     }
-    expect(h.codeMails(ALLOWED)).toHaveLength(10);
+    expect(h.codeMails(ALLOWED)).toHaveLength(12);
 
     const ip = `10.77.${randomBytes(1)[0]}.1`;
     const statuses: Array<number> = [];
@@ -347,6 +355,89 @@ describe('email one-time code, sign-up gated by ORG_CREATE_ALLOWLIST', () => {
         [u.userId],
       );
       expect(event.payload).toEqual({ kind: 'email_otp' });
+    });
+
+    it.each([
+      ['revoked', `UPDATE sessions SET revoked_at = now() WHERE user_id = $1`],
+      [
+        'no longer strong-fresh',
+        `UPDATE sessions SET last_strong_auth_at = now() - interval '31 minutes' WHERE user_id = $1`,
+      ],
+    ])(
+      'attaches nothing when the session was %s between start and verify',
+      async (_, sql) => {
+        const u = await t.user({ wallet: true });
+        const to = `late-${randomBytes(4).toString('hex')}@example.com`;
+        const started = await linkStart(u.cookie, to).expect(200);
+        await h.drain();
+        const [code] = h.codeMails(to);
+        await t.sql.query(sql, [u.userId]);
+        const res = await linkVerify(code, [
+          cookieFrom(started, TX_COOKIE),
+          u.cookie,
+        ]);
+        expect([401, 403]).toContain(res.status);
+        const [{ n }] = await t.sql.query(
+          `SELECT count(*)::int AS n FROM identities WHERE user_id = $1`,
+          [u.userId],
+        );
+        expect(n).toBe(1);
+      },
+    );
+
+    it('re-checks the session inside the attach transaction: a revocation that lands after the request was authenticated attaches nothing', async () => {
+      const u = await t.user({ wallet: true });
+      const to = `race-${randomBytes(4).toString('hex')}@example.com`;
+      const started = await linkStart(u.cookie, to).expect(200);
+      await h.drain();
+      const [code] = h.codeMails(to);
+      const [{ id: sessionId }]: Array<{ id: string }> = await t.sql.query(
+        `SELECT id FROM sessions WHERE user_id = $1`,
+        [u.userId],
+      );
+      // the request passed SessionGuard with this session, then it was revoked
+      const session = {
+        userId: u.userId,
+        sessionId,
+        amr: ['siwe'],
+        lastStrongAuthAt: new Date(),
+      };
+      await t.sql.query(
+        `UPDATE sessions SET revoked_at = now() WHERE id = $1`,
+        [sessionId],
+      );
+      await expect(
+        t.app
+          .get(EmailOtpService)
+          .link(session, code, cookieFrom(started, TX_COOKIE).split('=')[1], {
+            ip: '10.88.0.1',
+            userAgent: null,
+          }),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'reauth_required' }),
+      });
+      const [{ n }] = await t.sql.query(
+        `SELECT count(*)::int AS n FROM identities WHERE user_id = $1`,
+        [u.userId],
+      );
+      expect(n).toBe(1);
+    });
+
+    it('answers 403 reauth_required when the strong auth expired between start and verify', async () => {
+      const u = await t.user({ wallet: true });
+      const to = `stale-${randomBytes(4).toString('hex')}@example.com`;
+      const started = await linkStart(u.cookie, to).expect(200);
+      await h.drain();
+      const [code] = h.codeMails(to);
+      await t.sql.query(
+        `UPDATE sessions SET last_strong_auth_at = now() - interval '31 minutes' WHERE user_id = $1`,
+        [u.userId],
+      );
+      const res = await linkVerify(code, [
+        cookieFrom(started, TX_COOKIE),
+        u.cookie,
+      ]).expect(403);
+      expect(res.body.code).toBe('reauth_required');
     });
 
     it('needs fresh strong auth to start', async () => {

@@ -25,7 +25,10 @@ import {
   sha256Hex,
 } from '@/modules/org/crypto/hashing';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
-import { MailService } from '@/modules/org/mail/mail.service';
+import {
+  mailFailureReason,
+  MailService,
+} from '@/modules/org/mail/mail.service';
 import {
   maskIdentity,
   type MemberIdentity,
@@ -517,9 +520,7 @@ export class InvitationsService {
       await this.mail.sendInvite(to, { orgName, inviterLabel, acceptUrl });
       return true;
     } catch (error) {
-      this.logger.error(
-        `invitation mail failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      this.logger.error(`invitation mail failed: ${mailFailureReason(error)}`);
       return false;
     }
   }

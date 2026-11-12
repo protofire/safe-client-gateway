@@ -5,7 +5,10 @@ import {
 } from '@/logging/logging.interface';
 import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
-import { MailService } from '@/modules/org/mail/mail.service';
+import {
+  mailFailureReason,
+  MailService,
+} from '@/modules/org/mail/mail.service';
 import type { SecurityNotice } from '@/modules/org/mail/templates';
 import type { Permission } from '@/modules/org/permissions/permissions';
 
@@ -106,7 +109,7 @@ export class SecurityNotifier {
 
   private fail(kind: string, error: unknown): void {
     this.logger.error(
-      `org security notice (${kind}) failed: ${error instanceof Error ? error.message : String(error)}`,
+      `org security notice (${kind}) failed: ${mailFailureReason(error)}`,
     );
   }
 }
