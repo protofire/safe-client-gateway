@@ -63,6 +63,25 @@ describe('hashing', () => {
     expect(normalizeEmail('  Foo@Bar.COM ')).toBe('foo@bar.com');
   });
 
+  it('normalizeEmail applies NFC and an ASCII (punycode) domain, keeps dots and plus tags', () => {
+    // decomposed e + combining acute (NFD) equals the precomposed e-acute (NFC)
+    expect(normalizeEmail('Jose\u0301@example.com')).toBe(
+      normalizeEmail('Jos\u00e9@example.com'),
+    );
+    expect(normalizeEmail('Jos\u00e9@example.com')).toBe(
+      'jos\u00e9@example.com',
+    );
+    expect(normalizeEmail('user@B\u00fccher.Example')).toBe(
+      'user@xn--bcher-kva.example',
+    );
+    expect(normalizeEmail('user@xn--bcher-kva.example')).toBe(
+      'user@xn--bcher-kva.example',
+    );
+    expect(normalizeEmail('First.Last+tag@gmail.com')).toBe(
+      'first.last+tag@gmail.com',
+    );
+  });
+
   it('hmacEmail is case/whitespace-insensitive and key-dependent', () => {
     expect(hmacEmail(' Foo@Bar.com', keyA)).toBe(
       hmacEmail('foo@bar.com ', keyA),
