@@ -2,7 +2,6 @@ import { Controller, Get, Query, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { Public } from '@/modules/org/auth/decorators';
-import type { OidcConnection } from '@/modules/org/auth/oidc/oidc.client';
 import {
   OIDC_TX_TTL_SECONDS,
   OidcService,
@@ -26,10 +25,9 @@ const OIDC_TX_COOKIE_OPTIONS = {
 } as const;
 
 export const AuthorizeQuerySchema = z.object({
-  connection: z.enum(['email', 'google-oauth2']),
   returnTo: z.string().optional(),
 });
-export type AuthorizeQuery = { connection: OidcConnection; returnTo?: string };
+export type AuthorizeQuery = { returnTo?: string };
 
 /** The browser-binding cookie the callback checks against the state record. */
 export function setOidcTxCookie(res: Response, tx: string): void {
@@ -52,7 +50,6 @@ export class OidcController {
     @Res() res: Response,
   ): Promise<void> {
     const started = await this.oidc.start({
-      connection: query.connection,
       returnTo: query.returnTo,
       ip: client(req).ip,
     });
@@ -60,7 +57,11 @@ export class OidcController {
     res.redirect(302, started.redirectUrl);
   }
 
-  /** Always a 302: to returnTo on success, else with `?orgAuthError=<code>` (item 5). */
+  /**
+   * Always a 302: to returnTo on success (with `?orgLinkHint=1` when another
+   * account uses the same email with another method), else with
+   * `?orgAuthError=<code>` (item 5).
+   */
   @Public()
   @Get('callback')
   async callback(

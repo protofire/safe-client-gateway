@@ -1,8 +1,10 @@
+import { Global, Module } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import type request from 'supertest';
 import type { Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { createSiweMessage } from 'viem/siwe';
+import { NetworkService } from '@/datasources/network/network.service.interface';
 import { OrgAccountModule } from '@/modules/org/account/account.module';
 import {
   APP_URL,
@@ -25,6 +27,14 @@ jest.setTimeout(60_000);
 const CLIENT_ID = 'test-client';
 const MINUTES_31 = 31 * 60_000;
 
+// MailService (email code linking) needs it; no mail is sent in this spec
+@Global()
+@Module({
+  providers: [{ provide: NetworkService, useValue: { post: jest.fn() } }],
+  exports: [NetworkService],
+})
+class NetworkStubModule {}
+
 describe('identity linking (org)', () => {
   let mock: OidcMock;
   let t: AuthTestApp;
@@ -36,7 +46,12 @@ describe('identity linking (org)', () => {
     });
     t = await createAuthTestApp({
       redisDb: 6,
-      imports: [OrgOidcModule, OrgTotpModule, OrgAccountModule],
+      imports: [
+        NetworkStubModule,
+        OrgOidcModule,
+        OrgTotpModule,
+        OrgAccountModule,
+      ],
       config: {
         'org.oidc.issuer': mock.issuer,
         'org.oidc.clientId': CLIENT_ID,
@@ -231,7 +246,7 @@ describe('identity linking (org)', () => {
 
     async function startLink(
       u: User,
-      body: object = { connection: 'email', returnTo: '/settings' },
+      body: object = { returnTo: '/settings' },
       email = 'linked@example.com',
     ): Promise<Started> {
       const res = await t
@@ -241,10 +256,9 @@ describe('identity linking (org)', () => {
         .expect(200);
       expect(res.body).toEqual({ redirectUrl: expect.any(String) });
       const authorizeUrl = new URL(res.body.redirectUrl as string);
-      // item 4: the IdP must re-authenticate, never reuse its own session
-      expect(authorizeUrl.searchParams.get('prompt')).toBe('login');
-      // round 2 item 7: and report when it did (auth_time), checked below
-      expect(authorizeUrl.searchParams.get('max_age')).toBe('0');
+      // item 4: the user picks the account at the IdP, never a silent reuse
+      expect(authorizeUrl.searchParams.get('prompt')).toBe('select_account');
+      expect(authorizeUrl.searchParams.has('max_age')).toBe(false);
       authorizeUrl.searchParams.set('login_hint', email);
       const idp = await fetch(authorizeUrl, { redirect: 'manual' });
       const back = new URL(idp.headers.get('location')!);
@@ -279,24 +293,19 @@ describe('identity linking (org)', () => {
       const u = await user({ wallet: true });
       await t
         .http()
-        .get('/v1/orgs/account/link/oidc/authorize?connection=email')
+        .get('/v1/orgs/account/link/oidc/authorize')
         .set('Cookie', u.cookie)
         .expect(404);
       await t
         .http()
         .post('/v1/orgs/account/link/oidc/authorize')
         .set('Cookie', u.cookie)
-        .send({ connection: 'email' })
+        .send({})
         .expect(403);
-      await t
-        .post('/v1/orgs/account/link/oidc/authorize')
-        .set('Cookie', u.cookie)
-        .send({ connection: 'github' })
-        .expect(422);
       const res = await t
         .post('/v1/orgs/account/link/oidc/authorize')
         .set('Cookie', u.cookie)
-        .send({ connection: 'google-oauth2' })
+        .send({})
         .expect(200);
       const cookie = [res.headers['set-cookie']]
         .flat()
@@ -305,8 +314,8 @@ describe('identity linking (org)', () => {
       expect(cookie).not.toMatch(/; Domain=/i);
       expect(cookie).toMatch(/; HttpOnly/);
       expect(
-        new URL(res.body.redirectUrl as string).searchParams.get('connection'),
-      ).toBe('google-oauth2');
+        new URL(res.body.redirectUrl as string).searchParams.has('connection'),
+      ).toBe(false);
     });
 
     it('attaches the identity to the current user without creating a session', async () => {
@@ -331,22 +340,29 @@ describe('identity linking (org)', () => {
       ]);
     });
 
+    it('refuses a link whose ID token reports auth_time over 5 minutes old with reauth_required', async () => {
+      const u = await user({ wallet: true });
+      const s = await startLink(u);
+      mock.setClaims({ auth_time: Math.floor(Date.now() / 1000) - 301 });
+      await failsWith(callback(s, [s.txCookie, u.cookie]), 'reauth_required');
+      expect(await identities(u)).toHaveLength(1);
+    });
+
     it.each([
-      ['without auth_time', { auth_time: undefined }],
-      [
-        'with auth_time over 5 minutes old',
-        { auth_time: Math.floor(Date.now() / 1000) - 301 },
-      ],
-    ])(
-      'refuses a link whose ID token comes %s with reauth_required (round 2 item 7)',
-      async (_, claims) => {
-        const u = await user({ wallet: true });
-        const s = await startLink(u);
-        mock.setClaims(claims);
-        await failsWith(callback(s, [s.txCookie, u.cookie]), 'reauth_required');
-        expect(await identities(u)).toHaveLength(1);
-      },
-    );
+      ['without auth_time (Google does not document it)', {}],
+      ['with a recent auth_time', { auth_time: Math.floor(Date.now() / 1000) }],
+    ])('links with an ID token %s', async (_, claims) => {
+      const u = await user({ wallet: true });
+      const s = await startLink(
+        u,
+        undefined,
+        `${randomBytes(6).toString('hex')}@example.com`,
+      );
+      mock.setClaims(claims);
+      const res = await callback(s, [s.txCookie, u.cookie]).expect(302);
+      expect(res.headers.location).toBe(`${APP_URL}/settings`);
+      expect(await identities(u)).toHaveLength(2);
+    });
 
     async function countUsers(): Promise<number> {
       return (await t.sql.query(`SELECT count(*)::int AS n FROM users`))[0].n;
@@ -400,7 +416,7 @@ describe('identity linking (org)', () => {
       const res = await t
         .post('/v1/orgs/account/link/oidc/authorize')
         .set('Cookie', u.cookie)
-        .send({ connection: 'email' })
+        .send({})
         .expect(403);
       expect(res.body.code).toBe('step_up_required');
     });
@@ -408,7 +424,7 @@ describe('identity linking (org)', () => {
     it('keeps sign-in callbacks working (no session id in the state)', async () => {
       const res = await t
         .http()
-        .get('/v1/orgs/auth/oidc/authorize?connection=email')
+        .get('/v1/orgs/auth/oidc/authorize')
         .expect(302);
       const idp = await fetch(new URL(res.headers.location), {
         redirect: 'manual',

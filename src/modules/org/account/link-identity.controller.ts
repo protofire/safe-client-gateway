@@ -68,7 +68,6 @@ export class LinkIdentityController {
     @Res({ passthrough: true }) res: Response,
   ): Promise<{ redirectUrl: string }> {
     const started = await this.oidc.start({
-      connection: body.connection,
       returnTo: body.returnTo,
       ip: client(req).ip,
       sessionId: session.sessionId,

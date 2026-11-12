@@ -1,5 +1,8 @@
 import type request from 'supertest';
+import { IConfigurationService } from '@/config/configuration.service.interface';
 import { OrgOidcModule } from '@/modules/org/auth/oidc/oidc.module';
+import { EMAIL_OTP_ISSUER } from '@/modules/org/auth/oidc/oidc.service';
+import { hmacEmail } from '@/modules/org/crypto/hashing';
 import {
   APP_URL,
   cookieFrom,
@@ -56,7 +59,7 @@ describe('OIDC sign-in (org)', () => {
 
   /** Our authorize → the IdP's authorize; returns what the browser holds at the callback. */
   async function start(
-    query = 'connection=email',
+    query = '',
     email = 'alice@example.com',
   ): Promise<Started> {
     const res = await t
@@ -101,10 +104,10 @@ describe('OIDC sign-in (org)', () => {
     return res;
   }
 
-  it('redirects to the issuer with PKCE S256, state, nonce, scope and connection, and sets __Host-org_oidc_tx', async () => {
+  it("redirects to the discovery document's authorization endpoint with PKCE S256, state, nonce and scope, and sets __Host-org_oidc_tx", async () => {
     const res = await t
       .http()
-      .get('/v1/orgs/auth/oidc/authorize?connection=google-oauth2&returnTo=/x')
+      .get('/v1/orgs/auth/oidc/authorize?returnTo=/x')
       .expect(302);
     const url = new URL(res.headers.location);
     expect(`${url.origin}/`).toBe(mock.issuer);
@@ -119,7 +122,6 @@ describe('OIDC sign-in (org)', () => {
       nonce: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
       code_challenge: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
       code_challenge_method: 'S256',
-      connection: 'google-oauth2',
     });
     const cookie = [res.headers['set-cookie']]
       .flat()
@@ -132,15 +134,8 @@ describe('OIDC sign-in (org)', () => {
     expect(cookie).toMatch(/; Max-Age=600;/);
   });
 
-  it('answers 422 for an unknown connection', async () => {
-    await t
-      .http()
-      .get('/v1/orgs/auth/oidc/authorize?connection=github')
-      .expect(422);
-  });
-
   it('completes the code flow with the mock issuer and sets a session (amr oidc, not strong)', async () => {
-    const s = await start('connection=email&returnTo=%2Forgs%2Fabc%3Ftab%3D1');
+    const s = await start('returnTo=%2Forgs%2Fabc%3Ftab%3D1');
     const res = await callback(s, s.txCookie).expect(302);
     expect(res.headers.location).toBe(`${APP_URL}/orgs/abc?tab=1`);
     const setCookies = [res.headers['set-cookie']].flat();
@@ -213,32 +208,70 @@ describe('OIDC sign-in (org)', () => {
     const aliceEvents = await eventsOf(alice);
 
     // same verified email, other subject: never attached implicitly
-    mock.setClaims({ sub: 'google-oauth2|other' });
+    mock.setClaims({ sub: '987654321' });
     const c = await callback(...withCookie(await start())).expect(302);
     const other = await idOf(c);
     expect(other).not.toBe(alice);
     expect(await identitiesOf(other)).toEqual([
-      expect.objectContaining({ oidc_subject: 'google-oauth2|other' }),
+      expect.objectContaining({ oidc_subject: '987654321' }),
     ]);
     expect(await identitiesOf(alice)).toEqual(aliceIdentities);
     expect(await eventsOf(alice)).toEqual(aliceEvents);
   });
 
-  it.each(['github|123', 'auth0|123', 'samlp|x', 'email', 'google-oauth2'])(
-    'rejects subject %s: only email| and google-oauth2| (item 5)',
-    async (sub) => {
-      const before = await t.sql.query(`SELECT id FROM identities`);
-      mock.setClaims({ sub });
-      await failsWith(
-        callback(...withCookie(await start())),
-        'unsupported_identity',
-      );
-      expect(await t.sql.query(`SELECT id FROM identities`)).toEqual(before);
-    },
-  );
+  it('stores the numeric subject under the configured issuer', async () => {
+    const res = await callback(...withCookie(await start())).expect(302);
+    const me = await t
+      .http()
+      .get('/v1/orgs/auth/me')
+      .set('Cookie', cookieFrom(res, '__Host-org_session'))
+      .expect(200);
+    const [row] = await t.sql.query(
+      `SELECT oidc_issuer, oidc_subject FROM identities WHERE user_id = $1`,
+      [me.body.user.id],
+    );
+    expect(row).toEqual({
+      oidc_issuer: mock.issuer,
+      oidc_subject: expect.stringMatching(/^\d+$/),
+    });
+  });
+
+  it('adds orgLinkHint=1 when another user signs in with a code to the same email, and never merges', async () => {
+    const key = Buffer.from(
+      t.app
+        .get<IConfigurationService>(IConfigurationService)
+        .getOrThrow<string>('org.emailHashKey'),
+      'base64',
+    );
+    const hash = hmacEmail('alice@example.com', key);
+    const [{ id: other }] = await t.sql.query(
+      `INSERT INTO users DEFAULT VALUES RETURNING id`,
+    );
+    await t.sql.query(
+      `INSERT INTO identities (user_id, kind, oidc_issuer, oidc_subject, email_hash)
+       VALUES ($1, 'oidc', $2, $3, $3)`,
+      [other, EMAIL_OTP_ISSUER, hash],
+    );
+    const res = await callback(
+      ...withCookie(await start('returnTo=%2Forgs%3Ftab%3D1')),
+    ).expect(302);
+    expect(res.headers.location).toBe(`${APP_URL}/orgs?tab=1&orgLinkHint=1`);
+    const me = await t
+      .http()
+      .get('/v1/orgs/auth/me')
+      .set('Cookie', cookieFrom(res, '__Host-org_session'))
+      .expect(200);
+    expect(me.body.user.id).not.toBe(other);
+    expect(me.body.identities).toHaveLength(1);
+
+    // without such an identity: no hint
+    await t.sql.query(`DELETE FROM identities WHERE user_id = $1`, [other]);
+    const again = await callback(...withCookie(await start())).expect(302);
+    expect(again.headers.location).toBe(`${APP_URL}/organizations`);
+  });
 
   it('redirects a cancelled sign-in back to its returnTo with cancelled (item 5)', async () => {
-    const s = await start('connection=email&returnTo=%2Forgs%2Fx');
+    const s = await start('returnTo=%2Forgs%2Fx');
     await failsWith(
       t
         .http()
@@ -315,9 +348,7 @@ describe('OIDC sign-in (org)', () => {
     'orgs',
     '/a\r\nSet-Cookie:x=1',
   ])('falls back to /organizations for returnTo %s', async (returnTo) => {
-    const s = await start(
-      `connection=email&returnTo=${encodeURIComponent(returnTo)}`,
-    );
+    const s = await start(`returnTo=${encodeURIComponent(returnTo)}`);
     const res = await callback(s, s.txCookie).expect(302);
     expect(res.headers.location).toBe(`${APP_URL}/organizations`);
   });

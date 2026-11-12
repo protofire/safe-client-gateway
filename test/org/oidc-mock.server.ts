@@ -1,8 +1,10 @@
 /**
- * Local stand-in for Auth0 (authorization code + PKCE): `/authorize` approves
- * at once and redirects back with a code, `/oauth/token` returns an ES256 ID
- * token signed with an in-memory key, `/.well-known/jwks.json` serves the
- * public key. For tests and local dev (`yarn start:org-oidc-mock`, then
+ * Local stand-in for Google as the OIDC issuer (authorization code + PKCE):
+ * `/.well-known/openid-configuration` is the discovery document,
+ * `/authorize` approves at once and redirects back with a code,
+ * `/oauth/token` returns an ES256 ID token signed with an in-memory key,
+ * `/.well-known/jwks.json` serves the public key. Subjects are numeric, like
+ * Google's. For tests and local dev (`yarn start:org-oidc-mock`, then
  * ORG_OIDC_ISSUER=http://127.0.0.1:4010/). Never deploy it.
  */
 import { createHash, randomBytes } from 'node:crypto';
@@ -28,7 +30,7 @@ export type MockSigning =
   | 'HS256-client-secret';
 
 export type OidcMock = {
-  /** With trailing slash, as Auth0 issues it. */
+  /** With trailing slash; the discovery document names exactly this issuer. */
   issuer: string;
   /** Claims merged over the defaults of every ID token issued from now on. */
   setClaims(claims: JWTPayload): void;
@@ -41,7 +43,6 @@ type Grant = {
   challenge: string;
   nonce: string | null;
   email: string;
-  connection: string;
   /** `max_age` was requested: the ID token carries `auth_time` (OIDC Core 3.1.2.1). */
   maxAge: boolean;
 };
@@ -53,6 +54,8 @@ export async function startOidcMock(opts: {
   clientSecret: string;
   port?: number;
   host?: string;
+  /** Issuer named by the discovery document, if not the mock's own (a misconfiguration). */
+  discoveryIssuer?: string;
 }): Promise<OidcMock> {
   const host = opts.host ?? '127.0.0.1';
   const { privateKey, publicKey } = await generateKeyPair('ES256');
@@ -86,6 +89,20 @@ export async function startOidcMock(opts: {
     res: ServerResponse,
   ): Promise<void> {
     const url = new URL(req.url ?? '/', issuer);
+    if (
+      req.method === 'GET' &&
+      url.pathname === '/.well-known/openid-configuration'
+    ) {
+      return json(res, 200, {
+        issuer: opts.discoveryIssuer ?? issuer,
+        authorization_endpoint: `${issuer}authorize`,
+        token_endpoint: `${issuer}oauth/token`,
+        jwks_uri: `${issuer}.well-known/jwks.json`,
+        response_types_supported: ['code'],
+        subject_types_supported: ['public'],
+        id_token_signing_alg_values_supported: ['ES256'],
+      });
+    }
     if (req.method === 'GET' && url.pathname === '/.well-known/jwks.json') {
       return json(res, 200, { keys: [jwk] });
     }
@@ -109,7 +126,6 @@ export async function startOidcMock(opts: {
         challenge,
         nonce: q.get('nonce'),
         email: q.get('login_hint') ?? 'dev@example.com',
-        connection: q.get('connection') ?? 'email',
         maxAge: q.has('max_age'),
       });
       const back = new URL(redirectUri);
@@ -136,14 +152,14 @@ export async function startOidcMock(opts: {
         return json(res, 400, { error: 'invalid_grant' });
       }
       const now = Math.floor(Date.now() / 1000);
-      const subject = createHash('sha256')
-        .update(grant.email)
-        .digest('hex')
-        .slice(0, 24);
+      // numeric like Google's, derived from the email: same email, same subject
+      const subject = BigInt(
+        `0x${createHash('sha256').update(grant.email).digest('hex').slice(0, 15)}`,
+      ).toString();
       const claims: JWTPayload = {
         iss: issuer,
         aud: opts.clientId,
-        sub: `${grant.connection}|${subject}`,
+        sub: subject,
         email: grant.email,
         email_verified: true,
         iat: now,

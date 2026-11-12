@@ -12,10 +12,7 @@ import {
   OrgKeyPrefix,
   type OrgRedisClient,
 } from '@/modules/org/auth/nonce.store';
-import {
-  OidcClient,
-  type OidcConnection,
-} from '@/modules/org/auth/oidc/oidc.client';
+import { OidcClient } from '@/modules/org/auth/oidc/oidc.client';
 import { attachIdentity } from '@/modules/org/auth/identities';
 import { SecurityEvents } from '@/modules/org/auth/security-events';
 import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
@@ -35,10 +32,18 @@ const AUTHORIZE_PER_IP = 30;
 const CALLBACK_PER_IP = 10;
 const WINDOW_SECONDS = 60;
 const UNIQUE_VIOLATION = '23505';
-/** Link flows: the IdP authentication must be at most this old (item 7). */
+/** Link flows: an IdP authentication that reports `auth_time` must be at most this old. */
 const LINK_MAX_AUTH_AGE_SECONDS = 300;
-/** Auth0 subjects of the connections we offer: passwordless email and Google. */
-const SUPPORTED_SUBJECT = /^(?:email|google-oauth2)\|./;
+/** Issuer of email one-time-code identities; their subject is the email HMAC. */
+export const EMAIL_OTP_ISSUER = 'urn:protofire:email-otp';
+
+/** An identity whose email the issuer (Google) or a mailed code verified. */
+export type VerifiedIdentity = {
+  issuer: string;
+  subject: string;
+  email: string;
+};
+type Client = { ip: string; userAgent: string | null };
 
 /** Redis state record, consumed once with GETDEL (amendment A6). */
 type OidcTx = {
@@ -108,7 +113,6 @@ export class OidcService {
    * identity to that session's user instead of signing in.
    */
   async start(args: {
-    connection: OidcConnection;
     returnTo: unknown;
     ip: string;
     sessionId?: string;
@@ -128,20 +132,17 @@ export class OidcService {
       returnTo: safeReturnTo(args.returnTo),
       ...(args.sessionId ? { sessionId: args.sessionId } : {}),
     };
-    await this.redis.set(this.statePrefix + state, JSON.stringify(record), {
-      EX: OIDC_TX_TTL_SECONDS,
-      NX: true,
-    });
-    const redirectUrl = this.client.authorizeUrl({
+    const redirectUrl = await this.client.authorizeUrl({
       state,
       nonce,
       codeChallenge: createHash('sha256').update(verifier).digest('base64url'),
-      connection: args.connection,
-      // linking (item 4): never attach whoever is signed in at the IdP
-      // already; max_age=0 makes the IdP report when it authenticated
-      ...(args.sessionId
-        ? { prompt: 'login' as const, maxAge: 0 as const }
-        : {}),
+      // linking (item 4): the user picks the account, never silently whoever
+      // is signed in at the IdP; the start already needed fresh strong auth
+      ...(args.sessionId ? { prompt: 'select_account' as const } : {}),
+    });
+    await this.redis.set(this.statePrefix + state, JSON.stringify(record), {
+      EX: OIDC_TX_TTL_SECONDS,
+      NX: true,
     });
     return { redirectUrl, tx };
   }
@@ -221,46 +222,71 @@ export class OidcService {
     } catch {
       throw new CallbackError('failed');
     }
-    // Item 5: only the connections we offer (Auth0 prefixes the subject)
-    if (!SUPPORTED_SUBJECT.test(identity.subject)) {
-      throw new CallbackError('unsupported_identity');
-    }
-
-    const redirectUrl = new URL(
-      record.returnTo,
-      this.postLoginRedirect,
-    ).toString();
+    const verified: VerifiedIdentity = {
+      issuer: this.client.issuerId,
+      subject: identity.subject,
+      email: identity.email,
+    };
+    const redirectUrl = new URL(record.returnTo, this.postLoginRedirect);
     if (linkUserId !== undefined) {
-      // prompt=login is only a request: require proof of a fresh login
-      const age =
-        identity.authTime === undefined
-          ? Infinity
-          : this.clock.now().getTime() / 1000 - identity.authTime;
-      if (!(age <= LINK_MAX_AUTH_AGE_SECONDS)) {
+      // Google does not document auth_time; the link start needed fresh
+      // strong auth and the callback is bound to that session. An issuer
+      // that reports auth_time must report a recent one.
+      if (
+        identity.authTime !== undefined &&
+        !(
+          this.clock.now().getTime() / 1000 - identity.authTime <=
+          LINK_MAX_AUTH_AGE_SECONDS
+        )
+      ) {
         throw new CallbackError('reauth_required');
       }
-      await this.link(linkUserId, record.sessionId!, identity, args);
-      return { token: null, redirectUrl };
+      await this.link(linkUserId, record.sessionId!, verified, args);
+      return { token: null, redirectUrl: redirectUrl.toString() };
     }
 
+    const signedIn = await this.signIn(verified, args);
+    if (!signedIn) throw new CallbackError('failed');
+    if (signedIn.linkHint) redirectUrl.searchParams.set('orgLinkHint', '1');
+    return { token: signedIn.token, redirectUrl: redirectUrl.toString() };
+  }
+
+  /**
+   * Session for a verified identity (never strong: neither Google nor an
+   * email code is a step-up factor); null when the user is not active.
+   * `linkHint`: another user has an identity with the same email under
+   * another sign-in method (no implicit merge: the UI suggests linking).
+   */
+  async signIn(
+    identity: VerifiedIdentity,
+    client: Client,
+  ): Promise<{ userId: string; token: string; linkHint: boolean } | null> {
     const userId = await this.findOrCreateUser(identity);
+    if (userId === null) return null;
+    const method = identity.issuer === EMAIL_OTP_ISSUER ? 'email_otp' : 'oidc';
     const { token } = await this.sessions.create({
       userId,
-      amr: ['oidc'],
+      amr: [method],
       strong: false,
       now: this.clock.now(),
       idleTtlSeconds: this.idleTtlSeconds,
       absoluteTtlSeconds: this.absoluteTtlSeconds,
-      userAgent: args.userAgent,
+      userAgent: client.userAgent,
     });
     await this.securityEvents.record(
       userId,
       'security.signed_in',
-      { method: 'oidc' },
-      args.ip,
-      args.userAgent,
+      { method },
+      client.ip,
+      client.userAgent,
     );
-    return { token, redirectUrl };
+    const [hint] = await this.db.query(
+      `SELECT 1 FROM identities
+       WHERE kind = 'oidc' AND email_hash = $1 AND user_id <> $2 AND oidc_issuer <> $3
+       LIMIT 1`,
+      [hmacEmail(identity.email, this.emailHashKey), userId, identity.issuer],
+    );
+    return { userId, token, linkHint: hint !== undefined };
   }
 
   private errorCode(error: unknown): OidcErrorCode {
@@ -276,17 +302,20 @@ export class OidcService {
     return 'failed';
   }
 
-  /** Attaches the IdP identity to the user; a new link ends their other sessions. */
-  private async link(
+  /**
+   * Attaches the verified identity to the user; a new link ends their other
+   * sessions. 409 `identity_taken` when it belongs to another user.
+   */
+  async link(
     userId: string,
     sessionId: string,
-    identity: { subject: string; email: string },
-    client: { ip: string; userAgent: string | null },
+    identity: VerifiedIdentity,
+    client: Client,
   ): Promise<void> {
     const linked = await this.db.transaction(async (em) => {
       const added = await attachIdentity(em, userId, {
         kind: 'oidc',
-        issuer: this.client.issuerId,
+        issuer: identity.issuer,
         subject: identity.subject,
         emailEncrypted: this.encryption.encrypt(identity.email),
         emailHash: hmacEmail(identity.email, this.emailHashKey),
@@ -305,7 +334,9 @@ export class OidcService {
       await this.securityEvents.record(
         userId,
         'security.identity_linked',
-        { kind: 'oidc' },
+        {
+          kind: identity.issuer === EMAIL_OTP_ISSUER ? 'email_otp' : 'oidc',
+        },
         client.ip,
         client.userAgent,
       );
@@ -316,14 +347,12 @@ export class OidcService {
    * Identity by (issuer, subject); a new subject is always a new user. Never
    * attach by email: mailbox access or a recycled address would take over
    * the account (decision reversed 2026-11-10); linking is explicit, while
-   * signed in (link flow).
+   * signed in (link flow). Null for a user that is not active.
    */
-  private async findOrCreateUser(identity: {
-    subject: string;
-    email: string;
-  }): Promise<string> {
-    const issuer = this.client.issuerId;
-    const { subject } = identity;
+  private async findOrCreateUser(
+    identity: VerifiedIdentity,
+  ): Promise<string | null> {
+    const { issuer, subject } = identity;
     const emailEncrypted = this.encryption.encrypt(identity.email);
     const emailHash = hmacEmail(identity.email, this.emailHashKey);
     const find = async (): Promise<
@@ -341,9 +370,11 @@ export class OidcService {
       id: string;
       userId: string;
       status: string;
-    }): Promise<string> => {
-      if (row.status !== 'active') throw new CallbackError('failed');
-      // the IdP may have changed the address since the last sign-in
+    }): Promise<string | null> => {
+      if (row.status !== 'active') return null;
+      // the IdP may have changed the address since the last sign-in; an
+      // email-code identity is its address (subject = email HMAC)
+      if (issuer === EMAIL_OTP_ISSUER) return row.userId;
       await this.db.query(
         `UPDATE identities SET email_encrypted = $2, email_hash = $3, updated_at = $4 WHERE id = $1`,
         [row.id, emailEncrypted, emailHash, this.clock.now()],
@@ -392,8 +423,7 @@ export type OidcErrorCode =
   | 'failed'
   | 'identity_taken'
   | 'rate_limited'
-  | 'reauth_required'
-  | 'unsupported_identity';
+  | 'reauth_required';
 
 /** An expected callback failure, answered with `?orgAuthError=<code>`. */
 class CallbackError extends Error {

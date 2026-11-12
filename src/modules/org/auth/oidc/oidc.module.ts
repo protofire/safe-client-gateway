@@ -3,7 +3,7 @@ import { OidcClient } from '@/modules/org/auth/oidc/oidc.client';
 import { OidcController } from '@/modules/org/auth/oidc/oidc.controller';
 import { OidcService } from '@/modules/org/auth/oidc/oidc.service';
 
-/** Auth0 sign-in; its deps come from the global OrgAuthModule. */
+/** Google sign-in (OIDC); its deps come from the global OrgAuthModule. */
 @Module({
   controllers: [OidcController],
   providers: [OidcClient, OidcService],
