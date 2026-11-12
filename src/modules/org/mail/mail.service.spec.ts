@@ -49,3 +49,21 @@ describe('MailService without an API key', () => {
     },
   );
 });
+
+describe('MailService sign-in codes without an API key', () => {
+  it('logs the code only when org.mail.logLinks is true', async () => {
+    const { mail: m, logger } = service(true);
+    await m.sendSignInCode('a@example.com', '12345678');
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining('12345678'),
+    );
+  });
+
+  it('never logs the code otherwise', async () => {
+    const { mail: m, logger } = service(false);
+    await expect(m.sendSignInCode('a@example.com', '12345678')).rejects.toThrow(
+      'org mail is not configured',
+    );
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain('12345678');
+  });
+});

@@ -2,6 +2,7 @@ import {
   inviteTemplate,
   plainName,
   securityNoticeTemplate,
+  signInCodeTemplate,
 } from '@/modules/org/mail/templates';
 
 describe('mail templates (item 2)', () => {
@@ -93,4 +94,16 @@ describe('mail templates (item 2)', () => {
       expect(mail.text).toContain('Acme');
     },
   );
+
+  it('sign-in code mail: the code, no link, a never-ask warning, never the name Safe', () => {
+    const mail = signInCodeTemplate('01234567');
+    for (const part of [mail.subject, mail.text, mail.html]) {
+      expect(part).not.toMatch(/https?:|www\.|href/i);
+      expect(part).not.toMatch(/\bSafe\b/);
+    }
+    expect(mail.subject).not.toContain('01234567');
+    expect(mail.text).toContain('01234567');
+    expect(mail.html).toContain('<strong>01234567</strong>');
+    expect(mail.text).toContain('We never ask for this code');
+  });
 });

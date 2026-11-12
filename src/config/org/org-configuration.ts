@@ -57,6 +57,10 @@ export default () => ({
     encryption: { keys: process.env.ORG_ENCRYPTION_KEYS },
     emailHashKey: process.env.ORG_EMAIL_HASH_KEY,
     createAllowlist: parseCreateAllowlist(process.env.ORG_CREATE_ALLOWLIST),
+    emailOtp: {
+      // circuit breaker over all addresses: sends stop (error log) above this
+      maxSendsPerHour: int(process.env.ORG_EMAIL_OTP_MAX_SENDS_PER_HOUR, 200),
+    },
     oidc: {
       issuer: process.env.ORG_OIDC_ISSUER,
       clientId: process.env.ORG_OIDC_CLIENT_ID,

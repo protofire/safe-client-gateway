@@ -101,3 +101,23 @@ export function securityNoticeTemplate(notice: SecurityNotice): MailContent {
     html: `<p>${escapeHtml(line)}</p><p>${advice}</p>`,
   };
 }
+
+/** The code only: no link to click, nothing an attacker could make look like ours. */
+export function signInCodeTemplate(code: string): MailContent {
+  const lines = [
+    `Your Protofire Multisig sign-in code is ${code}`,
+    'It is valid for 10 minutes and works only in the browser where you asked for it.',
+    'We never ask for this code. Do not share it with anyone, including anyone who says they are from Protofire.',
+    'If you did not ask for it, you can ignore this email.',
+  ];
+  return {
+    subject: 'Your Protofire Multisig sign-in code',
+    text: lines.join('\n\n'),
+    html: lines
+      .map(
+        (line) =>
+          `<p>${escapeHtml(line).replace(code, `<strong>${code}</strong>`)}</p>`,
+      )
+      .join(''),
+  };
+}

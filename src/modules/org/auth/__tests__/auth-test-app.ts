@@ -86,6 +86,7 @@ export async function createAuthTestApp(args: {
     'org.oidc.redirectUri':
       'https://api.example.com/v1/orgs/auth/oidc/callback',
     'org.oidc.postLoginRedirect': `${APP_URL}/`,
+    'org.emailOtp.maxSendsPerHour': 200,
     'redis.host': '127.0.0.1',
     'redis.port': `6379/${args.redisDb}`,
     'redis.connectTimeout': 10_000,

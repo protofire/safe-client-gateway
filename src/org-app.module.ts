@@ -24,6 +24,7 @@ import { ControlsModule } from '@/modules/org/controls/controls.module';
 import { CsrfGuard } from '@/modules/org/auth/csrf.guard';
 import { ORG_KEY_PREFIX } from '@/modules/org/auth/nonce.store';
 import { OrgAuthModule } from '@/modules/org/auth/org-auth.module';
+import { OrgEmailOtpModule } from '@/modules/org/auth/email-otp/email-otp.module';
 import { OrgOidcModule } from '@/modules/org/auth/oidc/oidc.module';
 import { OrgTotpModule } from '@/modules/org/auth/totp/totp.module';
 import { SessionGuard } from '@/modules/org/auth/session.guard';
@@ -88,6 +89,7 @@ export class OrgAppModule implements NestModule {
         // with /v1/orgs/:orgId routes, or `auth` would be taken for an orgId.
         OrgAuthModule,
         OrgOidcModule,
+        OrgEmailOtpModule,
         OrgTotpModule,
         OrgAccountModule,
         // InvitationsController (static paths) first inside, then :orgId routes

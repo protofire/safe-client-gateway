@@ -1520,6 +1520,50 @@
         "tags": ["LinkIdentity"]
       }
     },
+    "/v1/orgs/account/link/email/start": {
+      "post": {
+        "operationId": "LinkIdentityController_linkEmailStart_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": { "type": "string", "maxLength": 254 }
+                },
+                "required": ["email"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["LinkIdentity"]
+      }
+    },
+    "/v1/orgs/account/link/email/verify": {
+      "post": {
+        "operationId": "LinkIdentityController_linkEmailVerify_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "code": { "type": "string", "pattern": "^\\d{8}$" }
+                },
+                "required": ["code"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["LinkIdentity"]
+      }
+    },
     "/v1/orgs/account/link/oidc/authorize": {
       "post": {
         "operationId": "LinkIdentityController_linkOidc_v1",
@@ -1530,14 +1574,7 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "properties": {
-                  "connection": {
-                    "type": "string",
-                    "enum": ["email", "google-oauth2"]
-                  },
-                  "returnTo": { "type": "string" }
-                },
-                "required": ["connection"]
+                "properties": { "returnTo": { "type": "string" } }
               }
             }
           }
@@ -1576,6 +1613,50 @@
         "tags": ["LinkIdentity"]
       }
     },
+    "/v1/orgs/auth/email/start": {
+      "post": {
+        "operationId": "EmailOtpController_start_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": { "type": "string", "maxLength": 254 }
+                },
+                "required": ["email"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["EmailOtp"]
+      }
+    },
+    "/v1/orgs/auth/email/verify": {
+      "post": {
+        "operationId": "EmailOtpController_verify_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "code": { "type": "string", "pattern": "^\\d{8}$" }
+                },
+                "required": ["code"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["EmailOtp"]
+      }
+    },
     "/v1/orgs/auth/logout": {
       "post": {
         "operationId": "SiweAuthController_logout_v1",
@@ -1604,12 +1685,6 @@
       "get": {
         "operationId": "OidcController_authorize_v1",
         "parameters": [
-          {
-            "name": "connection",
-            "required": true,
-            "in": "query",
-            "schema": { "type": "string", "enum": ["email", "google-oauth2"] }
-          },
           {
             "name": "returnTo",
             "required": false,

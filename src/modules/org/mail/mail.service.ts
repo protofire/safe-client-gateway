@@ -14,6 +14,7 @@ import {
   type MailContent,
   type SecurityNotice,
   securityNoticeTemplate,
+  signInCodeTemplate,
 } from '@/modules/org/mail/templates';
 
 /** Transactional mail through the Resend HTTP API (`POST {baseUrl}/emails`). */
@@ -47,6 +48,18 @@ export class MailService {
       return;
     }
     await this.send(to, inviteTemplate(mail));
+  }
+
+  async sendSignInCode(to: string, code: string): Promise<void> {
+    if (!this.apiKey) {
+      // the code signs in: logged only on explicit opt-in (ORG_MAIL_LOG_LINKS, never in production)
+      if (!this.logLinks) {
+        throw new Error('org mail is not configured (ORG_MAIL_API_KEY)');
+      }
+      this.logger.info(`[org mail] no ORG_MAIL_API_KEY, sign-in code: ${code}`);
+      return;
+    }
+    await this.send(to, signInCodeTemplate(code));
   }
 
   async sendSecurityNotice(to: string, notice: SecurityNotice): Promise<void> {

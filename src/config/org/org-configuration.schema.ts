@@ -142,6 +142,10 @@ export const OrgConfigurationSchema = z
     // Beta gate on POST /v1/orgs; unset or empty = anyone signed in may create
     ORG_CREATE_ALLOWLIST: createAllowlist.optional(),
 
+    // Global breaker for email sign-in codes per hour (default 200)
+    ORG_EMAIL_OTP_MAX_SENDS_PER_HOUR: z.coerce.number().int().min(1).optional(),
+
+    // Google: https://accounts.google.com (endpoints from its discovery document)
     ORG_OIDC_ISSUER: httpsUrl,
     ORG_OIDC_CLIENT_ID: z.string().min(1),
     ORG_OIDC_CLIENT_SECRET: z.string().min(1),
@@ -150,7 +154,7 @@ export const OrgConfigurationSchema = z
 
     // Optional outside production: without it the invite link is logged instead of mailed
     ORG_MAIL_API_KEY: z.string().min(1).optional(),
-    // Opt-in: log the invite link (carries the token) when no API key is set; refused in production
+    // Opt-in: log the invite link (carries the token) and email sign-in codes when no API key is set; refused in production
     ORG_MAIL_LOG_LINKS: z.enum(['true', 'false']).optional(),
     ORG_MAIL_FROM: z.string().min(1),
     ORG_MAIL_BASE_URL: url,
@@ -177,7 +181,8 @@ export const OrgConfigurationSchema = z
       ctx.addIssue({
         code: 'custom',
         path: ['ORG_MAIL_LOG_LINKS'],
-        message: 'Must not be true in production (logs invitation tokens)',
+        message:
+          'Must not be true in production (logs invitation tokens and sign-in codes)',
       });
     }
   })
