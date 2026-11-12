@@ -1,7 +1,13 @@
-import { HttpException, HttpStatus, Inject, Injectable } from '@nestjs/common';
+import {
+  ForbiddenException,
+  HttpException,
+  HttpStatus,
+  Inject,
+  Injectable,
+} from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { createHash, timingSafeEqual } from 'node:crypto';
-import type { DataSource } from 'typeorm';
+import type { DataSource, EntityManager } from 'typeorm';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import {
   type ILoggingService,
@@ -72,6 +78,7 @@ export class OidcService {
   private readonly emailHashKey: Buffer;
   private readonly idleTtlSeconds: number;
   private readonly absoluteTtlSeconds: number;
+  private readonly strongAuthWindowMs: number;
   private readonly statePrefix: string;
 
   constructor(
@@ -101,6 +108,8 @@ export class OidcService {
     this.absoluteTtlSeconds = config.getOrThrow<number>(
       'org.session.absoluteTtlSeconds',
     );
+    this.strongAuthWindowMs =
+      config.getOrThrow<number>('org.session.strongAuthWindowSeconds') * 1000;
   }
 
   get sessionMaxAgeSeconds(): number {
@@ -295,6 +304,7 @@ export class OidcService {
       if (error.getStatus() === 429) return 'rate_limited';
       const body = error.getResponse() as { code?: unknown };
       if (body?.code === 'identity_taken') return 'identity_taken';
+      if (body?.code === 'reauth_required') return 'reauth_required';
     }
     this.logger.error(
       `OIDC callback failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -313,6 +323,7 @@ export class OidcService {
     client: Client,
   ): Promise<void> {
     const linked = await this.db.transaction(async (em) => {
+      await this.lockLinkingSession(em, userId, sessionId);
       const added = await attachIdentity(em, userId, {
         kind: 'oidc',
         issuer: identity.issuer,
@@ -340,6 +351,35 @@ export class OidcService {
         client.ip,
         client.userAgent,
       );
+    }
+  }
+
+  /**
+   * The flow outlived its checks (token exchange, mailed code): the session
+   * must still be live, the user's, and strong-fresh. FOR UPDATE serialises
+   * with a concurrent revocation (an UPDATE of the same row).
+   */
+  private async lockLinkingSession(
+    em: EntityManager,
+    userId: string,
+    sessionId: string,
+  ): Promise<void> {
+    const now = this.clock.now();
+    const [session]: Array<{ lastStrongAuthAt: Date | null }> = await em.query(
+      `SELECT s.last_strong_auth_at AS "lastStrongAuthAt"
+       FROM sessions s JOIN users u ON u.id = s.user_id
+       WHERE s.id = $1 AND s.user_id = $2 AND s.revoked_at IS NULL
+         AND s.expires_at > $3 AND s.idle_expires_at > $3 AND u.status = 'active'
+       FOR UPDATE OF s`,
+      [sessionId, userId, now],
+    );
+    const strong = session?.lastStrongAuthAt;
+    if (!strong || now.getTime() - strong.getTime() > this.strongAuthWindowMs) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        message: 'Sign in again and confirm with a strong factor to link',
+        code: 'reauth_required',
+      });
     }
   }
 

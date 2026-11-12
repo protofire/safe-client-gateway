@@ -14,6 +14,7 @@ import {
   type AuthTestApp,
 } from '@/modules/org/auth/__tests__/auth-test-app';
 import { OrgOidcModule } from '@/modules/org/auth/oidc/oidc.module';
+import { OidcService } from '@/modules/org/auth/oidc/oidc.service';
 import { OrgTotpModule } from '@/modules/org/auth/totp/totp.module';
 import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
 import { sha256Hex } from '@/modules/org/crypto/hashing';
@@ -367,6 +368,71 @@ describe('identity linking (org)', () => {
     async function countUsers(): Promise<number> {
       return (await t.sql.query(`SELECT count(*)::int AS n FROM users`))[0].n;
     }
+
+    it('attaches nothing when the session is revoked between start and callback', async () => {
+      const u = await user({ wallet: true });
+      const s = await startLink(
+        u,
+        undefined,
+        `${randomBytes(6).toString('hex')}@example.com`,
+      );
+      await t.sql.query(
+        `UPDATE sessions SET revoked_at = now() WHERE user_id = $1`,
+        [u.userId],
+      );
+      await failsWith(callback(s, [s.txCookie, u.cookie]), 'failed');
+      const [{ n }] = await t.sql.query(
+        `SELECT count(*)::int AS n FROM identities WHERE user_id = $1`,
+        [u.userId],
+      );
+      expect(n).toBe(1);
+    });
+
+    it('re-checks the session when attaching: revoked or no longer strong-fresh after the callback started attaches nothing', async () => {
+      const u = await user({ wallet: true });
+      const [{ id: sessionId }]: Array<{ id: string }> = await t.sql.query(
+        `SELECT id FROM sessions WHERE user_id = $1`,
+        [u.userId],
+      );
+      const identity = {
+        issuer: mock.issuer,
+        subject: randomBytes(6).toString('hex'),
+        email: 'race@example.com',
+      };
+      const client = { ip: '10.6.99.1', userAgent: null };
+      const oidc = t.app.get(OidcService);
+      await t.sql.query(
+        `UPDATE sessions SET last_strong_auth_at = now() - interval '31 minutes' WHERE id = $1`,
+        [sessionId],
+      );
+      await expect(
+        oidc.link(u.userId, sessionId, identity, client),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'reauth_required' }),
+      });
+      await t.sql.query(
+        `UPDATE sessions SET last_strong_auth_at = now(), revoked_at = now() WHERE id = $1`,
+        [sessionId],
+      );
+      await expect(
+        oidc.link(u.userId, sessionId, identity, client),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'reauth_required' }),
+      });
+      // another user's session
+      const other = await user({ wallet: true });
+      await expect(
+        oidc.link(other.userId, sessionId, identity, client),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'reauth_required' }),
+      });
+      expect(await identities(other)).toHaveLength(1);
+      const [{ n }] = await t.sql.query(
+        `SELECT count(*)::int AS n FROM identities WHERE user_id = $1`,
+        [u.userId],
+      );
+      expect(n).toBe(1);
+    });
 
     it('fails when another session of the same user completes the flow', async () => {
       const u = await user({ wallet: true });
