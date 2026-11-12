@@ -78,6 +78,15 @@ const createAllowlist = z.string().superRefine((value, ctx) => {
   }
 });
 
+/** True for a parseable URL on localhost, 127.0.0.1 or [::1]. */
+export function isLoopbackUrl(value: string | undefined): boolean {
+  return (
+    value !== undefined &&
+    URL.canParse(value) &&
+    ['localhost', '127.0.0.1', '[::1]'].includes(new URL(value).hostname)
+  );
+}
+
 const port = z.coerce.number().int().min(1).max(65535);
 const seconds = z.coerce.number().int().min(1).optional();
 const url = z.url();
@@ -175,6 +184,18 @@ export const OrgConfigurationSchema = z
         code: 'custom',
         path: ['ORG_MAIL_API_KEY'],
         message: 'Required in production',
+      });
+    }
+    // codes and invite tokens in logs only for a local app on a loopback host
+    if (
+      env.ORG_MAIL_LOG_LINKS === 'true' &&
+      !isLoopbackUrl(env.ORG_PUBLIC_APP_URL)
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['ORG_MAIL_LOG_LINKS'],
+        message:
+          'Only for local dev: ORG_PUBLIC_APP_URL must be on localhost, 127.0.0.1 or [::1]',
       });
     }
     if (production && env.ORG_MAIL_LOG_LINKS === 'true') {

@@ -53,9 +53,40 @@ describe('OrgConfigurationSchema', () => {
     }
   });
 
-  it('refuses ORG_MAIL_LOG_LINKS=true in production only', () => {
+  it.each([
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'http://[::1]:3000',
+  ])('accepts ORG_MAIL_LOG_LINKS=true with a loopback app URL %s', (url) => {
+    expect(
+      OrgConfigurationSchema.safeParse({
+        ...validEnv(),
+        ORG_PUBLIC_APP_URL: url,
+        ORG_MAIL_LOG_LINKS: 'true',
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each([
+    'https://app.example.com',
+    'http://localhost.evil.example',
+    'http://10.0.0.1:3000',
+  ])('refuses ORG_MAIL_LOG_LINKS=true with app URL %s', (url) => {
+    const result = OrgConfigurationSchema.safeParse({
+      ...validEnv(),
+      ORG_PUBLIC_APP_URL: url,
+      ORG_MAIL_LOG_LINKS: 'true',
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((i) => i.path.join('.'))).toContain(
+      'ORG_MAIL_LOG_LINKS',
+    );
+  });
+
+  it('refuses ORG_MAIL_LOG_LINKS=true in production even on loopback', () => {
     const env: Record<string, string> = {
       ...validEnv(),
+      ORG_PUBLIC_APP_URL: 'http://localhost:3000',
       ORG_MAIL_LOG_LINKS: 'true',
     };
 

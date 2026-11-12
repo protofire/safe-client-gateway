@@ -1,4 +1,7 @@
-import { parseCreateAllowlist } from '@/config/org/org-configuration.schema';
+import {
+  isLoopbackUrl,
+  parseCreateAllowlist,
+} from '@/config/org/org-configuration.schema';
 
 const int = (value: string | undefined, fallback: number): number =>
   value === undefined || value === '' ? fallback : parseInt(value);
@@ -75,6 +78,7 @@ export default () => ({
       // opt-in; the schema refuses it in production, the guard here is defence in depth
       logLinks:
         flag('ORG_MAIL_LOG_LINKS') &&
+        isLoopbackUrl(process.env.ORG_PUBLIC_APP_URL) &&
         process.env.NODE_ENV !== 'production' &&
         process.env.CGW_ENV !== 'production',
     },
