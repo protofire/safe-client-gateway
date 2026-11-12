@@ -692,6 +692,82 @@ describe('members and invitations (org)', () => {
       );
     });
 
+    it('completes concurrent resets of two admins by each other without a deadlock', async () => {
+      for (let round = 0; round < 5; round++) {
+        const a = await t.user({ wallet: true, totp: true });
+        const b = await t.user({ wallet: true, totp: true });
+        const orgId = await t.createOrg(a);
+        const bMember = await t.addMember(orgId, b, 'admin');
+        const [{ id: aMember }]: Array<{ id: string }> = await t.sql.query(
+          `SELECT id FROM members WHERE org_id = $1 AND user_id = $2`,
+          [orgId, a.userId],
+        );
+        const [ra, rb] = await Promise.all([
+          t
+            .post(`/v1/orgs/${orgId}/members/${bMember}/factors/reset`)
+            .set('Cookie', a.cookie),
+          t
+            .post(`/v1/orgs/${orgId}/members/${aMember}/factors/reset`)
+            .set('Cookie', b.cookie),
+        ]);
+        // the loser's session may already be revoked (401) by the winner
+        for (const res of [ra, rb])
+          expect([204, 401, 403]).toContain(res.status);
+        expect([ra.status, rb.status]).toContain(204);
+      }
+    });
+
+    it('re-checks the permission under the user locks: revoked while waiting is 403', async () => {
+      const caller = await t.user({ wallet: true });
+      const other = await t.user({ wallet: true });
+      const target = await t.user({ email: email(), totp: true });
+      const orgId = await t.createOrg(caller);
+      await t.addMember(orgId, other, 'admin');
+      const memberId = await t.addMember(orgId, target, 'member');
+      const [{ id: callerMember }]: Array<{ id: string }> = await t.sql.query(
+        `SELECT id FROM members WHERE org_id = $1 AND user_id = $2`,
+        [orgId, caller.userId],
+      );
+
+      const holder = t.sql.createQueryRunner();
+      await holder.connect();
+      await holder.startTransaction();
+      try {
+        await holder.query(`SELECT 1 FROM users WHERE id = $1 FOR UPDATE`, [
+          target.userId,
+        ]);
+        const reset = t
+          .post(`/v1/orgs/${orgId}/members/${memberId}/factors/reset`)
+          .set('Cookie', caller.cookie)
+          .then((r) => r);
+        for (let i = 0; i < 100; i++) {
+          const [{ waiting }]: Array<{ waiting: number }> = await t.sql.query(
+            `SELECT count(*)::int AS waiting FROM pg_stat_activity
+             WHERE datname = current_database() AND wait_event_type = 'Lock'`,
+          );
+          if (waiting > 0) break;
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        // demoted while the reset waits for the lock
+        await holder.query(
+          `UPDATE role_bindings SET role_id = (SELECT id FROM roles WHERE org_id IS NULL AND key = 'member')
+           WHERE member_id = $1 AND scope = 'org'`,
+          [callerMember],
+        );
+        await holder.commitTransaction();
+        const res = await reset;
+        expect(res.status).toBe(403);
+      } finally {
+        if (holder.isTransactionActive) await holder.rollbackTransaction();
+        await holder.release();
+      }
+      expect(
+        await t.sql.query(`SELECT 1 FROM factors WHERE user_id = $1`, [
+          target.userId,
+        ]),
+      ).toHaveLength(1);
+    });
+
     it('answers 403 support_required when the target is in an org the caller does not administer', async () => {
       const admin = await t.user({ wallet: true });
       const otherAdmin = await t.user({ wallet: true });

@@ -301,12 +301,29 @@ export class MembersService {
     by: Actor & { sessionId: string },
   ): Promise<void> {
     const { target, orgIds } = await this.tx.runInOrgTx(async (em) => {
-      const member = await this.member(em, orgId, memberId);
-      if (member.status !== 'active' || !member.userId) {
-        throw new NotFoundException();
-      }
-      if (member.userId === by.userId) {
+      const found = await this.member(em, orgId, memberId);
+      if (!found.userId) throw new NotFoundException();
+      if (found.userId === by.userId) {
         throw new BadRequestException('Manage your own factors in settings');
+      }
+      // Lock order user rows (by id) → sessions, as in lockLinkingSession: the
+      // audit row below takes KEY SHARE on the caller, so both are locked up
+      // front; A resetting B while B resets A then serialises. No org lock.
+      await em.query(
+        `SELECT 1 FROM users WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE`,
+        [[found.userId, by.userId]],
+      );
+      // checked again under the locks: a change committed while we waited counts
+      await recheckPermission(
+        this.resolver,
+        em,
+        orgId,
+        by.userId,
+        'factors.reset',
+      );
+      const member = await this.member(em, orgId, memberId);
+      if (member.status !== 'active' || member.userId !== found.userId) {
+        throw new NotFoundException();
       }
       const [{ outside }]: Array<{ outside: number }> = await em.query(
         `SELECT count(*)::int AS outside FROM members t
@@ -327,10 +344,6 @@ export class MembersService {
           code: 'support_required',
         });
       }
-      // lock order: user row, then its sessions (see lockLinkingSession)
-      await em.query(`SELECT 1 FROM users WHERE id = $1 FOR UPDATE`, [
-        member.userId,
-      ]);
       await em.query(`DELETE FROM factors WHERE user_id = $1`, [member.userId]);
       await em.query(`DELETE FROM recovery_codes WHERE user_id = $1`, [
         member.userId,
