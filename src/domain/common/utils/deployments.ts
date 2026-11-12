@@ -181,7 +181,7 @@ function formatDeployments(
  *
  * @returns {Array<string>} - a list of Safe versions in descending order
  */
-function getSafeVersions(): Array<string> {
+export function getSafeVersions(): Array<string> {
   return _SAFE_DEPLOYMENTS.map((deployment) => deployment.version);
 }
 

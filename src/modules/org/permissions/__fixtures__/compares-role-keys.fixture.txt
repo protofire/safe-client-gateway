@@ -1,0 +1,14 @@
+// Not compiled: input for no-role-names.spec.ts, which must flag lines 3, 4, 6, 9 and 12.
+export async function canRemove(em, roleKey: string, keys: string[]) {
+  if (roleKey === 'admin') return true;
+  if (keys.includes("member")) return false;
+  switch (roleKey) {
+    case `member`:
+      return false;
+  }
+  await em.query(`SELECT 1 FROM roles r WHERE r.key = 'admin'`);
+  return (
+    roleKey ===
+      'admin'
+  );
+}

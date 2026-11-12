@@ -1,1 +1,7 @@
 * @safe-global/safe-client-gateway-maintainers
+
+# Organization layer (cgw-org): Protofire shared-UI only
+/src/modules/org/ @nick8319
+/src/org-main.ts @nick8319
+/src/org-app.module.ts @nick8319
+/migrations/org/ @nick8319

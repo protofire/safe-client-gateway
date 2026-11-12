@@ -265,10 +265,11 @@ export class CacheRouter {
     limit?: number;
     offset?: number;
     to?: string;
+    transactionHash?: string;
   }): CacheDir {
     return new CacheDir(
       CacheRouter.getTransfersCacheKey(args),
-      `${args.onlyErc20}_${args.onlyErc721}_${args.limit}_${args.offset}_${args.to}`,
+      `${args.onlyErc20}_${args.onlyErc721}_${args.limit}_${args.offset}_${args.to}${args.transactionHash ? `_${args.transactionHash}` : ''}`,
     );
   }
 

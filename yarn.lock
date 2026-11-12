@@ -7981,6 +7981,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"jose@npm:5.10.0":
+  version: 5.10.0
+  resolution: "jose@npm:5.10.0"
+  checksum: 10/03881d1dfb390dcf50926402edcfe233bf557b5a77321fcb1bdb53453bc1cdd26d2d0a9ab28c7445cbb826881f84fdf5074179700f10c2711ccb9880f51065d7
+  languageName: node
+  linkType: hard
+
 "js-tokens@npm:^4.0.0":
   version: 4.0.0
   resolution: "js-tokens@npm:4.0.0"
@@ -9821,6 +9828,7 @@ __metadata:
     eslint-config-prettier: "npm:10.1.8"
     husky: "npm:9.1.7"
     jest: "npm:29.7.0"
+    jose: "npm:5.10.0"
     jsonwebtoken: "npm:9.0.3"
     lodash: "npm:4.17.21"
     nestjs-cls: "npm:6.0.1"

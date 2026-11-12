@@ -2,6 +2,7 @@ import { IConfigurationService } from '@/config/configuration.service.interface'
 import configurationValidator from '@/config/configuration.validator';
 import { RootConfigurationSchema } from '@/config/entities/schemas/configuration.schema';
 import { NestConfigurationService } from '@/config/nest.configuration.service';
+import type { ZodType } from 'zod';
 import { DynamicModule, Global, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ConfigFactory } from '@nestjs/config/dist/interfaces/config-factory.interface';
@@ -16,13 +17,19 @@ import { ConfigFactory } from '@nestjs/config/dist/interfaces/config-factory.int
 @Global()
 @Module({})
 export class ConfigurationModule {
-  static register(configFactory: ConfigFactory): DynamicModule {
+  static register(
+    configFactory: ConfigFactory,
+    schema: ZodType = RootConfigurationSchema,
+    options: { ignoreEnvFile?: boolean } = {},
+  ): DynamicModule {
     return {
       module: ConfigurationModule,
       imports: [
         ConfigModule.forRoot({
+          // The org process must never pick up a gateway .env next to it
+          ignoreEnvFile: options.ignoreEnvFile ?? false,
           validate: (config: Record<string, unknown>) => {
-            return configurationValidator(config, RootConfigurationSchema);
+            return configurationValidator(config, schema);
           },
           load: [configFactory],
         }),

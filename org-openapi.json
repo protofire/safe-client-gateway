@@ -1,0 +1,2376 @@
+{
+  "openapi": "3.0.0",
+  "paths": {
+    "/v1/orgs": {
+      "post": {
+        "operationId": "OrgsController_create_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1, "maxLength": 64 }
+                },
+                "required": ["name"]
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "" } },
+        "tags": ["Orgs"]
+      },
+      "get": {
+        "operationId": "OrgsController_list_v1",
+        "parameters": [
+          {
+            "name": "includeDeleted",
+            "required": false,
+            "in": "query",
+            "schema": { "type": "string", "enum": ["true", "false"] }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Orgs"]
+      }
+    },
+    "/v1/orgs/{invitedOrgId}/members/accept": {
+      "post": {
+        "operationId": "InvitationsController_acceptById_v1",
+        "parameters": [
+          {
+            "name": "invitedOrgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Invitations"]
+      }
+    },
+    "/v1/orgs/{invitedOrgId}/members/decline": {
+      "post": {
+        "operationId": "InvitationsController_declineById_v1",
+        "parameters": [
+          {
+            "name": "invitedOrgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Invitations"]
+      }
+    },
+    "/v1/orgs/{orgId}": {
+      "get": {
+        "operationId": "OrgsController_get_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Orgs"]
+      },
+      "patch": {
+        "operationId": "OrgsController_rename_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1, "maxLength": 64 }
+                },
+                "required": ["name"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["Orgs"]
+      },
+      "delete": {
+        "operationId": "OrgsController_delete_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Orgs"]
+      }
+    },
+    "/v1/orgs/{orgId}/activity": {
+      "get": {
+        "operationId": "ActivityController_list_v1",
+        "parameters": [
+          {
+            "name": "type",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "org.created",
+                "org.renamed",
+                "org.deleted",
+                "org.restored",
+                "member.invited",
+                "member.invite_renewed",
+                "member.invite_revoked",
+                "member.joined",
+                "member.declined",
+                "member.role_changed",
+                "member.removed",
+                "member.left",
+                "member.factors_reset",
+                "safe.linked",
+                "safe.unlinked",
+                "contact.created",
+                "contact.updated",
+                "contact.deleted",
+                "contact.imported",
+                "contact_request.created",
+                "contact_request.approved",
+                "contact_request.rejected",
+                "export.downloaded",
+                "security.signed_in",
+                "security.step_up",
+                "security.totp_enrolled",
+                "security.totp_removed",
+                "onchain.owners_changed",
+                "onchain.threshold_changed",
+                "onchain.module_changed",
+                "onchain.guard_changed",
+                "policy.created",
+                "policy.updated",
+                "policy.deleted",
+                "policy.violation_found",
+                "payout_run.created",
+                "payout_run.updated",
+                "payout_run.deleted",
+                "payout_run.proposal_claimed",
+                "payout_run.proposal_released",
+                "payout_run.proposed",
+                "payout_run.settled",
+                "payout_run.resolved"
+              ]
+            }
+          },
+          {
+            "name": "actor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": { "type": "string", "minLength": 1 }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": 50,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Activity"]
+      }
+    },
+    "/v1/orgs/{orgId}/activity.csv": {
+      "get": {
+        "operationId": "ActivityController_exportCsv_v1",
+        "parameters": [
+          {
+            "name": "type",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "org.created",
+                "org.renamed",
+                "org.deleted",
+                "org.restored",
+                "member.invited",
+                "member.invite_renewed",
+                "member.invite_revoked",
+                "member.joined",
+                "member.declined",
+                "member.role_changed",
+                "member.removed",
+                "member.left",
+                "member.factors_reset",
+                "safe.linked",
+                "safe.unlinked",
+                "contact.created",
+                "contact.updated",
+                "contact.deleted",
+                "contact.imported",
+                "contact_request.created",
+                "contact_request.approved",
+                "contact_request.rejected",
+                "export.downloaded",
+                "security.signed_in",
+                "security.step_up",
+                "security.totp_enrolled",
+                "security.totp_removed",
+                "onchain.owners_changed",
+                "onchain.threshold_changed",
+                "onchain.module_changed",
+                "onchain.guard_changed",
+                "policy.created",
+                "policy.updated",
+                "policy.deleted",
+                "policy.violation_found",
+                "payout_run.created",
+                "payout_run.updated",
+                "payout_run.deleted",
+                "payout_run.proposal_claimed",
+                "payout_run.proposal_released",
+                "payout_run.proposed",
+                "payout_run.settled",
+                "payout_run.resolved"
+              ]
+            }
+          },
+          {
+            "name": "actor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Activity"]
+      }
+    },
+    "/v1/orgs/{orgId}/contact-requests": {
+      "get": {
+        "operationId": "ContactsController_listRequests_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": "pending",
+              "type": "string",
+              "enum": ["pending", "approved", "rejected", "all"]
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": { "type": "string", "minLength": 1 }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": 50,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Contacts"]
+      },
+      "post": {
+        "operationId": "ContactsController_createRequest_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": { "type": "string", "const": "create" },
+                      "payload": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "address": { "type": "string" },
+                          "chainIds": {
+                            "minItems": 1,
+                            "maxItems": 100,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "pattern": "^[1-9]\\d{0,17}$"
+                            }
+                          },
+                          "tags": {
+                            "maxItems": 10,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 32
+                            }
+                          }
+                        },
+                        "required": ["name", "address", "chainIds"]
+                      }
+                    },
+                    "required": ["action", "payload"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": { "type": "string", "const": "update" },
+                      "contactId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "payload": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "address": { "type": "string" },
+                          "chainIds": {
+                            "minItems": 1,
+                            "maxItems": 100,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "pattern": "^[1-9]\\d{0,17}$"
+                            }
+                          },
+                          "tags": {
+                            "maxItems": 10,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 32
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "required": ["action", "contactId", "payload"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": { "type": "string", "const": "delete" },
+                      "contactId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "payload": { "type": "object", "properties": {} }
+                    },
+                    "required": ["action", "contactId"]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "" } },
+        "tags": ["Contacts"]
+      }
+    },
+    "/v1/orgs/{orgId}/contact-requests/{requestId}/approve": {
+      "post": {
+        "operationId": "ContactsController_approve_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Contacts"]
+      }
+    },
+    "/v1/orgs/{orgId}/contact-requests/{requestId}/reject": {
+      "post": {
+        "operationId": "ContactsController_reject_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Contacts"]
+      }
+    },
+    "/v1/orgs/{orgId}/contacts": {
+      "get": {
+        "operationId": "ContactsController_list_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 100 }
+          },
+          {
+            "name": "tag",
+            "required": false,
+            "in": "query",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 32 }
+          },
+          {
+            "name": "chainId",
+            "required": false,
+            "in": "query",
+            "schema": { "type": "string", "pattern": "^[1-9]\\d{0,17}$" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Contacts"]
+      },
+      "post": {
+        "operationId": "ContactsController_create_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+                  "address": { "type": "string" },
+                  "chainIds": {
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "type": "array",
+                    "items": { "type": "string", "pattern": "^[1-9]\\d{0,17}$" }
+                  },
+                  "tags": {
+                    "maxItems": 10,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 32
+                    }
+                  }
+                },
+                "required": ["name", "address", "chainIds"]
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "" } },
+        "tags": ["Contacts"]
+      }
+    },
+    "/v1/orgs/{orgId}/contacts.csv": {
+      "get": {
+        "operationId": "ContactsController_exportCsv_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Contacts"]
+      }
+    },
+    "/v1/orgs/{orgId}/contacts/{contactId}": {
+      "patch": {
+        "operationId": "ContactsController_update_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "contactId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+                  "address": { "type": "string" },
+                  "chainIds": {
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "type": "array",
+                    "items": { "type": "string", "pattern": "^[1-9]\\d{0,17}$" }
+                  },
+                  "tags": {
+                    "maxItems": 10,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 32
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["Contacts"]
+      },
+      "delete": {
+        "operationId": "ContactsController_remove_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "contactId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "204": { "description": "" } },
+        "tags": ["Contacts"]
+      }
+    },
+    "/v1/orgs/{orgId}/contacts/import": {
+      "post": {
+        "operationId": "ContactsController_import_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": { "type": "string", "format": "binary" }
+                },
+                "required": ["file"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["Contacts"]
+      }
+    },
+    "/v1/orgs/{orgId}/controls": {
+      "get": {
+        "operationId": "ControlsController_list_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Controls"]
+      }
+    },
+    "/v1/orgs/{orgId}/me": {
+      "get": {
+        "operationId": "OrgsController_me_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Orgs"]
+      }
+    },
+    "/v1/orgs/{orgId}/members": {
+      "get": {
+        "operationId": "MembersController_list_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Members"]
+      }
+    },
+    "/v1/orgs/{orgId}/members/{memberId}": {
+      "delete": {
+        "operationId": "MembersController_remove_v1",
+        "parameters": [
+          {
+            "name": "memberId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "204": { "description": "" } },
+        "tags": ["Members"]
+      }
+    },
+    "/v1/orgs/{orgId}/members/{memberId}/factors/reset": {
+      "post": {
+        "operationId": "MembersController_resetFactors_v1",
+        "parameters": [
+          {
+            "name": "memberId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "204": { "description": "" } },
+        "tags": ["Members"]
+      }
+    },
+    "/v1/orgs/{orgId}/members/{memberId}/invite/renew": {
+      "post": {
+        "operationId": "MembersController_renew_v1",
+        "parameters": [
+          {
+            "name": "memberId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Members"]
+      }
+    },
+    "/v1/orgs/{orgId}/members/{memberId}/role": {
+      "patch": {
+        "operationId": "MembersController_changeRole_v1",
+        "parameters": [
+          {
+            "name": "memberId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "role": { "type": "string", "enum": ["admin", "member"] }
+                },
+                "required": ["role"]
+              }
+            }
+          }
+        },
+        "responses": { "204": { "description": "" } },
+        "tags": ["Members"]
+      }
+    },
+    "/v1/orgs/{orgId}/members/invite": {
+      "post": {
+        "operationId": "MembersController_invite_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "wallet": { "type": "string" },
+                  "email": {
+                    "type": "string",
+                    "maxLength": 254,
+                    "format": "email",
+                    "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+                  },
+                  "role": { "type": "string", "const": "member" }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "" } },
+        "tags": ["Members"]
+      }
+    },
+    "/v1/orgs/{orgId}/members/leave": {
+      "post": {
+        "operationId": "MembersController_leave_v1",
+        "parameters": [],
+        "responses": { "204": { "description": "" } },
+        "tags": ["Members"]
+      }
+    },
+    "/v1/orgs/{orgId}/overview": {
+      "get": {
+        "operationId": "LinkedSafesController_getOverview_v1",
+        "parameters": [
+          {
+            "name": "fiat",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": "USD",
+              "type": "string",
+              "pattern": "^[a-zA-Z]{2,5}$"
+            }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["LinkedSafes"]
+      }
+    },
+    "/v1/orgs/{orgId}/payout-runs": {
+      "get": {
+        "operationId": "PayoutRunsController_list_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "linkedSafeId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": 50,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": { "type": "string", "maxLength": 200 }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["PayoutRuns"]
+      },
+      "post": {
+        "operationId": "PayoutRunsController_create_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "linkedSafeId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+                  "rows": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "address": { "type": "string" },
+                        "amount": { "type": "string" },
+                        "token": { "type": "string" },
+                        "name": { "type": "string" }
+                      },
+                      "required": ["address", "amount", "token"]
+                    }
+                  }
+                },
+                "required": ["linkedSafeId", "name", "rows"]
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "" } },
+        "tags": ["PayoutRuns"]
+      }
+    },
+    "/v1/orgs/{orgId}/payout-runs/{runId}": {
+      "get": {
+        "operationId": "PayoutRunsController_get_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "runId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["PayoutRuns"]
+      },
+      "patch": {
+        "operationId": "PayoutRunsController_update_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "runId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedVersion": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+                  "rows": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "address": { "type": "string" },
+                        "amount": { "type": "string" },
+                        "token": { "type": "string" },
+                        "name": { "type": "string" }
+                      },
+                      "required": ["address", "amount", "token"]
+                    }
+                  }
+                },
+                "required": ["expectedVersion"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["PayoutRuns"]
+      },
+      "delete": {
+        "operationId": "PayoutRunsController_remove_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "runId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "204": { "description": "" } },
+        "tags": ["PayoutRuns"]
+      }
+    },
+    "/v1/orgs/{orgId}/payout-runs/{runId}/build": {
+      "post": {
+        "operationId": "PayoutRunsController_build_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "runId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedVersion": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": ["expectedVersion"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["PayoutRuns"]
+      }
+    },
+    "/v1/orgs/{orgId}/payout-runs/{runId}/export.csv": {
+      "get": {
+        "operationId": "PayoutRunsController_exportCsv_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "runId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["PayoutRuns"]
+      }
+    },
+    "/v1/orgs/{orgId}/payout-runs/{runId}/proposal-attempts": {
+      "post": {
+        "operationId": "PayoutRunsController_claim_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "runId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedVersion": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "nonce": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      { "type": "string", "pattern": "^\\d{1,78}$" }
+                    ]
+                  }
+                },
+                "required": ["expectedVersion", "nonce"]
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "" } },
+        "tags": ["PayoutRuns"]
+      }
+    },
+    "/v1/orgs/{orgId}/payout-runs/{runId}/proposal-attempts/{attemptId}/release": {
+      "post": {
+        "operationId": "PayoutRunsController_release_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "runId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "attemptId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["PayoutRuns"]
+      }
+    },
+    "/v1/orgs/{orgId}/payout-runs/{runId}/proposed": {
+      "post": {
+        "operationId": "PayoutRunsController_report_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "runId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "attemptId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "expectedVersion": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "safeTxHash": {
+                    "type": "string",
+                    "pattern": "^0x[0-9a-fA-F]{64}$"
+                  }
+                },
+                "required": ["attemptId", "safeTxHash"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["PayoutRuns"]
+      }
+    },
+    "/v1/orgs/{orgId}/payout-runs/{runId}/resolve": {
+      "post": {
+        "operationId": "PayoutRunsController_resolve_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "runId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedVersion": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "note": { "type": "string", "maxLength": 500 }
+                },
+                "required": ["expectedVersion"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["PayoutRuns"]
+      }
+    },
+    "/v1/orgs/{orgId}/payout-runs/import": {
+      "post": {
+        "operationId": "PayoutRunsController_import_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": { "type": "string", "format": "binary" },
+                  "linkedSafeId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "name": { "type": "string", "minLength": 1, "maxLength": 64 }
+                },
+                "required": ["file", "linkedSafeId", "name"]
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "" } },
+        "tags": ["PayoutRuns"]
+      }
+    },
+    "/v1/orgs/{orgId}/policies": {
+      "get": {
+        "operationId": "PoliciesController_list_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Policies"]
+      },
+      "post": {
+        "operationId": "PoliciesController_create_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+                  "enabled": { "type": "boolean" },
+                  "scope": {},
+                  "rules": {}
+                },
+                "required": ["name", "enabled", "scope", "rules"]
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "" } },
+        "tags": ["Policies"]
+      }
+    },
+    "/v1/orgs/{orgId}/policies/{policyId}": {
+      "put": {
+        "operationId": "PoliciesController_update_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "policyId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+                  "enabled": { "type": "boolean" },
+                  "scope": {},
+                  "rules": {},
+                  "expectedVersion": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "name",
+                  "enabled",
+                  "scope",
+                  "rules",
+                  "expectedVersion"
+                ]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["Policies"]
+      },
+      "delete": {
+        "operationId": "PoliciesController_remove_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "policyId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "204": { "description": "" } },
+        "tags": ["Policies"]
+      }
+    },
+    "/v1/orgs/{orgId}/policy-findings": {
+      "get": {
+        "operationId": "FindingsController_list_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "linkedSafeId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": "open",
+              "type": "string",
+              "enum": ["open", "all"]
+            }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Findings"]
+      }
+    },
+    "/v1/orgs/{orgId}/restore": {
+      "post": {
+        "operationId": "OrgsController_restore_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Orgs"]
+      }
+    },
+    "/v1/orgs/{orgId}/safes": {
+      "post": {
+        "operationId": "LinkedSafesController_link_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "chainId": {
+                    "type": "string",
+                    "pattern": "^[1-9]\\d{0,19}$"
+                  },
+                  "address": { "type": "string" },
+                  "label": { "type": "string", "minLength": 1, "maxLength": 64 }
+                },
+                "required": ["chainId", "address"]
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "" } },
+        "tags": ["LinkedSafes"]
+      },
+      "get": {
+        "operationId": "LinkedSafesController_list_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["LinkedSafes"]
+      }
+    },
+    "/v1/orgs/{orgId}/safes/{linkedSafeId}": {
+      "delete": {
+        "operationId": "LinkedSafesController_unlink_v1",
+        "parameters": [
+          {
+            "name": "linkedSafeId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "204": { "description": "" } },
+        "tags": ["LinkedSafes"]
+      }
+    },
+    "/v1/orgs/{orgId}/transactions.csv": {
+      "get": {
+        "operationId": "ControlsController_exportCsv_v1",
+        "parameters": [
+          {
+            "name": "executedFrom",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                },
+                {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                }
+              ]
+            }
+          },
+          {
+            "name": "executedTo",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                },
+                {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                }
+              ]
+            }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Controls"]
+      }
+    },
+    "/v1/orgs/account": {
+      "delete": {
+        "operationId": "AccountController_delete_v1",
+        "parameters": [],
+        "responses": { "204": { "description": "" } },
+        "tags": ["Account"]
+      }
+    },
+    "/v1/orgs/account/identities/{identityId}": {
+      "delete": {
+        "operationId": "LinkIdentityController_removeIdentity_v1",
+        "parameters": [
+          {
+            "name": "identityId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "204": { "description": "" } },
+        "tags": ["LinkIdentity"]
+      }
+    },
+    "/v1/orgs/account/link/email/start": {
+      "post": {
+        "operationId": "LinkIdentityController_linkEmailStart_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": { "type": "string", "maxLength": 254 }
+                },
+                "required": ["email"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["LinkIdentity"]
+      }
+    },
+    "/v1/orgs/account/link/email/verify": {
+      "post": {
+        "operationId": "LinkIdentityController_linkEmailVerify_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "code": { "type": "string", "pattern": "^\\d{8}$" }
+                },
+                "required": ["code"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["LinkIdentity"]
+      }
+    },
+    "/v1/orgs/account/link/oidc/authorize": {
+      "post": {
+        "operationId": "LinkIdentityController_linkOidc_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": { "returnTo": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["LinkIdentity"]
+      }
+    },
+    "/v1/orgs/account/link/siwe": {
+      "post": {
+        "operationId": "LinkIdentityController_linkSiwe_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "message": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "signature": {
+                    "type": "string",
+                    "pattern": "^0x[0-9a-fA-F]+$"
+                  }
+                },
+                "required": ["message", "signature"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["LinkIdentity"]
+      }
+    },
+    "/v1/orgs/auth/email/start": {
+      "post": {
+        "operationId": "EmailOtpController_start_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": { "type": "string", "maxLength": 254 }
+                },
+                "required": ["email"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["EmailOtp"]
+      }
+    },
+    "/v1/orgs/auth/email/verify": {
+      "post": {
+        "operationId": "EmailOtpController_verify_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "code": { "type": "string", "pattern": "^\\d{8}$" }
+                },
+                "required": ["code"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["EmailOtp"]
+      }
+    },
+    "/v1/orgs/auth/logout": {
+      "post": {
+        "operationId": "SiweAuthController_logout_v1",
+        "parameters": [],
+        "responses": { "204": { "description": "" } },
+        "tags": ["SiweAuth"]
+      }
+    },
+    "/v1/orgs/auth/me": {
+      "get": {
+        "operationId": "SiweAuthController_me_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["SiweAuth"]
+      }
+    },
+    "/v1/orgs/auth/nonce": {
+      "get": {
+        "operationId": "SiweAuthController_nonce_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["SiweAuth"]
+      }
+    },
+    "/v1/orgs/auth/oidc/authorize": {
+      "get": {
+        "operationId": "OidcController_authorize_v1",
+        "parameters": [
+          {
+            "name": "returnTo",
+            "required": false,
+            "in": "query",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Oidc"]
+      }
+    },
+    "/v1/orgs/auth/oidc/callback": {
+      "get": {
+        "operationId": "OidcController_callback_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Oidc"]
+      }
+    },
+    "/v1/orgs/auth/siwe": {
+      "post": {
+        "operationId": "SiweAuthController_signIn_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "message": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "signature": {
+                    "type": "string",
+                    "pattern": "^0x[0-9a-fA-F]+$"
+                  }
+                },
+                "required": ["message", "signature"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["SiweAuth"]
+      }
+    },
+    "/v1/orgs/auth/step-up/siwe": {
+      "post": {
+        "operationId": "SiweAuthController_stepUp_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "message": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "signature": {
+                    "type": "string",
+                    "pattern": "^0x[0-9a-fA-F]+$"
+                  }
+                },
+                "required": ["message", "signature"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["SiweAuth"]
+      }
+    },
+    "/v1/orgs/auth/step-up/totp": {
+      "post": {
+        "operationId": "TotpController_stepUp_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "code": { "type": "string", "minLength": 1, "maxLength": 16 },
+                  "recoveryCode": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["Totp"]
+      }
+    },
+    "/v1/orgs/auth/totp": {
+      "delete": {
+        "operationId": "TotpController_remove_v1",
+        "parameters": [],
+        "responses": { "204": { "description": "" } },
+        "tags": ["Totp"]
+      }
+    },
+    "/v1/orgs/auth/totp/confirm": {
+      "post": {
+        "operationId": "TotpController_confirm_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "code": { "type": "string", "minLength": 1, "maxLength": 16 }
+                },
+                "required": ["code"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["Totp"]
+      }
+    },
+    "/v1/orgs/auth/totp/enroll": {
+      "post": {
+        "operationId": "TotpController_enroll_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Totp"]
+      }
+    },
+    "/v1/orgs/invitations/accept": {
+      "post": {
+        "operationId": "InvitationsController_accept_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "minLength": 16,
+                    "maxLength": 128
+                  }
+                },
+                "required": ["token"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["Invitations"]
+      }
+    },
+    "/v1/orgs/invitations/decline": {
+      "post": {
+        "operationId": "InvitationsController_decline_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "minLength": 16,
+                    "maxLength": 128
+                  }
+                },
+                "required": ["token"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["Invitations"]
+      }
+    }
+  },
+  "info": {
+    "title": "cgw-org",
+    "description": "Organization API. Cookie session `__Host-org_session`; non-GET requests need `X-Org-Request: 1`. SIWE accepts EOA signatures only in phase 1.",
+    "version": "1.0.0",
+    "contact": {}
+  },
+  "tags": [],
+  "servers": [],
+  "components": {
+    "schemas": {
+      "NativeToken": {
+        "type": "object",
+        "properties": {
+          "address": { "type": "object" },
+          "decimals": { "type": "number" },
+          "logoUri": { "type": "string" },
+          "name": { "type": "string" },
+          "symbol": { "type": "string" },
+          "type": { "type": "string", "enum": ["NATIVE_TOKEN"] }
+        },
+        "required": ["address", "decimals", "logoUri", "name", "symbol", "type"]
+      },
+      "Erc20Token": {
+        "type": "object",
+        "properties": {
+          "address": { "type": "object" },
+          "decimals": { "type": "number" },
+          "logoUri": { "type": "string" },
+          "name": { "type": "string" },
+          "symbol": { "type": "string" },
+          "type": { "type": "string", "enum": ["ERC20"] }
+        },
+        "required": ["address", "decimals", "logoUri", "name", "symbol", "type"]
+      },
+      "Erc721Token": {
+        "type": "object",
+        "properties": {
+          "address": { "type": "object" },
+          "decimals": { "type": "number" },
+          "logoUri": { "type": "string" },
+          "name": { "type": "string" },
+          "symbol": { "type": "string" },
+          "type": { "type": "string", "enum": ["ERC721"] }
+        },
+        "required": ["address", "decimals", "logoUri", "name", "symbol", "type"]
+      },
+      "Balance": {
+        "type": "object",
+        "properties": {
+          "balance": { "type": "string" },
+          "fiatBalance": { "type": "string" },
+          "fiatConversion": { "type": "string" },
+          "tokenInfo": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/NativeToken" },
+              { "$ref": "#/components/schemas/Erc20Token" },
+              { "$ref": "#/components/schemas/Erc721Token" }
+            ]
+          },
+          "fiatBalance24hChange": { "type": "string", "nullable": true }
+        },
+        "required": ["balance", "fiatBalance", "fiatConversion", "tokenInfo"]
+      },
+      "Balances": {
+        "type": "object",
+        "properties": {
+          "fiatTotal": { "type": "string" },
+          "items": {
+            "type": "array",
+            "items": { "oneOf": [{ "$ref": "#/components/schemas/Balance" }] }
+          }
+        },
+        "required": ["fiatTotal", "items"]
+      },
+      "GasPriceOracle": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string", "enum": ["oracle"] },
+          "gasParameter": { "type": "string" },
+          "gweiFactor": { "type": "string" },
+          "uri": { "type": "string" }
+        },
+        "required": ["type", "gasParameter", "gweiFactor", "uri"]
+      },
+      "GasPriceFixed": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string", "enum": ["fixed"] },
+          "weiValue": { "type": "string" }
+        },
+        "required": ["type", "weiValue"]
+      },
+      "GasPriceFixedEIP1559": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string", "enum": ["fixed1559"] },
+          "maxFeePerGas": { "type": "string" },
+          "maxPriorityFeePerGas": { "type": "string" }
+        },
+        "required": ["type", "maxFeePerGas", "maxPriorityFeePerGas"]
+      },
+      "NativeCurrency": {
+        "type": "object",
+        "properties": {
+          "decimals": { "type": "number" },
+          "logoUri": { "type": "string" },
+          "name": { "type": "string" },
+          "symbol": { "type": "string" }
+        },
+        "required": ["decimals", "logoUri", "name", "symbol"]
+      },
+      "BlockExplorerUriTemplate": {
+        "type": "object",
+        "properties": {
+          "address": { "type": "string" },
+          "api": { "type": "string" },
+          "txHash": { "type": "string" }
+        },
+        "required": ["address", "api", "txHash"]
+      },
+      "BalancesProvider": {
+        "type": "object",
+        "properties": {
+          "chainName": { "type": "string", "nullable": true },
+          "enabled": { "type": "boolean" }
+        },
+        "required": ["chainName", "enabled"]
+      },
+      "ContractAddresses": {
+        "type": "object",
+        "properties": {
+          "safeSingletonAddress": { "type": "string", "nullable": true },
+          "safeProxyFactoryAddress": { "type": "string", "nullable": true },
+          "multiSendAddress": { "type": "string", "nullable": true },
+          "multiSendCallOnlyAddress": { "type": "string", "nullable": true },
+          "fallbackHandlerAddress": { "type": "string", "nullable": true },
+          "signMessageLibAddress": { "type": "string", "nullable": true },
+          "createCallAddress": { "type": "string", "nullable": true },
+          "simulateTxAccessorAddress": { "type": "string", "nullable": true },
+          "safeWebAuthnSignerFactoryAddress": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "RpcUri": {
+        "type": "object",
+        "properties": {
+          "authentication": {
+            "type": "string",
+            "enum": ["API_KEY_PATH", "NO_AUTHENTICATION", "UNKNOWN"]
+          },
+          "value": { "type": "string" }
+        },
+        "required": ["authentication", "value"]
+      },
+      "Theme": {
+        "type": "object",
+        "properties": {
+          "backgroundColor": { "type": "string" },
+          "textColor": { "type": "string" }
+        },
+        "required": ["backgroundColor", "textColor"]
+      },
+      "Chain": {
+        "type": "object",
+        "properties": {
+          "chainId": { "type": "string" },
+          "chainName": { "type": "string" },
+          "description": { "type": "string" },
+          "chainLogoUri": { "type": "string", "nullable": true },
+          "l2": { "type": "boolean" },
+          "isTestnet": { "type": "boolean" },
+          "zk": { "type": "boolean" },
+          "nativeCurrency": { "$ref": "#/components/schemas/NativeCurrency" },
+          "transactionService": { "type": "string" },
+          "blockExplorerUriTemplate": {
+            "$ref": "#/components/schemas/BlockExplorerUriTemplate"
+          },
+          "beaconChainExplorerUriTemplate": { "type": "object" },
+          "disabledWallets": { "type": "array", "items": { "type": "string" } },
+          "ensRegistryAddress": { "type": "string", "nullable": true },
+          "balancesProvider": {
+            "$ref": "#/components/schemas/BalancesProvider"
+          },
+          "contractAddresses": {
+            "$ref": "#/components/schemas/ContractAddresses"
+          },
+          "features": { "type": "array", "items": { "type": "string" } },
+          "gasPrice": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                { "$ref": "#/components/schemas/GasPriceOracle" },
+                { "$ref": "#/components/schemas/GasPriceFixed" },
+                { "$ref": "#/components/schemas/GasPriceFixedEIP1559" }
+              ]
+            }
+          },
+          "publicRpcUri": { "$ref": "#/components/schemas/RpcUri" },
+          "rpcUri": { "$ref": "#/components/schemas/RpcUri" },
+          "safeAppsRpcUri": { "$ref": "#/components/schemas/RpcUri" },
+          "shortName": { "type": "string" },
+          "theme": { "$ref": "#/components/schemas/Theme" },
+          "recommendedMasterCopyVersion": { "type": "string", "nullable": true }
+        },
+        "required": [
+          "chainId",
+          "chainName",
+          "description",
+          "l2",
+          "isTestnet",
+          "zk",
+          "nativeCurrency",
+          "transactionService",
+          "blockExplorerUriTemplate",
+          "beaconChainExplorerUriTemplate",
+          "disabledWallets",
+          "balancesProvider",
+          "contractAddresses",
+          "features",
+          "gasPrice",
+          "publicRpcUri",
+          "rpcUri",
+          "safeAppsRpcUri",
+          "shortName",
+          "theme"
+        ]
+      },
+      "ChainPage": {
+        "type": "object",
+        "properties": {
+          "count": { "type": "number", "nullable": true },
+          "next": { "type": "string", "nullable": true },
+          "previous": { "type": "string", "nullable": true },
+          "results": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Chain" }
+          }
+        },
+        "required": ["results"]
+      },
+      "AboutChain": {
+        "type": "object",
+        "properties": {
+          "transactionServiceBaseUri": { "type": "string" },
+          "name": { "type": "string" },
+          "version": { "type": "string" },
+          "buildNumber": { "type": "string" }
+        },
+        "required": [
+          "transactionServiceBaseUri",
+          "name",
+          "version",
+          "buildNumber"
+        ]
+      },
+      "Backbone": {
+        "type": "object",
+        "properties": {
+          "api_version": { "type": "string" },
+          "headers": { "type": "string", "nullable": true },
+          "host": { "type": "string" },
+          "name": { "type": "string" },
+          "secure": { "type": "boolean" },
+          "settings": { "type": "object", "nullable": true },
+          "version": { "type": "string" }
+        },
+        "required": [
+          "api_version",
+          "host",
+          "name",
+          "secure",
+          "settings",
+          "version"
+        ]
+      },
+      "MasterCopy": {
+        "type": "object",
+        "properties": {
+          "address": { "type": "string" },
+          "version": { "type": "string" }
+        },
+        "required": ["address", "version"]
+      },
+      "IndexingStatus": {
+        "type": "object",
+        "properties": {
+          "currentBlockNumber": { "type": "number" },
+          "currentBlockTimestamp": { "format": "date-time", "type": "string" },
+          "erc20BlockNumber": { "type": "number" },
+          "erc20BlockTimestamp": { "format": "date-time", "type": "string" },
+          "erc20Synced": { "type": "boolean" },
+          "masterCopiesBlockNumber": { "type": "number" },
+          "masterCopiesBlockTimestamp": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "masterCopiesSynced": { "type": "boolean" },
+          "synced": { "type": "boolean" },
+          "lastSync": { "type": "number" }
+        },
+        "required": [
+          "currentBlockNumber",
+          "currentBlockTimestamp",
+          "erc20BlockNumber",
+          "erc20BlockTimestamp",
+          "erc20Synced",
+          "masterCopiesBlockNumber",
+          "masterCopiesBlockTimestamp",
+          "masterCopiesSynced",
+          "synced",
+          "lastSync"
+        ]
+      },
+      "GasPriceResult": {
+        "type": "object",
+        "properties": {
+          "LastBlock": {
+            "type": "string",
+            "description": "Last block number",
+            "example": "23467872"
+          },
+          "SafeGasPrice": {
+            "type": "string",
+            "description": "Safe gas price recommendation (Gwei)",
+            "example": "0.496839934"
+          },
+          "ProposeGasPrice": {
+            "type": "string",
+            "description": "Proposed gas price (Gwei)",
+            "example": "0.496840168"
+          },
+          "FastGasPrice": {
+            "type": "string",
+            "description": "Fast gas price recommendation (Gwei)",
+            "example": "0.55411917"
+          },
+          "suggestBaseFee": {
+            "type": "string",
+            "description": "Base fee of the next pending block (Gwei)",
+            "example": "0.496839934"
+          },
+          "gasUsedRatio": {
+            "type": "string",
+            "description": "Gas used ratio to estimate network congestion",
+            "example": "0.5,0.6,0.7"
+          }
+        },
+        "required": [
+          "LastBlock",
+          "SafeGasPrice",
+          "ProposeGasPrice",
+          "FastGasPrice",
+          "suggestBaseFee",
+          "gasUsedRatio"
+        ]
+      },
+      "GasPriceResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Status code (\"1\" = success)",
+            "example": "1"
+          },
+          "message": {
+            "type": "string",
+            "description": "Response message",
+            "example": "OK"
+          },
+          "result": {
+            "description": "Gas price data",
+            "allOf": [{ "$ref": "#/components/schemas/GasPriceResult" }]
+          }
+        },
+        "required": ["status", "message", "result"]
+      },
+      "Contract": {
+        "type": "object",
+        "properties": {
+          "address": { "type": "object" },
+          "name": { "type": "string" },
+          "displayName": { "type": "string" },
+          "logoUri": { "type": "string" },
+          "contractAbi": { "type": "object", "nullable": true },
+          "trustedForDelegateCall": { "type": "boolean" }
+        },
+        "required": [
+          "address",
+          "name",
+          "displayName",
+          "logoUri",
+          "trustedForDelegateCall"
+        ]
+      },
+      "TransactionDataDto": {
+        "type": "object",
+        "properties": {
+          "data": { "type": "object", "description": "Hexadecimal value" },
+          "to": {
+            "type": "object",
+            "description": "The target Ethereum address"
+          }
+        },
+        "required": ["data"]
+      },
+      "Operation": {
+        "type": "number",
+        "enum": [0, 1],
+        "description": "Operation type: 0 for CALL, 1 for DELEGATE"
+      },
+      "BaseDataDecoded": {
+        "type": "object",
+        "properties": {
+          "method": { "type": "string" },
+          "parameters": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/DataDecodedParameter" }
+          }
+        },
+        "required": ["method"]
+      },
+      "MultiSend": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "description": "Operation type: 0 for CALL, 1 for DELEGATE",
+            "allOf": [{ "$ref": "#/components/schemas/Operation" }]
+          },
+          "value": { "type": "string" },
+          "dataDecoded": { "$ref": "#/components/schemas/BaseDataDecoded" },
+          "to": { "type": "object" },
+          "data": {
+            "type": "string",
+            "nullable": true,
+            "description": "Hexadecimal encoded data",
+            "pattern": "^0x[0-9a-fA-F]*$"
+          }
+        },
+        "required": ["operation", "value", "to", "data"]
+      },
+      "DataDecodedParameter": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "type": { "type": "string" },
+          "value": {
+            "description": "Parameter value - typically a string, but may be an array of strings for array types (e.g., address[], uint256[])",
+            "oneOf": [
+              { "type": "string" },
+              { "type": "array", "items": { "type": "string" } }
+            ]
+          },
+          "valueDecoded": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/BaseDataDecoded" },
+              {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/MultiSend" }
+              },
+              { "type": "null" }
+            ]
+          }
+        },
+        "required": ["name", "type", "value"]
+      },
+      "DataDecoded": {
+        "type": "object",
+        "properties": {
+          "method": { "type": "string" },
+          "parameters": {
+            "nullable": true,
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/DataDecodedParameter" }
+          },
+          "accuracy": {
+            "type": "string",
+            "enum": [
+              "FULL_MATCH",
+              "PARTIAL_MATCH",
+              "ONLY_FUNCTION_MATCH",
+              "NO_MATCH",
+              "UNKNOWN"
+            ],
+            "default": "UNKNOWN"
+          }
+        },
+        "required": ["method"]
+      }
+    }
+  }
+}
