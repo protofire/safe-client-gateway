@@ -105,7 +105,8 @@ export class PolicyContextService {
   ): Promise<EvalContext> {
     const contacts: Array<{ address: string }> = await em.query(
       `SELECT address::text AS address FROM contacts
-        WHERE org_id = $1 AND tags @> ARRAY['allowed'] AND chain_ids @> ARRAY[$2::text]`,
+        WHERE org_id = $1 AND tags @> ARRAY['allowed']
+          AND (cardinality(chain_ids) = 0 OR chain_ids @> ARRAY[$2::text])`,
       [orgId, chainId],
     );
     return {

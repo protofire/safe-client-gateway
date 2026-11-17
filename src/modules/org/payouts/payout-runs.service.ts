@@ -1107,13 +1107,13 @@ export class PayoutRunsService {
     const [r]: Array<
       PayoutRunRow & { linked_safe_id: string | null; totals: Array<TotalsRow> }
     > = await em.query(
-        `SELECT ${RUN_COLUMNS}, ${TOTALS_COLUMN},
+      `SELECT ${RUN_COLUMNS}, ${TOTALS_COLUMN},
                 (SELECT ls.id FROM linked_safes ls
                   WHERE ls.org_id = r.org_id AND ls.chain_id = r.chain_id
                     AND ls.address = r.safe_address) AS linked_safe_id
            FROM payout_runs r WHERE r.org_id = $1 AND r.id = $2 FOR SHARE OF r`,
-        [orgId, runId],
-      );
+      [orgId, runId],
+    );
     if (!r) throw new NotFoundException('Payout run not found');
     const rows = await readItems(em, orgId, runId);
 
@@ -1132,7 +1132,8 @@ export class PayoutRunsService {
     }
     const contacts: Array<{ address: string }> = await em.query(
       `SELECT lower(address::text) AS address FROM contacts
-        WHERE org_id = $1 AND chain_ids @> ARRAY[$2::text]`,
+        WHERE org_id = $1
+          AND (cardinality(chain_ids) = 0 OR chain_ids @> ARRAY[$2::text])`,
       [orgId, r.chain_id],
     );
     const known = new Set(contacts.map((c) => c.address));

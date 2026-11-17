@@ -1022,11 +1022,14 @@ describe('policies API and evaluation context', () => {
     await seed(orgA, 'other chain', addr(2), ['10'], ['allowed']);
     await seed(orgA, 'untagged', addr(3), ['1'], ['vendor']);
     await seed(orgB, 'other org', addr(4), ['1'], ['allowed']);
+    await seed(orgA, 'all networks', addr(5), [], ['allowed']);
     const ctx = await tx.runInOrgTx(
       async (em) =>
         context.context(em, orgA, '1', await context.trustedMultiSend('1')),
       orgA,
     );
-    expect([...ctx.allowedRecipients]).toEqual([addr(1).toLowerCase()]);
+    expect([...ctx.allowedRecipients].sort()).toEqual(
+      [addr(1), addr(5)].map((a) => a.toLowerCase()).sort(),
+    );
   });
 });

@@ -228,11 +228,15 @@ describe('payout runs API', () => {
     return id;
   };
 
-  const addContact = (org: string, address: Address): Promise<unknown> =>
+  const addContact = (
+    org: string,
+    address: Address,
+    chainIds = ['1'],
+  ): Promise<unknown> =>
     asOrg(org, (em) =>
       em.query(
-        `INSERT INTO contacts (org_id, name, address, chain_ids) VALUES ($1, 'c', $2, '{1}')`,
-        [org, address],
+        `INSERT INTO contacts (org_id, name, address, chain_ids) VALUES ($1, 'c', $2, $3)`,
+        [org, address, chainIds],
       ),
     );
 
@@ -590,6 +594,16 @@ describe('payout runs API', () => {
       ['unknown_recipient', 'self'],
       ['unknown_recipient', 'token_contract'],
     ]);
+  });
+
+  it('knows an all-networks contact on any chain, not one of another chain', async () => {
+    await addContact(orgA, ALICE, []);
+    await addContact(orgA, BOB, ['10']);
+    const { items } = await createRun([
+      { address: ALICE, amount: '1', token: 'native' },
+      { address: BOB, amount: '1', token: 'native' },
+    ]);
+    expect(items.map((i) => i.warnings)).toEqual([[], ['unknown_recipient']]);
   });
 
   it('warns insufficient_balance from the summed raw amounts', async () => {
@@ -1158,11 +1172,18 @@ describe('payout runs API', () => {
           createdBy: {
             userId: member.userId,
             displayName: null,
-            identity: expect.stringMatching(/^0x[0-9a-fA-F]{4}…[0-9a-fA-F]{4}$/),
+            identity: expect.stringMatching(
+              /^0x[0-9a-fA-F]{4}…[0-9a-fA-F]{4}$/,
+            ),
           },
           built: false,
           totals: [
-            { token: USDC, symbol: 'USDC', decimals: 6, amountRaw: '1000500000' },
+            {
+              token: USDC,
+              symbol: 'USDC',
+              decimals: 6,
+              amountRaw: '1000500000',
+            },
             {
               token: 'native',
               symbol: 'ETH',
@@ -1177,7 +1198,9 @@ describe('payout runs API', () => {
     await sql.query(`UPDATE users SET display_name = 'Mia' WHERE id = $1`, [
       member.userId,
     ]);
-    const named = await get(`${orgA}/payout-runs/${run.id}`, member).expect(200);
+    const named = await get(`${orgA}/payout-runs/${run.id}`, member).expect(
+      200,
+    );
     expect(named.body.run).toMatchObject({
       createdAt: run.createdAt,
       createdBy: { userId: member.userId, displayName: 'Mia' },
