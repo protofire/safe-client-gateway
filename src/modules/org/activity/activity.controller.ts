@@ -32,15 +32,50 @@ const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
 const CSV_PAGE_SIZE = 500;
 
-const FilterSchema = z.object({
+const MAX_RANGE_MS = 366 * 24 * 3600 * 1000;
+
+const EventTypes = z.array(z.enum(ACTIVITY_EVENT_TYPES)).min(1);
+const FilterFields = z.object({
   type: z.enum(ACTIVITY_EVENT_TYPES).optional(),
+  // `?types=a&types=b` or `?types=a,b`
+  types: z
+    .preprocess(
+      (v) =>
+        (Array.isArray(v) ? v : [v])
+          .flatMap((s) => (typeof s === 'string' ? s.split(',') : [s]))
+          .map((s) => (typeof s === 'string' ? s.trim() : s))
+          .filter((s) => s !== ''),
+      EventTypes,
+    )
+    .optional(),
   actor: z.uuid().optional(),
+  // inclusive; at most 366 days apart when both are given
+  from: z.iso.datetime({ offset: true }).optional(),
+  to: z.iso.datetime({ offset: true }).optional(),
 });
-const ListQuerySchema = FilterSchema.extend({
+const ListFields = FilterFields.extend({
   cursor: z.string().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(MAX_LIMIT).default(DEFAULT_LIMIT),
 });
+
+function checkRange(
+  f: { from?: string; to?: string },
+  ctx: z.RefinementCtx,
+): void {
+  if (f.from === undefined || f.to === undefined) return;
+  const span = Date.parse(f.to) - Date.parse(f.from);
+  if (span < 0) ctx.addIssue({ code: 'custom', message: '`from` is after `to`' });
+  if (span > MAX_RANGE_MS) {
+    ctx.addIssue({ code: 'custom', message: 'Range is longer than 366 days' });
+  }
+}
+const FilterSchema = FilterFields.superRefine(checkRange);
+const ListQuerySchema = ListFields.superRefine(checkRange);
 type Filter = z.infer<typeof FilterSchema>;
+
+// OpenAPI only: `types` as the array the preprocess accepts
+const FilterDoc = FilterFields.extend({ types: EventTypes.optional() });
+const ListQueryDoc = ListFields.extend({ types: EventTypes.optional() });
 
 // created_at stays text: JS Dates would drop Postgres' microseconds and make
 // the keyset cursor skip or repeat rows
@@ -89,7 +124,7 @@ export class ActivityController {
   ) {}
 
   @Get('activity')
-  @OrgApiQuery(ListQuerySchema)
+  @OrgApiQuery(ListQueryDoc)
   @RequirePermission('activity.view')
   async list(
     @Req() req: Request,
@@ -115,7 +150,7 @@ export class ActivityController {
   }
 
   @Get('activity.csv')
-  @OrgApiQuery(FilterSchema)
+  @OrgApiQuery(FilterDoc)
   @RequirePermission('exports.read')
   async exportCsv(
     @Req() req: Request,
@@ -196,6 +231,18 @@ export class ActivityController {
     if (filter.type) {
       params.push(filter.type);
       where.push(`e.type = $${params.length}`);
+    }
+    if (filter.types) {
+      params.push(filter.types);
+      where.push(`e.type = ANY($${params.length}::text[])`);
+    }
+    if (filter.from) {
+      params.push(filter.from);
+      where.push(`e.created_at >= $${params.length}::timestamptz`);
+    }
+    if (filter.to) {
+      params.push(filter.to);
+      where.push(`e.created_at <= $${params.length}::timestamptz`);
     }
     if (filter.actor) {
       params.push(filter.actor);

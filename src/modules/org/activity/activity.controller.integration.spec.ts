@@ -318,6 +318,89 @@ describe('org activity log', () => {
     expect(byActor.body.items[0].actorUserId).toBe(member.userId);
   });
 
+  describe('date range and several types', () => {
+    const at = (iso: string, type: string): Promise<unknown> =>
+      sql.query(
+        `INSERT INTO activity_events (org_id, actor_user_id, type, created_at)
+         VALUES ($1, $2, $3, $4)`,
+        [orgId, admin.userId, type, iso],
+      );
+    const types = (body: unknown): Array<string> =>
+      (body as { items: Array<{ type: string; createdAt: string }> }).items.map(
+        (i) => `${i.createdAt.slice(0, 10)} ${i.type}`,
+      );
+
+    beforeEach(async () => {
+      await at('2026-01-01T00:00:00.000Z', 'safe.linked');
+      await at('2026-01-15T12:00:00.000Z', 'org.renamed');
+      await at('2026-01-31T23:59:59.999Z', 'safe.unlinked');
+      await at('2026-02-01T00:00:00.000Z', 'safe.linked');
+    });
+
+    it('keeps from and to inclusive', async () => {
+      const { body } = await list(
+        admin.cookie,
+        '?from=2026-01-01T00:00:00.000Z&to=2026-01-31T23:59:59.999Z',
+      ).expect(200);
+      expect(types(body)).toEqual([
+        '2026-01-31 safe.unlinked',
+        '2026-01-15 org.renamed',
+        '2026-01-01 safe.linked',
+      ]);
+    });
+
+    it('takes types repeated or comma-separated, with the date range', async () => {
+      const repeated = await list(
+        admin.cookie,
+        '?types=safe.linked&types=safe.unlinked&from=2026-01-02T00:00:00Z',
+      ).expect(200);
+      const comma = await list(
+        admin.cookie,
+        '?types=safe.linked,safe.unlinked&from=2026-01-02T00:00:00%2B00:00',
+      ).expect(200);
+      expect(types(repeated.body)).toEqual([
+        '2026-02-01 safe.linked',
+        '2026-01-31 safe.unlinked',
+      ]);
+      expect(comma.body).toEqual(repeated.body);
+    });
+
+    it.each([
+      ['an unknown type', '?types=safe.linked,nope'],
+      ['an empty types list', '?types=,'],
+      ['from after to', '?from=2026-02-01T00:00:00Z&to=2026-01-01T00:00:00Z'],
+      ['a range over 366 days', '?from=2025-01-01T00:00:00Z&to=2026-01-03T00:00:00Z'],
+      ['a date without a time', '?from=2026-01-01'],
+    ])('answers 400 for %s', async (_, qs) => {
+      await list(admin.cookie, qs).expect(400);
+      await http()
+        .get(`/v1/orgs/${orgId}/activity.csv${qs}`)
+        .set('Cookie', admin.cookie)
+        .expect(400);
+    });
+
+    it('applies the same filters to the CSV export', async () => {
+      const res = await http()
+        .get(
+          `/v1/orgs/${orgId}/activity.csv?types=safe.linked,org.renamed&to=2026-01-31T00:00:00Z`,
+        )
+        .set('Cookie', admin.cookie)
+        .buffer(true)
+        .parse((r, cb) => {
+          let data = '';
+          r.setEncoding('utf8');
+          r.on('data', (c) => (data += c));
+          r.on('end', () => cb(null, data));
+        })
+        .expect(200);
+      const rows = (res.body as string).trim().split('\n').slice(1);
+      expect(rows.map((r) => r.split(',').slice(0, 2).join(' '))).toEqual([
+        '2026-01-15T12:00:00.000000Z org.renamed',
+        '2026-01-01T00:00:00.000000Z safe.linked',
+      ]);
+    });
+  });
+
   it('excludes deleted users from the actor filter', async () => {
     const [{ id: ghost }] = await sql.query(
       `INSERT INTO users (status, deleted_at) VALUES ('deleted', now()) RETURNING id`,
