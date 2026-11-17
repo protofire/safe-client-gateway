@@ -86,7 +86,7 @@ export class TotpController {
 
   /** Also needs a current TOTP code or a recovery code in the body (403 `totp_code_required`). */
   @Delete('totp')
-  @OrgApiBody(FactorProofSchema)
+  @OrgApiBody(FactorProofSchema, { required: false })
   @HttpCode(204)
   @RequireStrongAuth()
   async remove(

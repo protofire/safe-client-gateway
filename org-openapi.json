@@ -133,11 +133,14 @@
                 "contact_request.created",
                 "contact_request.approved",
                 "contact_request.rejected",
+                "contact_request.withdrawn",
                 "export.downloaded",
                 "security.signed_in",
                 "security.step_up",
                 "security.totp_enrolled",
                 "security.totp_removed",
+                "security.recovery_codes_regenerated",
+                "security.display_name_changed",
                 "onchain.owners_changed",
                 "onchain.threshold_changed",
                 "onchain.module_changed",
@@ -158,6 +161,66 @@
             }
           },
           {
+            "name": "types",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "org.created",
+                  "org.renamed",
+                  "org.deleted",
+                  "org.restored",
+                  "member.invited",
+                  "member.invite_renewed",
+                  "member.invite_revoked",
+                  "member.joined",
+                  "member.declined",
+                  "member.role_changed",
+                  "member.removed",
+                  "member.left",
+                  "member.factors_reset",
+                  "safe.linked",
+                  "safe.unlinked",
+                  "contact.created",
+                  "contact.updated",
+                  "contact.deleted",
+                  "contact.imported",
+                  "contact_request.created",
+                  "contact_request.approved",
+                  "contact_request.rejected",
+                  "contact_request.withdrawn",
+                  "export.downloaded",
+                  "security.signed_in",
+                  "security.step_up",
+                  "security.totp_enrolled",
+                  "security.totp_removed",
+                  "security.recovery_codes_regenerated",
+                  "security.display_name_changed",
+                  "onchain.owners_changed",
+                  "onchain.threshold_changed",
+                  "onchain.module_changed",
+                  "onchain.guard_changed",
+                  "policy.created",
+                  "policy.updated",
+                  "policy.deleted",
+                  "policy.violation_found",
+                  "payout_run.created",
+                  "payout_run.updated",
+                  "payout_run.deleted",
+                  "payout_run.proposal_claimed",
+                  "payout_run.proposal_released",
+                  "payout_run.proposed",
+                  "payout_run.settled",
+                  "payout_run.resolved"
+                ]
+              }
+            }
+          },
+          {
             "name": "actor",
             "required": false,
             "in": "query",
@@ -165,6 +228,26 @@
               "type": "string",
               "format": "uuid",
               "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
             }
           },
           {
@@ -222,11 +305,14 @@
                 "contact_request.created",
                 "contact_request.approved",
                 "contact_request.rejected",
+                "contact_request.withdrawn",
                 "export.downloaded",
                 "security.signed_in",
                 "security.step_up",
                 "security.totp_enrolled",
                 "security.totp_removed",
+                "security.recovery_codes_regenerated",
+                "security.display_name_changed",
                 "onchain.owners_changed",
                 "onchain.threshold_changed",
                 "onchain.module_changed",
@@ -247,6 +333,66 @@
             }
           },
           {
+            "name": "types",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "org.created",
+                  "org.renamed",
+                  "org.deleted",
+                  "org.restored",
+                  "member.invited",
+                  "member.invite_renewed",
+                  "member.invite_revoked",
+                  "member.joined",
+                  "member.declined",
+                  "member.role_changed",
+                  "member.removed",
+                  "member.left",
+                  "member.factors_reset",
+                  "safe.linked",
+                  "safe.unlinked",
+                  "contact.created",
+                  "contact.updated",
+                  "contact.deleted",
+                  "contact.imported",
+                  "contact_request.created",
+                  "contact_request.approved",
+                  "contact_request.rejected",
+                  "contact_request.withdrawn",
+                  "export.downloaded",
+                  "security.signed_in",
+                  "security.step_up",
+                  "security.totp_enrolled",
+                  "security.totp_removed",
+                  "security.recovery_codes_regenerated",
+                  "security.display_name_changed",
+                  "onchain.owners_changed",
+                  "onchain.threshold_changed",
+                  "onchain.module_changed",
+                  "onchain.guard_changed",
+                  "policy.created",
+                  "policy.updated",
+                  "policy.deleted",
+                  "policy.violation_found",
+                  "payout_run.created",
+                  "payout_run.updated",
+                  "payout_run.deleted",
+                  "payout_run.proposal_claimed",
+                  "payout_run.proposal_released",
+                  "payout_run.proposed",
+                  "payout_run.settled",
+                  "payout_run.resolved"
+                ]
+              }
+            }
+          },
+          {
             "name": "actor",
             "required": false,
             "in": "query",
@@ -254,6 +400,26 @@
               "type": "string",
               "format": "uuid",
               "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
             }
           }
         ],
@@ -278,7 +444,7 @@
             "schema": {
               "default": "pending",
               "type": "string",
-              "enum": ["pending", "approved", "rejected", "all"]
+              "enum": ["pending", "approved", "rejected", "withdrawn", "all"]
             }
           },
           {
@@ -442,6 +608,44 @@
     "/v1/orgs/{orgId}/contact-requests/{requestId}/reject": {
       "post": {
         "operationId": "ContactsController_reject_v1",
+        "parameters": [
+          {
+            "name": "orgId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 280
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["Contacts"]
+      }
+    },
+    "/v1/orgs/{orgId}/contact-requests/{requestId}/withdraw": {
+      "post": {
+        "operationId": "ContactsController_withdraw_v1",
         "parameters": [
           {
             "name": "orgId",
@@ -1498,9 +1702,52 @@
       }
     },
     "/v1/orgs/account": {
+      "patch": {
+        "operationId": "AccountController_setDisplayName_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "displayName": {
+                    "anyOf": [
+                      { "type": "string", "minLength": 1, "maxLength": 64 },
+                      { "type": "null" }
+                    ]
+                  }
+                },
+                "required": ["displayName"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["Account"]
+      },
       "delete": {
         "operationId": "AccountController_delete_v1",
         "parameters": [],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "code": { "type": "string", "minLength": 1, "maxLength": 16 },
+                  "recoveryCode": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": { "204": { "description": "" } },
         "tags": ["Account"]
       }
@@ -1794,6 +2041,24 @@
       "delete": {
         "operationId": "TotpController_remove_v1",
         "parameters": [],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "code": { "type": "string", "minLength": 1, "maxLength": 16 },
+                  "recoveryCode": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": { "204": { "description": "" } },
         "tags": ["Totp"]
       }
@@ -1828,6 +2093,36 @@
         "tags": ["Totp"]
       }
     },
+    "/v1/orgs/auth/totp/recovery-codes": {
+      "get": {
+        "operationId": "TotpController_recoveryCodes_v1",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Totp"]
+      }
+    },
+    "/v1/orgs/auth/totp/recovery-codes/regenerate": {
+      "post": {
+        "operationId": "TotpController_regenerateRecoveryCodes_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "code": { "type": "string", "minLength": 1, "maxLength": 16 }
+                },
+                "required": ["code"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["Totp"]
+      }
+    },
     "/v1/orgs/invitations/accept": {
       "post": {
         "operationId": "InvitationsController_accept_v1",
@@ -1857,6 +2152,32 @@
     "/v1/orgs/invitations/decline": {
       "post": {
         "operationId": "InvitationsController_decline_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "minLength": 16,
+                    "maxLength": 128
+                  }
+                },
+                "required": ["token"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
+        "tags": ["Invitations"]
+      }
+    },
+    "/v1/orgs/invitations/preview": {
+      "post": {
+        "operationId": "InvitationsController_preview_v1",
         "parameters": [],
         "requestBody": {
           "required": true,

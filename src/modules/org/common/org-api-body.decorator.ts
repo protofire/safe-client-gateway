@@ -15,8 +15,11 @@ function toJson(schema: z.ZodType): Json {
   return json;
 }
 
-export const OrgApiBody = (schema: z.ZodType): MethodDecorator =>
-  ApiBody({ schema: toJson(schema) });
+/** `required: false` for a body a route also accepts absent. */
+export const OrgApiBody = (
+  schema: z.ZodType,
+  options: { required?: boolean } = {},
+): MethodDecorator => ApiBody({ schema: toJson(schema), ...options });
 
 /** One `query` parameter per property of the object schema. */
 export function OrgApiQuery(schema: z.ZodType): MethodDecorator {

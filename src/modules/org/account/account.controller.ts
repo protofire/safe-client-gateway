@@ -56,7 +56,7 @@ export class AccountController {
    * also a current code or a recovery code in the body (403 `totp_code_required`).
    */
   @Delete()
-  @OrgApiBody(FactorProofSchema)
+  @OrgApiBody(FactorProofSchema, { required: false })
   @HttpCode(204)
   @RequireStrongAuth()
   async delete(

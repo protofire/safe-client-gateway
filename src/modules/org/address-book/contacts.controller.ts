@@ -255,7 +255,7 @@ export class ContactsController {
 
   /** Optional body `{ reason }` (up to 280 characters), shown to the requester. */
   @Post('contact-requests/:requestId/reject')
-  @OrgApiBody(RejectRequestSchema)
+  @OrgApiBody(RejectRequestSchema, { required: false })
   @HttpCode(200)
   @RequirePermission('addressbook.review')
   @RequireStrongAuth()

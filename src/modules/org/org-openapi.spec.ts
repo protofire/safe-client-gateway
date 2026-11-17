@@ -92,4 +92,37 @@ describe('org OpenAPI document', () => {
       expect.arrayContaining(['executedFrom', 'executedTo']),
     );
   });
+
+  it('describes the UX-round additions', () => {
+    for (const [method, path] of [
+      ['post', '/v1/orgs/invitations/preview'],
+      ['patch', '/v1/orgs/account'],
+      ['delete', '/v1/orgs/account'],
+      ['delete', '/v1/orgs/auth/totp'],
+      ['post', '/v1/orgs/auth/totp/recovery-codes/regenerate'],
+      ['post', '/v1/orgs/{orgId}/contact-requests/{requestId}/reject'],
+    ]) {
+      expect(
+        op(method, path).requestBody?.content['application/json'].schema
+          .properties,
+      ).toBeDefined();
+    }
+    expect(op('get', '/v1/orgs/auth/totp/recovery-codes')).toBeDefined();
+    for (const path of [
+      '/v1/orgs/{orgId}/activity',
+      '/v1/orgs/{orgId}/activity.csv',
+    ]) {
+      const params = (
+        doc.paths[path] as {
+          get: { parameters: Array<{ name: string; schema: Schema }> };
+        }
+      ).get.parameters;
+      expect(params.map((p) => p.name)).toEqual(
+        expect.arrayContaining(['types', 'from', 'to']),
+      );
+      expect(params.find((p) => p.name === 'types')?.schema.type).toBe(
+        'array',
+      );
+    }
+  });
 });
