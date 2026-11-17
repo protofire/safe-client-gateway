@@ -13,8 +13,7 @@ export function nativeTokenTransferBuilder(): IBuilder<NativeTokenTransfer> {
     .with('to', getAddress(faker.finance.ethereumAddress()))
     .with('transactionHash', faker.string.hexadecimal() as Address)
     .with('value', faker.string.hexadecimal())
-    .with('transferId', faker.string.sample())
-    .with('hederaTransactionId', null);
+    .with('transferId', faker.string.sample());
 }
 
 export function toJson(nativeTokenTransfer: NativeTokenTransfer): unknown {
