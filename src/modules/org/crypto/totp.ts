@@ -1,9 +1,10 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { PRODUCT_NAME } from '@/modules/org/common/product';
 
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 const PERIOD_SECONDS = 30;
 const DIGITS = 6;
-const ISSUER = 'Protofire Multisig';
+const ISSUER = PRODUCT_NAME;
 
 function base32Encode(buf: Buffer): string {
   let bits = 0;

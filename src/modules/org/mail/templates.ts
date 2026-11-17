@@ -1,3 +1,5 @@
+import { PRODUCT_NAME } from '@/modules/org/common/product';
+
 export type InviteMail = {
   orgName: string;
   inviterLabel: string;
@@ -105,13 +107,13 @@ export function securityNoticeTemplate(notice: SecurityNotice): MailContent {
 /** The code only: no link to click, nothing an attacker could make look like ours. */
 export function signInCodeTemplate(code: string): MailContent {
   const lines = [
-    `Your Protofire Multisig sign-in code is ${code}`,
+    `Your ${PRODUCT_NAME} sign-in code is ${code}`,
     'It is valid for 10 minutes and works only in the browser where you asked for it.',
     'We never ask for this code. Do not share it with anyone, including anyone who says they are from Protofire.',
     'If you did not ask for it, you can ignore this email.',
   ];
   return {
-    subject: 'Your Protofire Multisig sign-in code',
+    subject: `Your ${PRODUCT_NAME} sign-in code`,
     text: lines.join('\n\n'),
     html: lines
       .map(
