@@ -1,4 +1,9 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import type { EntityManager } from 'typeorm';
 import { ActivityLog } from '@/modules/org/activity/activity-log.service';
 import type { OrgSession } from '@/modules/org/auth/decorators';
@@ -9,9 +14,15 @@ import { RateLimiter } from '@/modules/org/common/rate-limiter';
 import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import { revokeInvitationsBy } from '@/modules/org/members/members.service';
-import { conflict, lockOrgs, mapLastAdmin } from '@/modules/org/orgs/org-lock';
+import {
+  conflict,
+  lockOrgs,
+  mapLastAdmin,
+  pgFields,
+} from '@/modules/org/orgs/org-lock';
 
 const DISPLAY_NAME_CHANGES_PER_HOUR = 5;
+const CHECK_VIOLATION = '23514';
 
 /**
  * Account deletion (spec §6). The user row stays with status `deleted`, so
@@ -83,11 +94,33 @@ export class AccountService {
     client: { ip: string; userAgent: string | null },
   ): Promise<{ displayName: string | null }> {
     // every attempt counts: renames show in every org's activity log
+    const limitKey = `account:display-name:user:${userId}`;
     await this.rateLimiter.enforce(
-      `account:display-name:user:${userId}`,
+      limitKey,
       DISPLAY_NAME_CHANGES_PER_HOUR,
       3600,
     );
+    try {
+      await this.write(userId, displayName, client);
+    } catch (error) {
+      // The DB check freezes Unicode 18 sets; the runtime's regexes may be
+      // older (Node 24.11: Unicode 16). Their disagreement is a 400 like any
+      // other invalid name, not a 500, and not a spent attempt.
+      const { code, constraint } = pgFields(error);
+      if (code === CHECK_VIOLATION && constraint?.startsWith('users_display_name_')) {
+        await this.rateLimiter.refund(limitKey);
+        throw new BadRequestException('Invalid display name');
+      }
+      throw error;
+    }
+    return { displayName };
+  }
+
+  private async write(
+    userId: string,
+    displayName: string | null,
+    client: { ip: string; userAgent: string | null },
+  ): Promise<void> {
     await this.tx.runInOrgTx(async (em) => {
       const [user]: Array<{ displayName: string | null }> = await em.query(
         `SELECT display_name AS "displayName" FROM users
@@ -109,7 +142,6 @@ export class AccountService {
         em,
       );
     });
-    return { displayName };
   }
 
   /**

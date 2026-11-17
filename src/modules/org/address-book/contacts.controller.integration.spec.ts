@@ -466,17 +466,17 @@ describe('org address book', () => {
     await write('post', `${path}/reject`, admin, {
       reason: 'x'.repeat(281),
     }).expect(400);
-    for (const reason of ['ok\u202Egnp', 'a\u200Bb', 'x\uFE0F', 'line\nbreak']) {
+    for (const reason of ['ok\u202Egnp', 'a\u200Bb', 'x\uFE0F', '\u0301x']) {
       await write('post', `${path}/reject`, admin, { reason }).expect(400);
     }
 
     const res = await write('post', `${path}/reject`, admin, {
-      reason: '  Not a vendor  ',
+      reason: '  Not a vendor\r\nAsk finance  ',
     }).expect(200);
 
     expect(res.body).toMatchObject({
       status: 'rejected',
-      reason: 'Not a vendor',
+      reason: 'Not a vendor\nAsk finance',
       decidedBy: admin.userId,
     });
     const list = await get(
@@ -486,7 +486,7 @@ describe('org address book', () => {
     expect(list.body.items).toEqual([
       expect.objectContaining({
         id: req.body.id,
-        reason: 'Not a vendor',
+        reason: 'Not a vendor\nAsk finance',
         requester: expect.objectContaining({ displayName: 'Mem' }),
       }),
     ]);

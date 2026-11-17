@@ -26,10 +26,15 @@ export class DisplayNameVisible1794787200000 implements MigrationInterface {
   name = 'DisplayNameVisible1794787200000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
+    const rule = `display_name IS NFC NORMALIZED AND display_name !~ $$[${CLASS}]$$`;
     await queryRunner.query(`SET LOCAL lock_timeout = '5s'`);
+    // names valid under 0007 but not under this rule are cleared
     await queryRunner.query(
-      `ALTER TABLE users ADD CONSTRAINT users_display_name_visible_check CHECK (
-        display_name IS NFC NORMALIZED AND display_name !~ $$[${CLASS}]$$)`,
+      `UPDATE users SET display_name = NULL, updated_at = now()
+       WHERE display_name IS NOT NULL AND NOT (${rule})`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE users ADD CONSTRAINT users_display_name_visible_check CHECK (${rule})`,
     );
     await queryRunner.query(`SET LOCAL lock_timeout = DEFAULT`);
   }

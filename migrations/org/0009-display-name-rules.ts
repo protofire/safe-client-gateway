@@ -1,6 +1,10 @@
 import type { MigrationInterface, QueryRunner } from 'typeorm';
 
 /*
+ * The API checks with the runtime's Unicode (Node 24.11 is Unicode 16), so
+ * the API and this check can disagree on code points assigned since; the
+ * API maps a violation of this check to its 400 (AccountService).
+ *
  * Code point sets frozen from Unicode 18 (generated with Node's \p{…}
  * classes, the same ones src/modules/org/common/display-text.ts uses):
  * hex ranges `a-b`, comma-separated.
@@ -203,14 +207,21 @@ export class DisplayNameRules1794873600000 implements MigrationInterface {
   name = 'DisplayNameRules1794873600000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`SET LOCAL lock_timeout = '5s'`);
-    await queryRunner.query(
-      `ALTER TABLE users ADD CONSTRAINT users_display_name_rules_check CHECK (
-        display_name !~ $$${bracket(INVISIBLE)}$$
+    const rules = `display_name !~ $$${bracket(INVISIBLE)}$$
         AND display_name ~ $$${bracket(LETTER_OR_DIGIT)}$$
         AND display_name !~ $$^${bracket(MARK)}$$
         AND display_name !~* '^0x[0-9a-f]'
-        AND lower(display_name) NOT IN ('deleted user', 'you', 'a member'))`,
+        AND lower(regexp_replace(display_name, '\\s+', ' ', 'g'))
+          NOT IN ('deleted user', 'you', 'a member')`;
+    await queryRunner.query(`SET LOCAL lock_timeout = '5s'`);
+    // names valid under 0007/0008 but not under these rules are cleared
+    // (the user sets a new one) rather than failing the migration
+    await queryRunner.query(
+      `UPDATE users SET display_name = NULL, updated_at = now()
+       WHERE display_name IS NOT NULL AND NOT (${rules})`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE users ADD CONSTRAINT users_display_name_rules_check CHECK (${rules})`,
     );
     await queryRunner.query(`SET LOCAL lock_timeout = DEFAULT`);
   }

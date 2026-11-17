@@ -9,6 +9,9 @@ import { InvitationTargetEmail1794355200000 } from '../../../../migrations/org/0
 import { AdminTriggerActiveUsers1794441600000 } from '../../../../migrations/org/0004-admin-trigger-active-users';
 import { DropSessionIp1794528000000 } from '../../../../migrations/org/0005-drop-session-ip';
 import { PoliciesPayouts1794614400000 } from '../../../../migrations/org/0006-policies-payouts';
+import { UxRound1794700800000 } from '../../../../migrations/org/0007-ux-round';
+import { DisplayNameVisible1794787200000 } from '../../../../migrations/org/0008-display-name-visible';
+import { DisplayNameRules1794873600000 } from '../../../../migrations/org/0009-display-name-rules';
 import {
   createOrgTestDb,
   type OrgTestDb,
@@ -781,6 +784,66 @@ describe('org schema (through the app login)', () => {
         scan: null,
         key: 0,
       });
+    } finally {
+      if (ds.isInitialized) await ds.destroy();
+      await fresh.drop();
+    }
+  });
+
+  it('clears display names that 0008/0009 would refuse instead of failing on them', async () => {
+    const upTo0007 = [
+      OrgCore1794182400000,
+      AddressBook1794268800000,
+      InvitationTargetEmail1794355200000,
+      AdminTriggerActiveUsers1794441600000,
+      DropSessionIp1794528000000,
+      PoliciesPayouts1794614400000,
+      UxRound1794700800000,
+    ];
+    const fresh = await createOrgTestDb();
+    const migrator = (
+      migrations: Array<new () => MigrationInterface>,
+    ): DataSource => new DataSource({ ...fresh.owner().options, migrations });
+    // valid under 0007; the comment says what refuses it later
+    const names: Record<string, string | null> = {
+      Alice: 'Alice',
+      'Bob\u202Egnp': null, // bidi override (0008)
+      'Jose\u0301': null, // not NFC (0008)
+      'Bo\u034Fb': null, // default ignorable (0009)
+      '...': null, // no letter or digit (0009)
+      '0xdead': null, // address-like (0009)
+      'deleted   USER': null, // reserved (0009)
+    };
+    let ds = migrator(upTo0007);
+    try {
+      await ds.initialize();
+      await ds.runMigrations();
+      const ids: Record<string, string> = {};
+      for (const name of Object.keys(names)) {
+        [{ id: ids[name] }] = await ds.query(
+          `INSERT INTO users (display_name) VALUES ($1) RETURNING id`,
+          [name],
+        );
+      }
+      await ds.destroy();
+
+      ds = migrator([
+        ...upTo0007,
+        DisplayNameVisible1794787200000,
+        DisplayNameRules1794873600000,
+      ]);
+      await ds.initialize();
+      expect((await ds.runMigrations()).map((m) => m.name)).toEqual([
+        'DisplayNameVisible1794787200000',
+        'DisplayNameRules1794873600000',
+      ]);
+      for (const [name, kept] of Object.entries(names)) {
+        const [row] = await ds.query(
+          `SELECT display_name FROM users WHERE id = $1`,
+          [ids[name]],
+        );
+        expect(row.display_name).toBe(kept);
+      }
     } finally {
       if (ds.isInitialized) await ds.destroy();
       await fresh.drop();

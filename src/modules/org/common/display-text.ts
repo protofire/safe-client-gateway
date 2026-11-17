@@ -12,20 +12,37 @@ export const INVISIBLE =
 /** Names the UI shows for people without a name of their own. */
 export const RESERVED_NAMES = ['deleted user', 'you', 'a member'];
 
+/** Case-folded, whitespace runs as one space: how reserved names compare. */
+export const foldName = (v: string): string =>
+  v.toLowerCase().replace(/\s+/gu, ' ');
+
 /** Length in code points, as Postgres `length()` counts. */
 const codePoints = (v: string): number => [...v].length;
 
-/** NFC, no invisible characters (checked before trim), trimmed, 1..max code points. */
-export function visibleText(max: number): z.ZodType<string, string> {
+/**
+ * NFC, no invisible characters (checked before trim), trimmed, 1..max code
+ * points, no leading combining mark. `multiline`: `\n` allowed (`\r\n` and
+ * `\r` become `\n`).
+ */
+export function visibleText(
+  max: number,
+  { multiline = false }: { multiline?: boolean } = {},
+): z.ZodType<string, string> {
   return z
     .string()
-    .transform((v) => v.normalize('NFC'))
-    .refine((v) => !INVISIBLE.test(v), {
+    .transform((v) => {
+      const nfc = v.normalize('NFC');
+      return multiline ? nfc.replace(/\r\n?/g, '\n') : nfc;
+    })
+    .refine((v) => !INVISIBLE.test(multiline ? v.replaceAll('\n', '') : v), {
       error: 'No control, format or invisible characters',
     })
     .transform((v) => v.trim())
     .refine((v) => codePoints(v) >= 1 && codePoints(v) <= max, {
       error: `Must be 1 to ${max} characters`,
+    })
+    .refine((v) => !/^\p{M}/u.test(v), {
+      error: 'Must not start with a combining mark',
     });
 }
 
@@ -34,12 +51,9 @@ export const DisplayName = visibleText(64)
   .refine((v) => /[\p{L}\p{N}]/u.test(v), {
     error: 'Must contain a letter or digit',
   })
-  .refine((v) => !/^\p{M}/u.test(v), {
-    error: 'Must not start with a combining mark',
-  })
   .refine((v) => !/^0x[0-9a-f]/i.test(v), {
     error: 'Must not look like an address',
   })
-  .refine((v) => !RESERVED_NAMES.includes(v.toLowerCase()), {
+  .refine((v) => !RESERVED_NAMES.includes(foldName(v)), {
     error: 'This name is reserved',
   });

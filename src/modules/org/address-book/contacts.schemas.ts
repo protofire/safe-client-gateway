@@ -60,7 +60,7 @@ export const CreateRequestSchema = z.discriminatedUnion('action', [
 ]);
 
 export const RejectRequestSchema = z.object({
-  reason: visibleText(280).optional(),
+  reason: visibleText(280, { multiline: true }).optional(),
 });
 
 export const RequestsQuerySchema = z.object({

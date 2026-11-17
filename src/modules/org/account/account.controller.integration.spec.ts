@@ -1,5 +1,6 @@
 import { totpCode } from '@/modules/org/auth/__tests__/auth-test-app';
 import { randomUUID } from 'node:crypto';
+import { AccountService } from '@/modules/org/account/account.service';
 import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
 import { sha256Hex } from '@/modules/org/crypto/hashing';
 import {
@@ -290,6 +291,7 @@ describe('account deletion (org)', () => {
       ['the reserved "Deleted user"', 'deleted USER'],
       ['the reserved "You"', ' you '],
       ['the reserved "A member"', 'A Member'],
+      ['a reserved name with extra spaces', 'Deleted \u00A0  User'],
       ['65 code points', '\u{1F600}'.repeat(65)],
       ['not a string', 42],
     ])('rejects a name that is %s with 400', async (_, value) => {
@@ -322,6 +324,29 @@ describe('account deletion (org)', () => {
       await setName(user, name).expect(200, { displayName: name });
     });
 
+    it('answers a DB check refusal (Unicode drift between API and DB) with 400, not counted', async () => {
+      const user = await t.user({ wallet: true });
+      const write = jest
+        .spyOn(
+          AccountService.prototype as unknown as {
+            write: () => Promise<void>;
+          },
+          'write',
+        )
+        .mockRejectedValue(
+          Object.assign(new Error('check'), {
+            code: '23514',
+            constraint: 'users_display_name_rules_check',
+          }),
+        );
+      try {
+        for (let i = 0; i < 6; i++) await setName(user, 'Drift').expect(400);
+      } finally {
+        write.mockRestore();
+      }
+      await setName(user, 'Fine').expect(200);
+    });
+
     it('limits name changes to 5 an hour per user', async () => {
       const user = await t.user({ wallet: true });
       for (let i = 0; i < 5; i++) await setName(user, `Name ${i}`).expect(200);
@@ -336,6 +361,7 @@ describe('account deletion (org)', () => {
       ['a leading combining mark', '\u0301Bob'],
       ['an address-like name', '0xdead'],
       ['a reserved label', 'You'],
+      ['a reserved label with extra spaces', 'deleted   USER'],
     ])('the DB also refuses %s', async (_, name) => {
       const user = await t.user({ wallet: true });
       await expect(

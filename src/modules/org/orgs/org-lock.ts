@@ -74,7 +74,7 @@ type PgError = {
 };
 
 /** TypeORM's QueryFailedError carries the Postgres fields on driverError. */
-function pgFields(error: unknown): { code?: string; constraint?: string } {
+export function pgFields(error: unknown): { code?: string; constraint?: string } {
   const e = error as PgError;
   return {
     code: e?.code ?? e?.driverError?.code,
