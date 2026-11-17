@@ -31,6 +31,7 @@ import {
   ContactSchema,
   CreateRequestSchema,
   ListQuerySchema,
+  RejectRequestSchema,
   RequestsQuerySchema,
 } from '@/modules/org/address-book/contacts.schemas';
 import { ContactRequestsService } from '@/modules/org/address-book/contact-requests.service';
@@ -252,7 +253,9 @@ export class ContactsController {
     );
   }
 
+  /** Optional body `{ reason }` (up to 280 characters), shown to the requester. */
   @Post('contact-requests/:requestId/reject')
+  @OrgApiBody(RejectRequestSchema)
   @HttpCode(200)
   @RequirePermission('addressbook.review')
   @RequireStrongAuth()
@@ -261,8 +264,28 @@ export class ContactsController {
     @Param('orgId') orgId: string,
     @Param('requestId') requestId: string,
     @OrgSession() session: OrgSession,
+    @Body() body: unknown,
   ): ReturnType<ContactRequestsService['reject']> {
+    const { reason } = parse(RejectRequestSchema, body ?? {});
     return this.requests.reject(
+      orgId,
+      uuid(requestId),
+      actor(req, session.userId),
+      reason ?? null,
+    );
+  }
+
+  /** The requester's own pending request; no step-up, like creating it. */
+  @Post('contact-requests/:requestId/withdraw')
+  @HttpCode(200)
+  @RequirePermission('addressbook.request')
+  withdraw(
+    @Req() req: Request,
+    @Param('orgId') orgId: string,
+    @Param('requestId') requestId: string,
+    @OrgSession() session: OrgSession,
+  ): ReturnType<ContactRequestsService['withdraw']> {
+    return this.requests.withdraw(
       orgId,
       uuid(requestId),
       actor(req, session.userId),

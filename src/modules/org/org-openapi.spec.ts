@@ -24,7 +24,7 @@ const BODILESS = new Set([
   'POST /v1/orgs/{invitedOrgId}/members/accept',
   'POST /v1/orgs/{invitedOrgId}/members/decline',
   'POST /v1/orgs/{orgId}/contact-requests/{requestId}/approve',
-  'POST /v1/orgs/{orgId}/contact-requests/{requestId}/reject',
+  'POST /v1/orgs/{orgId}/contact-requests/{requestId}/withdraw',
   'POST /v1/orgs/{orgId}/payout-runs/{runId}/proposal-attempts/{attemptId}/release',
 ]);
 

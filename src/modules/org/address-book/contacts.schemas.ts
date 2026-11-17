@@ -58,8 +58,14 @@ export const CreateRequestSchema = z.discriminatedUnion('action', [
   }),
 ]);
 
+export const RejectRequestSchema = z.object({
+  reason: z.string().trim().min(1).max(280).optional(),
+});
+
 export const RequestsQuerySchema = z.object({
-  status: z.enum(['pending', 'approved', 'rejected', 'all']).default('pending'),
+  status: z
+    .enum(['pending', 'approved', 'rejected', 'withdrawn', 'all'])
+    .default('pending'),
   cursor: z.string().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 });

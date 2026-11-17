@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -17,9 +18,11 @@ import {
   MAX_PENDING_PER_ORG,
   MAX_PENDING_PER_REQUESTER,
 } from '@/modules/org/address-book/contacts.schemas';
+import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
+import { people, type PersonRef } from '@/modules/org/members/person';
 
-type Status = 'pending' | 'approved' | 'rejected';
+type Status = 'pending' | 'approved' | 'rejected' | 'withdrawn';
 type CursorKey = [string, string];
 type Row = {
   id: string;
@@ -31,6 +34,7 @@ type Row = {
   status: Status;
   decided_by: string | null;
   decided_at: Date | null;
+  decision_reason: string | null;
   created_at: Date;
   ts: string;
 };
@@ -40,25 +44,34 @@ export type ContactRequest = {
   contactId: string | null;
   payload: Record<string, unknown>;
   requestedBy: string | null;
+  /** display name and masked identity of `requestedBy`; null once gone */
+  requester: PersonRef | null;
   status: Status;
   decidedBy: string | null;
   decidedAt: string | null;
+  /** the reviewer's reason for a rejection, if given */
+  reason: string | null;
   createdAt: string;
 };
 
-const COLUMNS = `id, contact_id, contact_version, action, payload, requested_by, status, decided_by, decided_at, created_at,
+const COLUMNS = `id, contact_id, contact_version, action, payload, requested_by, status, decided_by, decided_at, decision_reason, created_at,
   to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS ts`;
 
-function toRequest(r: Row): ContactRequest {
+function toRequest(
+  r: Row,
+  requesters: Map<string, PersonRef>,
+): ContactRequest {
   return {
     id: r.id,
     action: r.action,
     contactId: r.contact_id,
     payload: r.payload,
     requestedBy: r.requested_by,
+    requester: (r.requested_by && requesters.get(r.requested_by)) || null,
     status: r.status,
     decidedBy: r.decided_by,
     decidedAt: r.decided_at?.toISOString() ?? null,
+    reason: r.decision_reason,
     createdAt: r.created_at.toISOString(),
   };
 }
@@ -79,7 +92,24 @@ export class ContactRequestsService {
     private readonly tx: OrgTransaction,
     private readonly contacts: ContactsService,
     private readonly log: ActivityLog,
+    private readonly encryption: FieldEncryptionService,
   ) {}
+
+  private async views(
+    em: EntityManager,
+    rows: Array<Row>,
+  ): Promise<Array<ContactRequest>> {
+    const requesters = await people(
+      em,
+      this.encryption,
+      rows.map((r) => r.requested_by),
+    );
+    return rows.map((r) => toRequest(r, requesters));
+  }
+
+  private async view(em: EntityManager, row: Row): Promise<ContactRequest> {
+    return (await this.views(em, [row]))[0];
+  }
 
   async list(
     orgId: string,
@@ -104,7 +134,7 @@ export class ContactRequestsService {
       const page = rows.slice(0, q.limit);
       const last = page[page.length - 1];
       return {
-        items: page.map(toRequest),
+        items: await this.views(em, page),
         nextCursor:
           rows.length > q.limit
             ? Buffer.from(JSON.stringify([last.ts, last.id])).toString(
@@ -146,7 +176,7 @@ export class ContactRequestsService {
           LIMIT 1`,
         [orgId, input.action, contactId, version, JSON.stringify(payload)],
       );
-      if (same) return toRequest(same);
+      if (same) return this.view(em, same);
 
       const [counts]: Array<{ org: number; mine: number }> = await em.query(
         `SELECT count(*)::int AS org, (count(*) FILTER (WHERE requested_by = $2))::int AS mine
@@ -184,7 +214,7 @@ export class ContactRequestsService {
               ...(input.action === 'update' ? input.payload : {}),
             };
       await this.event(em, orgId, 'created', row, shown, actor);
-      return toRequest(row);
+      return this.view(em, row);
     }, orgId);
   }
 
@@ -234,11 +264,17 @@ export class ContactRequestsService {
       }
       const decided = await this.decide(em, orgId, id, 'approved', actor);
       await this.event(em, orgId, 'approved', decided, result, actor);
-      return toRequest(decided);
+      return this.view(em, decided);
     }, orgId);
   }
 
-  reject(orgId: string, id: string, actor: Actor): Promise<ContactRequest> {
+  /** `reason` is shown to the requester in the request list. */
+  reject(
+    orgId: string,
+    id: string,
+    actor: Actor,
+    reason: string | null = null,
+  ): Promise<ContactRequest> {
     return this.tx.runInOrgTx(async (em) => {
       await this.contacts.lockOrg(
         em,
@@ -247,17 +283,66 @@ export class ContactRequestsService {
         'addressbook.review',
       );
       const req = await this.lockPending(em, orgId, id);
-      let subject: { name?: string; address?: string } = req.payload;
-      if (req.action !== 'create') {
-        subject =
-          req.contact_id === null
-            ? {}
-            : await this.contacts.find(em, orgId, req.contact_id);
-      }
-      const decided = await this.decide(em, orgId, id, 'rejected', actor);
-      await this.event(em, orgId, 'rejected', decided, subject, actor);
-      return toRequest(decided);
+      const decided = await this.decide(
+        em,
+        orgId,
+        id,
+        'rejected',
+        actor,
+        reason,
+      );
+      await this.event(
+        em,
+        orgId,
+        'rejected',
+        decided,
+        await this.subject(em, orgId, req),
+        actor,
+      );
+      return this.view(em, decided);
     }, orgId);
+  }
+
+  /** The requester takes back their own pending request; 403 `not_requester` for anyone else. */
+  withdraw(orgId: string, id: string, actor: Actor): Promise<ContactRequest> {
+    return this.tx.runInOrgTx(async (em) => {
+      await this.contacts.lockOrg(
+        em,
+        orgId,
+        actor.userId,
+        'addressbook.request',
+      );
+      const req = await this.lockPending(em, orgId, id);
+      if (req.requested_by !== actor.userId) {
+        throw new ForbiddenException({
+          statusCode: 403,
+          message: 'Only the requester can withdraw a request',
+          code: 'not_requester',
+        });
+      }
+      const decided = await this.decide(em, orgId, id, 'withdrawn', actor);
+      await this.event(
+        em,
+        orgId,
+        'withdrawn',
+        decided,
+        await this.subject(em, orgId, req),
+        actor,
+      );
+      return this.view(em, decided);
+    }, orgId);
+  }
+
+  /** What the activity entry names: the requested contact, or the current one. */
+  private async subject(
+    em: EntityManager,
+    orgId: string,
+    req: Row,
+  ): Promise<{ name?: string; address?: string }> {
+    if (req.action === 'create') return req.payload;
+    return req.contact_id === null
+      ? {}
+      : this.contacts.find(em, orgId, req.contact_id);
   }
 
   private invalid(): ConflictException {
@@ -300,14 +385,16 @@ export class ContactRequestsService {
     em: EntityManager,
     orgId: string,
     id: string,
-    status: 'approved' | 'rejected',
+    status: 'approved' | 'rejected' | 'withdrawn',
     actor: Actor,
+    reason: string | null = null,
   ): Promise<Row> {
     // TypeORM returns [rows, affected] for UPDATE ... RETURNING
     const [[row]]: Array<[Row]> = await em.query(
-      `UPDATE contact_requests SET status = $3, decided_by = $4, decided_at = now(), updated_at = now()
+      `UPDATE contact_requests SET status = $3, decided_by = $4, decision_reason = $5,
+         decided_at = now(), updated_at = now()
         WHERE org_id = $1 AND id = $2 RETURNING ${COLUMNS}`,
-      [orgId, id, status, actor.userId],
+      [orgId, id, status, actor.userId, reason],
     );
     return row;
   }
@@ -315,7 +402,7 @@ export class ContactRequestsService {
   private event(
     em: EntityManager,
     orgId: string,
-    kind: 'created' | 'approved' | 'rejected',
+    kind: 'created' | 'approved' | 'rejected' | 'withdrawn',
     req: Row,
     subject: { name?: string; address?: string },
     actor: Actor,

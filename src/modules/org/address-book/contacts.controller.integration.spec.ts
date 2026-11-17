@@ -446,6 +446,92 @@ describe('org address book', () => {
     expect((await get(`${orgA}/contacts`, admin).expect(200)).body).toEqual([]);
   });
 
+  it('returns a reject reason and the requester to everyone listing requests', async () => {
+    await sql.query(`UPDATE users SET display_name = 'Mem' WHERE id = $1`, [
+      member.userId,
+    ]);
+    const req = await write('post', `${orgA}/contact-requests`, member, {
+      action: 'create',
+      payload: { name: 'Dan', address: ADDR2, chainIds: ['1'] },
+    }).expect(201);
+    expect(req.body).toMatchObject({
+      requester: {
+        userId: member.userId,
+        displayName: 'Mem',
+        identity: expect.stringMatching(/^0x[0-9a-fA-F]{4}…[0-9a-fA-F]{4}$/),
+      },
+      reason: null,
+    });
+    const path = `${orgA}/contact-requests/${req.body.id}`;
+    await write('post', `${path}/reject`, admin, {
+      reason: 'x'.repeat(281),
+    }).expect(400);
+
+    const res = await write('post', `${path}/reject`, admin, {
+      reason: '  Not a vendor  ',
+    }).expect(200);
+
+    expect(res.body).toMatchObject({
+      status: 'rejected',
+      reason: 'Not a vendor',
+      decidedBy: admin.userId,
+    });
+    const list = await get(
+      `${orgA}/contact-requests?status=rejected`,
+      member,
+    ).expect(200);
+    expect(list.body.items).toEqual([
+      expect.objectContaining({
+        id: req.body.id,
+        reason: 'Not a vendor',
+        requester: expect.objectContaining({ displayName: 'Mem' }),
+      }),
+    ]);
+    await sql.query(`UPDATE users SET display_name = NULL WHERE id = $1`, [
+      member.userId,
+    ]);
+  });
+
+  it('lets only the requester withdraw their own pending request', async () => {
+    const req = await write('post', `${orgA}/contact-requests`, member, {
+      action: 'create',
+      payload: { name: 'Eve', address: ADDR2, chainIds: ['1'] },
+    }).expect(201);
+    const path = `${orgA}/contact-requests/${req.body.id}`;
+
+    const other = await write('post', `${path}/withdraw`, admin).expect(403);
+    expect(other.body.code).toBe('not_requester');
+    await write('post', `${orgB}/contact-requests/${req.body.id}/withdraw`, adminB).expect(404);
+
+    const res = await write('post', `${path}/withdraw`, member).expect(200);
+
+    expect(res.body).toMatchObject({
+      status: 'withdrawn',
+      decidedBy: member.userId,
+      reason: null,
+    });
+    await write('post', `${path}/withdraw`, member).expect(409);
+    await write('post', `${path}/approve`, admin).expect(409);
+    expect((await events('contact_request.withdrawn'))[0]).toMatchObject({
+      actor_user_id: member.userId,
+      payload: { name: 'Eve', address: ADDR2, action: 'create' },
+    });
+    const pending = await get(`${orgA}/contact-requests`, member).expect(200);
+    expect(pending.body.items).toEqual([]);
+    const withdrawn = await get(
+      `${orgA}/contact-requests?status=withdrawn`,
+      member,
+    ).expect(200);
+    expect(withdrawn.body.items).toHaveLength(1);
+    // a withdrawn request no longer counts toward the pending limits
+    const [{ n }] = await asOrg(orgA, (em) =>
+      em.query(
+        `SELECT count(*)::int AS n FROM contact_requests WHERE status = 'pending'`,
+      ),
+    );
+    expect(n).toBe(0);
+  });
+
   it('rejects deciding an already decided request with 409', async () => {
     const req = await write('post', `${orgA}/contact-requests`, member, {
       action: 'create',
