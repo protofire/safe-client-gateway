@@ -1,3 +1,4 @@
+import type { PersonRef } from '@/modules/org/members/person';
 import { z } from 'zod';
 import type { Evaluation } from '@/modules/org/policies/evaluate';
 
@@ -88,6 +89,17 @@ export type PayoutRunActions = {
   resolve: boolean;
 };
 
+/** Sum of a run's rows per token, exact: `amountRaw` in base units (decimal string). */
+export type PayoutTokenTotal = {
+  token: string /* 'native' or checksummed */;
+  symbol: string;
+  decimals: number;
+  amountRaw: string;
+};
+
+/** A run's creator; null once their account is gone. */
+export type PayoutRunCreator = PersonRef | null;
+
 export type PayoutRunListItem = {
   id: string;
   name: string;
@@ -98,6 +110,10 @@ export type PayoutRunListItem = {
   itemCount: number;
   safeTxHash: string | null;
   createdAt: string;
+  createdBy: PayoutRunCreator;
+  /** the current version has a built transaction */
+  built: boolean;
+  totals: Array<PayoutTokenTotal>;
 };
 
 /** Newest first; `nextCursor` null on the last page. */
@@ -119,6 +135,11 @@ export type PayoutRunView = {
   id: string;
   name: string;
   status: PayoutRunStatus;
+  createdAt: string;
+  createdBy: PayoutRunCreator;
+  /** the current version has a built transaction (`calls` set) */
+  built: boolean;
+  totals: Array<PayoutTokenTotal>;
   chainId: string;
   safeAddress: string;
   linkedSafeId: string | null;

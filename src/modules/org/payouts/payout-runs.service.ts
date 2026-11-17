@@ -81,12 +81,15 @@ import {
   type PayoutRunPage,
   type PayoutRunStatus,
   type PayoutRunView,
+  type PayoutTokenTotal,
   type PayoutRunWarning,
   type RunSimulation,
   type StoredCall,
   type UpdatePayoutRun,
 } from '@/modules/org/payouts/payout.schemas';
 import { multiSendCallOnlySet } from '@/modules/org/payouts/payout-verify';
+import { people } from '@/modules/org/members/person';
+import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
 import { mapLimit } from '@/modules/org/safes/map-limit';
 
 /** A `payout_runs` row as read by {@link lockRun}. */
@@ -241,6 +244,30 @@ export function readItems(
        FROM payout_items WHERE org_id = $1 AND run_id = $2 ORDER BY line_no`,
     [orgId, runId],
   );
+}
+
+/** Sum per token (and decimals), ordered by stored token like the list; BigInt, so exact. */
+export function runTotals(
+  rows: ReadonlyArray<
+    Pick<PayoutItemRow, 'token' | 'symbol' | 'decimals' | 'amount_raw'>
+  >,
+): Array<PayoutTokenTotal> {
+  const totals = new Map<string, PayoutTokenTotal & { sum: bigint }>();
+  for (const row of rows) {
+    const key = `${row.token}:${row.decimals}`;
+    const total = totals.get(key) ?? {
+      token: row.token === 'native' ? 'native' : getAddress(row.token),
+      symbol: row.symbol,
+      decimals: row.decimals,
+      amountRaw: '0',
+      sum: 0n,
+    };
+    total.sum += BigInt(row.amount_raw);
+    totals.set(key, total);
+  }
+  return [...totals.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([, { sum, ...t }]) => ({ ...t, amountRaw: sum.toString() }));
 }
 
 /** The run's calls in line order, as the UI and B7 compare them. */
@@ -509,6 +536,7 @@ export class PayoutRunsService {
     private readonly balances: IBalancesRepository,
     @Inject(IBlockchainApiManager)
     private readonly blockchain: IBlockchainApiManager,
+    private readonly encryption: FieldEncryptionService,
   ) {}
 
   /** Keyset page, newest first: `(created_at, id)` below the cursor's. */
@@ -536,12 +564,27 @@ export class PayoutRunsService {
         linked_safe_id: string | null;
         item_count: number;
         safe_tx_hash: string | null;
+        created_by: string | null;
+        built: boolean;
+        totals: Array<{
+          token: string;
+          symbol: string;
+          decimals: number;
+          amount_raw: string;
+        }>;
         created_at: Date;
         /** full precision (microseconds) for the cursor */
         created_at_text: string;
       }> = await em.query(
         `SELECT r.id, r.name, r.status, r.chain_id, r.safe_address::text AS safe_address,
-                ls.id AS linked_safe_id, r.safe_tx_hash, r.created_at,
+                ls.id AS linked_safe_id, r.safe_tx_hash, r.created_at, r.created_by,
+                r.calls IS NOT NULL AS built,
+                -- numeric sums: exact; text so JS never sees a float
+                (SELECT coalesce(json_agg(t ORDER BY t.token), '[]') FROM (
+                   SELECT i.token, min(i.symbol) AS symbol, i.decimals,
+                          sum(i.amount_raw)::text AS amount_raw
+                     FROM payout_items i WHERE i.org_id = r.org_id AND i.run_id = r.id
+                    GROUP BY i.token, i.decimals) t) AS totals,
                 to_char(r.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at_text,
                 (SELECT count(*)::int FROM payout_items i
                   WHERE i.org_id = r.org_id AND i.run_id = r.id) AS item_count
@@ -556,6 +599,11 @@ export class PayoutRunsService {
       const more = rows.length > query.limit;
       const page = more ? rows.slice(0, query.limit) : rows;
       const last = page.at(-1);
+      const creators = await people(
+        em,
+        this.encryption,
+        page.map((r) => r.created_by),
+      );
       const items = page.map((r) => ({
         id: r.id,
         name: r.name,
@@ -566,6 +614,14 @@ export class PayoutRunsService {
         itemCount: r.item_count,
         safeTxHash: r.safe_tx_hash,
         createdAt: r.created_at.toISOString(),
+        createdBy: (r.created_by && creators.get(r.created_by)) || null,
+        built: r.built,
+        totals: r.totals.map((t) => ({
+          token: t.token === 'native' ? 'native' : getAddress(t.token),
+          symbol: t.symbol,
+          decimals: t.decimals,
+          amountRaw: t.amount_raw,
+        })),
       }));
       return {
         items,
@@ -1099,11 +1155,16 @@ export class PayoutRunsService {
     const latestAttempt = await this.latestAttempt(em, r, userId, manage);
     const releasable = latestAttempt?.releasable ?? false;
 
+    const creators = await people(em, this.encryption, [r.created_by]);
     return {
       run: {
         id: r.id,
         name: r.name,
         status: r.status,
+        createdAt: r.created_at.toISOString(),
+        createdBy: (r.created_by && creators.get(r.created_by)) || null,
+        built: r.calls !== null,
+        totals: runTotals(rows),
         chainId: r.chain_id,
         safeAddress: getAddress(r.safe_address),
         linkedSafeId: r.linked_safe_id,

@@ -438,6 +438,13 @@ describe('payout runs API', () => {
       id: expect.any(String),
       name: 'March',
       status: 'draft',
+      createdAt: expect.any(String),
+      createdBy: expect.objectContaining({ userId: member.userId }),
+      built: false,
+      totals: [
+        expect.objectContaining({ token: USDC, amountRaw: '1000500000' }),
+        expect.objectContaining({ token: 'native' }),
+      ],
       chainId: '1',
       safeAddress: SAFE_A,
       linkedSafeId: safeA,
@@ -651,6 +658,17 @@ describe('payout runs API', () => {
       { address: BOB, amount: '1000.5', token: USDC },
       { address: ALICE, amount: '5', token: USDC },
     ]);
+    // exact sums per token, before and after the build
+    const totals = [
+      { token: USDC, symbol: 'USDC', decimals: 6, amountRaw: '1005500000' },
+      {
+        token: 'native',
+        symbol: 'ETH',
+        decimals: 18,
+        amountRaw: '1500000000000000000',
+      },
+    ];
+    expect(run).toMatchObject({ built: false, totals });
     const res = await write(
       'post',
       `${orgA}/payout-runs/${run.id}/build`,
@@ -658,6 +676,9 @@ describe('payout runs API', () => {
       { expectedVersion: 1 },
     ).expect(200);
     const built = res.body.run;
+    expect(built).toMatchObject({ built: true, totals });
+    const listed = await get(`${orgA}/payout-runs`, member).expect(200);
+    expect(listed.body.items[0]).toMatchObject({ built: true, totals });
     expect(built.calls).toEqual([
       { to: ALICE, value: '1500000000000000000', data: '0x' },
       { to: USDC, value: '0', data: expect.stringMatching(/^0xa9059cbb/) },
@@ -1134,10 +1155,36 @@ describe('payout runs API', () => {
           itemCount: 2,
           safeTxHash: null,
           createdAt: expect.any(String),
+          createdBy: {
+            userId: member.userId,
+            displayName: null,
+            identity: expect.stringMatching(/^0x[0-9a-fA-F]{4}…[0-9a-fA-F]{4}$/),
+          },
+          built: false,
+          totals: [
+            { token: USDC, symbol: 'USDC', decimals: 6, amountRaw: '1000500000' },
+            {
+              token: 'native',
+              symbol: 'ETH',
+              decimals: 18,
+              amountRaw: '1500000000000000000',
+            },
+          ],
         },
       ],
       nextCursor: null,
     });
+    await sql.query(`UPDATE users SET display_name = 'Mia' WHERE id = $1`, [
+      member.userId,
+    ]);
+    const named = await get(`${orgA}/payout-runs/${run.id}`, member).expect(200);
+    expect(named.body.run).toMatchObject({
+      createdAt: run.createdAt,
+      createdBy: { userId: member.userId, displayName: 'Mia' },
+    });
+    await sql.query(`UPDATE users SET display_name = NULL WHERE id = $1`, [
+      member.userId,
+    ]);
     const filtered = await get(
       `${orgA}/payout-runs?linkedSafeId=${safeA}`,
       member,
