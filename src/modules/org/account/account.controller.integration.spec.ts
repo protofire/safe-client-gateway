@@ -105,6 +105,26 @@ describe('account deletion (org)', () => {
     expect(row.status).toBe('deleted');
   });
 
+  it('refuses a last admin with 409 before spending their recovery code', async () => {
+    const admin = await t.user({ email: 'last-admin@example.com', totp: true });
+    await t.createOrg(admin);
+    await t.sql.query(
+      `INSERT INTO recovery_codes (user_id, code_hash) VALUES ($1, $2)`,
+      [admin.userId, sha256Hex('aaaaabbbbbcccccddddd')],
+    );
+
+    const res = await deleteAccount(admin)
+      .send({ recoveryCode: 'aaaaa-bbbbb-ccccc-ddddd' })
+      .expect(409);
+
+    expect(res.body.code).toBe('last_admin');
+    const [code] = await t.sql.query(
+      `SELECT used_at FROM recovery_codes WHERE user_id = $1`,
+      [admin.userId],
+    );
+    expect(code.used_at).toBeNull();
+  });
+
   it('blocks the last admin from deleting their account', async () => {
     const admin = await t.user({ wallet: true });
     const member = await t.user({ wallet: true });
@@ -231,10 +251,34 @@ describe('account deletion (org)', () => {
       ['empty after trim', '   '],
       ['longer than 64', 'x'.repeat(65)],
       ['a control character', 'Bob\u0007'],
+      ['a right-to-left override', 'Bob\u202Egnp.exe'],
+      ['a zero-width space', 'Bo\u200Bb'],
+      ['a BOM', '\uFEFFBob'],
+      ['only invisible fillers', '\u3164\u3164'],
+      ['only Unicode whitespace', '\u3000\u00A0\u2003'],
       ['not a string', 42],
     ])('rejects a name that is %s with 400', async (_, value) => {
       const user = await t.user({ wallet: true });
       await setName(user, value).expect(400);
+    });
+
+    it('stores names NFC-normalised, and the DB refuses a U+202E name written around the API', async () => {
+      const user = await t.user({ wallet: true });
+
+      await setName(user, 'Jose\u0301').expect(200, { displayName: 'Jos\u00E9' });
+
+      await expect(
+        t.sql.query(`UPDATE users SET display_name = $2 WHERE id = $1`, [
+          user.userId,
+          'Bob\u202Egnp.exe',
+        ]),
+      ).rejects.toThrow(/users_display_name_visible_check/);
+      await expect(
+        t.sql.query(`UPDATE users SET display_name = $2 WHERE id = $1`, [
+          user.userId,
+          'Jose\u0301',
+        ]),
+      ).rejects.toThrow(/users_display_name_visible_check/);
     });
 
     it('needs no step-up and changes only the caller', async () => {

@@ -20,14 +20,21 @@ import {
   SESSION_COOKIE_OPTIONS,
 } from '@/modules/org/auth/session.guard';
 
+// controls, format characters (bidi, zero-width, BOM), line/paragraph
+// separators and blank letters (Hangul fillers, braille blank)
+const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u115F\u1160\u3164\uFFA0\u2800]/u;
+
 export const DisplayNameSchema = z.object({
-  // null clears it
+  // null clears it; NFC, then trimmed of Unicode whitespace
   displayName: z
     .string()
-    .trim()
-    .min(1)
-    .max(64)
-    .refine((v) => !/\p{Cc}/u.test(v), { error: 'No control characters' })
+    .transform((v) => v.normalize('NFC'))
+    // before trim, which would silently drop a leading BOM
+    .refine((v) => !INVISIBLE.test(v), {
+      error: 'No control, format or invisible characters',
+    })
+    .transform((v) => v.trim())
+    .pipe(z.string().min(1).max(64))
     .nullable(),
 });
 
@@ -65,8 +72,9 @@ export class AccountController {
     @Body() body: unknown,
   ): Promise<void> {
     const proof = parse(FactorProofSchema, body ?? {});
-    await this.factors.requireCurrentFactor(session.userId, proof);
-    await this.account.delete(session.userId);
+    await this.account.delete(session.userId, (em) =>
+      this.factors.requireCurrentFactor(session.userId, proof, em),
+    );
     res.clearCookie(SESSION_COOKIE, SESSION_COOKIE_OPTIONS);
   }
 }

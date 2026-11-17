@@ -1713,10 +1713,7 @@
                 "type": "object",
                 "properties": {
                   "displayName": {
-                    "anyOf": [
-                      { "type": "string", "minLength": 1, "maxLength": 64 },
-                      { "type": "null" }
-                    ]
+                    "anyOf": [{ "type": "string" }, { "type": "null" }]
                   }
                 },
                 "required": ["displayName"]
