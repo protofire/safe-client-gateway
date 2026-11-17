@@ -45,4 +45,11 @@ export class TransactionDetails extends BaseTransaction {
   safeAppInfo!: SafeAppInfo | null;
   @ApiPropertyOptional({ type: String, nullable: true })
   note!: string | null;
+  // Only present for synthetic Hedera-native-transfer transactions: `txHash`
+  // for those is a service-generated placeholder (no real EVM transaction
+  // exists to look up on a block explorer). Carries the real,
+  // explorer-resolvable Hedera transaction id instead. Omitted from the
+  // response otherwise.
+  @ApiPropertyOptional({ type: String })
+  hederaTransactionId?: string;
 }

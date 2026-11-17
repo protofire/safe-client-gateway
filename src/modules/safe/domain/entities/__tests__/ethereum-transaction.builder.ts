@@ -11,7 +11,8 @@ export function ethereumTransactionBuilder(): IBuilder<EthereumTransaction> {
     .with('executionDate', faker.date.recent())
     .with('from', getAddress(faker.finance.ethereumAddress()))
     .with('transfers', [])
-    .with('txHash', faker.string.hexadecimal() as Hash);
+    .with('txHash', faker.string.hexadecimal() as Hash)
+    .with('hederaTransactionId', null);
 }
 
 export function toJson(ethereumTransaction: EthereumTransaction): unknown {

@@ -100,6 +100,56 @@ describe('Transfer mapper (Unit)', () => {
       });
     });
 
+    describe('hederaTransactionId', () => {
+      it('should omit hederaTransactionId when the transfer has none', async () => {
+        const chainId = faker.string.numeric();
+        const safe = safeBuilder().build();
+        const transfer = nativeTokenTransferBuilder()
+          .with('from', safe.address)
+          .with('hederaTransactionId', null)
+          .build();
+        addressInfoHelper.getOrDefault.mockResolvedValue(
+          new AddressInfo(faker.finance.ethereumAddress()),
+        );
+
+        const actual = await mapper.mapTransfers({
+          chainId,
+          transfers: [transfer],
+          safe,
+          onlyTrusted: false,
+        });
+
+        expect(JSON.parse(JSON.stringify(actual[0]))).not.toHaveProperty(
+          'hederaTransactionId',
+        );
+      });
+
+      it('should include hederaTransactionId when the transfer has one', async () => {
+        const chainId = faker.string.numeric();
+        const safe = safeBuilder().build();
+        const hederaTransactionId = '0.0.10822511-1787674970-069053976';
+        const transfer = nativeTokenTransferBuilder()
+          .with('to', safe.address)
+          .with('hederaTransactionId', hederaTransactionId)
+          .build();
+        addressInfoHelper.getOrDefault.mockResolvedValue(
+          new AddressInfo(faker.finance.ethereumAddress()),
+        );
+
+        const actual = await mapper.mapTransfers({
+          chainId,
+          transfers: [transfer],
+          safe,
+          onlyTrusted: false,
+        });
+
+        expect(JSON.parse(JSON.stringify(actual[0]))).toHaveProperty(
+          'hederaTransactionId',
+          hederaTransactionId,
+        );
+      });
+    });
+
     describe('ERC721 transfers', () => {
       it.each([
         ['with', true],
@@ -329,6 +379,7 @@ describe('Transfer mapper (Unit)', () => {
               trusted: true,
             },
             from: safe.address,
+            hederaTransactionId: null,
           } as const;
           const addressInfo = new AddressInfo(faker.finance.ethereumAddress());
           const transferInfo = new Erc20Transfer(
@@ -454,6 +505,7 @@ describe('Transfer mapper (Unit)', () => {
               trusted: true,
             },
             from: safe.address,
+            hederaTransactionId: null,
           } as const;
           const addressInfo = new AddressInfo(faker.finance.ethereumAddress());
           const transferInfo = new Erc20Transfer(
@@ -577,6 +629,7 @@ describe('Transfer mapper (Unit)', () => {
               trusted: false,
             },
             from: safe.address,
+            hederaTransactionId: null,
           } as const;
           const addressInfo = new AddressInfo(faker.finance.ethereumAddress());
           const transferInfo = new Erc20Transfer(
