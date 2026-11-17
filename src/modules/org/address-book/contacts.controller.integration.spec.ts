@@ -466,6 +466,9 @@ describe('org address book', () => {
     await write('post', `${path}/reject`, admin, {
       reason: 'x'.repeat(281),
     }).expect(400);
+    for (const reason of ['ok\u202Egnp', 'a\u200Bb', 'x\uFE0F', 'line\nbreak']) {
+      await write('post', `${path}/reject`, admin, { reason }).expect(400);
+    }
 
     const res = await write('post', `${path}/reject`, admin, {
       reason: '  Not a vendor  ',

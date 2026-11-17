@@ -1,3 +1,4 @@
+import { visibleText } from '@/modules/org/common/display-text';
 import { getAddress, isAddress } from 'viem';
 import { z } from 'zod';
 
@@ -59,7 +60,7 @@ export const CreateRequestSchema = z.discriminatedUnion('action', [
 ]);
 
 export const RejectRequestSchema = z.object({
-  reason: z.string().trim().min(1).max(280).optional(),
+  reason: visibleText(280).optional(),
 });
 
 export const RequestsQuerySchema = z.object({

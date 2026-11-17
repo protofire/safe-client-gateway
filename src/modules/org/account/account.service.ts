@@ -5,10 +5,13 @@ import type { OrgSession } from '@/modules/org/auth/decorators';
 import { SecurityEvents } from '@/modules/org/auth/security-events';
 import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
 import { Clock, type IClock } from '@/modules/org/common/clock';
+import { RateLimiter } from '@/modules/org/common/rate-limiter';
 import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import { revokeInvitationsBy } from '@/modules/org/members/members.service';
 import { conflict, lockOrgs, mapLastAdmin } from '@/modules/org/orgs/org-lock';
+
+const DISPLAY_NAME_CHANGES_PER_HOUR = 5;
 
 /**
  * Account deletion (spec §6). The user row stays with status `deleted`, so
@@ -24,6 +27,7 @@ export class AccountService {
     private readonly sessions: SessionsRepository,
     private readonly securityEvents: SecurityEvents,
     private readonly encryption: FieldEncryptionService,
+    private readonly rateLimiter: RateLimiter,
   ) {}
 
   /**
@@ -78,6 +82,12 @@ export class AccountService {
     displayName: string | null,
     client: { ip: string; userAgent: string | null },
   ): Promise<{ displayName: string | null }> {
+    // every attempt counts: renames show in every org's activity log
+    await this.rateLimiter.enforce(
+      `account:display-name:user:${userId}`,
+      DISPLAY_NAME_CHANGES_PER_HOUR,
+      3600,
+    );
     await this.tx.runInOrgTx(async (em) => {
       const [user]: Array<{ displayName: string | null }> = await em.query(
         `SELECT display_name AS "displayName" FROM users

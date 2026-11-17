@@ -239,15 +239,18 @@ export class AuthService {
        FROM identities WHERE user_id = $1 ORDER BY created_at, id`,
       [session.userId],
     );
-    const [{ displayName, identityId }]: Array<{
+    const [current]: Array<{
       displayName: string | null;
       identityId: string | null;
     }> = await this.db.query(
       `SELECT u.display_name AS "displayName", s.identity_id AS "identityId"
        FROM users u JOIN sessions s ON s.user_id = u.id
-       WHERE u.id = $1 AND s.id = $2`,
+       WHERE u.id = $1 AND s.id = $2 AND u.status = 'active' AND s.revoked_at IS NULL`,
       [session.userId, session.sessionId],
     );
+    // the session or user went away after the guard read it
+    if (!current) throw new UnauthorizedException();
+    const { displayName, identityId } = current;
     return {
       user: { id: session.userId, displayName },
       identities: rows.map((r) =>

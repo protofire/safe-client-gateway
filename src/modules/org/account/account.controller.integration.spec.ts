@@ -1,4 +1,6 @@
 import { totpCode } from '@/modules/org/auth/__tests__/auth-test-app';
+import { randomUUID } from 'node:crypto';
+import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
 import { sha256Hex } from '@/modules/org/crypto/hashing';
 import {
   createOrgTestApp,
@@ -73,6 +75,28 @@ describe('account deletion (org)', () => {
     expect(user.status).toBe('deleted');
     await t.http().get('/v1/orgs/auth/me').set('Cookie', b.cookie).expect(401);
     expect(await t.adminCount(orgId)).toBe(1);
+  });
+
+  it('answers /auth/me with 401, not 500, when the session row is gone after the guard read it', async () => {
+    const user = await t.user({ wallet: true });
+    const spy = jest
+      .spyOn(t.app.get(SessionsRepository), 'findActive')
+      .mockResolvedValueOnce({
+        id: randomUUID(),
+        userId: user.userId,
+        amr: ['siwe'],
+        lastStrongAuthAt: null,
+        updatedAt: new Date(),
+      });
+    try {
+      await t
+        .http()
+        .get('/v1/orgs/auth/me')
+        .set('Cookie', user.cookie)
+        .expect(401);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('requires fresh strong auth', async () => {
@@ -256,6 +280,17 @@ describe('account deletion (org)', () => {
       ['a BOM', '\uFEFFBob'],
       ['only invisible fillers', '\u3164\u3164'],
       ['only Unicode whitespace', '\u3000\u00A0\u2003'],
+      ['a combining grapheme joiner', 'Bo\u034Fb'],
+      ['a variation selector', 'Bob\uFE0F'],
+      ['a tag character', 'Bob\u{E0041}'],
+      ['a Khmer inherent vowel', 'Bob\u17B4'],
+      ['punctuation only', '...'],
+      ['a leading combining mark', '\u0301Bob'],
+      ['address-like', '0xAbC Treasury'],
+      ['the reserved "Deleted user"', 'deleted USER'],
+      ['the reserved "You"', ' you '],
+      ['the reserved "A member"', 'A Member'],
+      ['65 code points', '\u{1F600}'.repeat(65)],
       ['not a string', 42],
     ])('rejects a name that is %s with 400', async (_, value) => {
       const user = await t.user({ wallet: true });
@@ -272,13 +307,59 @@ describe('account deletion (org)', () => {
           user.userId,
           'Bob\u202Egnp.exe',
         ]),
-      ).rejects.toThrow(/users_display_name_visible_check/);
+      ).rejects.toThrow(/users_display_name_(visible|rules)_check/);
       await expect(
         t.sql.query(`UPDATE users SET display_name = $2 WHERE id = $1`, [
           user.userId,
           'Jose\u0301',
         ]),
-      ).rejects.toThrow(/users_display_name_visible_check/);
+      ).rejects.toThrow(/users_display_name_(visible|rules)_check/);
+    });
+
+    it('counts 64 code points, not UTF-16 units', async () => {
+      const user = await t.user({ wallet: true });
+      const name = `A${'\u{1F600}'.repeat(63)}`;
+      await setName(user, name).expect(200, { displayName: name });
+    });
+
+    it('limits name changes to 5 an hour per user', async () => {
+      const user = await t.user({ wallet: true });
+      for (let i = 0; i < 5; i++) await setName(user, `Name ${i}`).expect(200);
+      await setName(user, 'Name 5').expect(429);
+      await setName(await t.user({ wallet: true }), 'Other').expect(200);
+    });
+
+    it.each([
+      ['a combining grapheme joiner', 'Bo\u034Fb'],
+      ['a variation selector', 'Bob\u{E0100}'],
+      ['no letter or digit', '...'],
+      ['a leading combining mark', '\u0301Bob'],
+      ['an address-like name', '0xdead'],
+      ['a reserved label', 'You'],
+    ])('the DB also refuses %s', async (_, name) => {
+      const user = await t.user({ wallet: true });
+      await expect(
+        t.sql.query(`UPDATE users SET display_name = $2 WHERE id = $1`, [
+          user.userId,
+          name,
+        ]),
+      ).rejects.toThrow(/users_display_name_rules_check/);
+    });
+
+    it('hides the name of an actor who left the org from its activity', async () => {
+      const { orgId, a, b } = await twoAdmins();
+      await setName(b, 'Bob').expect(200);
+      await t.post(`/v1/orgs/${orgId}/members/leave`).set('Cookie', b.cookie).expect(204);
+
+      const activity = await t
+        .http()
+        .get(`/v1/orgs/${orgId}/activity?type=security.display_name_changed`)
+        .set('Cookie', a.cookie)
+        .expect(200);
+      expect(activity.body.items[0]).toMatchObject({
+        actorUserId: b.userId,
+        actorDisplayName: null,
+      });
     });
 
     it('needs no step-up and changes only the caller', async () => {

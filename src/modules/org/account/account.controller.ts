@@ -13,6 +13,7 @@ import { AccountService } from '@/modules/org/account/account.service';
 import { OrgSession, RequireStrongAuth } from '@/modules/org/auth/decorators';
 import { FactorsService } from '@/modules/org/auth/totp/factors.service';
 import { FactorProofSchema } from '@/modules/org/auth/totp/totp.controller';
+import { DisplayName } from '@/modules/org/common/display-text';
 import { OrgApiBody } from '@/modules/org/common/org-api-body.decorator';
 import { client, parse } from '@/modules/org/orgs/parse';
 import {
@@ -20,22 +21,9 @@ import {
   SESSION_COOKIE_OPTIONS,
 } from '@/modules/org/auth/session.guard';
 
-// controls, format characters (bidi, zero-width, BOM), line/paragraph
-// separators and blank letters (Hangul fillers, braille blank)
-const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u115F\u1160\u3164\uFFA0\u2800]/u;
-
 export const DisplayNameSchema = z.object({
-  // null clears it; NFC, then trimmed of Unicode whitespace
-  displayName: z
-    .string()
-    .transform((v) => v.normalize('NFC'))
-    // before trim, which would silently drop a leading BOM
-    .refine((v) => !INVISIBLE.test(v), {
-      error: 'No control, format or invisible characters',
-    })
-    .transform((v) => v.trim())
-    .pipe(z.string().min(1).max(64))
-    .nullable(),
+  // null clears it
+  displayName: DisplayName.nullable(),
 });
 
 /** Static `/v1/orgs/account` routes: registered before any `:orgId` controller. */
