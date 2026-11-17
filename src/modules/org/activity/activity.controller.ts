@@ -36,7 +36,7 @@ const CSV_PAGE_SIZE = 500;
 const MAX_RANGE_MS = 366 * 24 * 3600 * 1000;
 
 const EventTypes = z.array(z.enum(ACTIVITY_EVENT_TYPES)).min(1);
-const FilterFields = z.object({
+const FilterSchema = z.object({
   type: z.enum(ACTIVITY_EVENT_TYPES).optional(),
   // `?types=a&types=b` or `?types=a,b`
   types: z
@@ -50,31 +50,32 @@ const FilterFields = z.object({
     )
     .optional(),
   actor: z.uuid().optional(),
-  // inclusive; at most 366 days apart when both are given
+  // inclusive; see bounded() for the 366-day limit
   from: z.iso.datetime({ offset: true }).optional(),
   to: z.iso.datetime({ offset: true }).optional(),
 });
-const ListFields = FilterFields.extend({
+const ListQuerySchema = FilterSchema.extend({
   cursor: z.string().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(MAX_LIMIT).default(DEFAULT_LIMIT),
 });
 
-const FilterSchema = FilterFields;
-const ListQuerySchema = ListFields;
 type Filter = z.infer<typeof FilterSchema>;
 
 /**
- * A range given on one side is closed on the other (to = now, from = to -
- * 366 days), so every dated query spans at most 366 days; 400 otherwise.
+ * Every dated query spans at most 366 days: a lone `to` gets from = to -
+ * 366 days, a lone `from` gets to = min(now, from + 366 days). Both given:
+ * 400 when `from` is after `to` or they are more than 366 days apart.
  */
 function bounded<F extends { from?: string; to?: string }>(
   f: F,
   now: Date,
 ): F {
   if (f.from === undefined && f.to === undefined) return f;
-  const to = f.to ?? now.toISOString();
-  const from =
-    f.from ?? new Date(Date.parse(to) - MAX_RANGE_MS).toISOString();
+  const iso = (ms: number): string => new Date(ms).toISOString();
+  const to =
+    f.to ??
+    iso(Math.min(now.getTime(), Date.parse(f.from!) + MAX_RANGE_MS));
+  const from = f.from ?? iso(Date.parse(to) - MAX_RANGE_MS);
   const span = Date.parse(to) - Date.parse(from);
   if (span < 0) throw new BadRequestException('`from` is after `to`');
   if (span > MAX_RANGE_MS) {
@@ -84,8 +85,8 @@ function bounded<F extends { from?: string; to?: string }>(
 }
 
 // OpenAPI only: `types` as the array the preprocess accepts
-const FilterDoc = FilterFields.extend({ types: EventTypes.optional() });
-const ListQueryDoc = ListFields.extend({ types: EventTypes.optional() });
+const FilterDoc = FilterSchema.extend({ types: EventTypes.optional() });
+const ListQueryDoc = ListQuerySchema.extend({ types: EventTypes.optional() });
 
 // created_at stays text: JS Dates would drop Postgres' microseconds and make
 // the keyset cursor skip or repeat rows

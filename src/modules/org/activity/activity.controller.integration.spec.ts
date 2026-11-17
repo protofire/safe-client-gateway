@@ -371,13 +371,35 @@ describe('org activity log', () => {
       ['from after to', '?from=2026-02-01T00:00:00Z&to=2026-01-01T00:00:00Z'],
       ['a range over 366 days', '?from=2025-01-01T00:00:00Z&to=2026-01-03T00:00:00Z'],
       ['a date without a time', '?from=2026-01-01'],
-      ['a lone from more than 366 days ago', '?from=2000-01-01T00:00:00Z'],
     ])('answers 400 for %s', async (_, qs) => {
       await list(admin.cookie, qs).expect(400);
       await http()
         .get(`/v1/orgs/${orgId}/activity.csv${qs}`)
         .set('Cookie', admin.cookie)
         .expect(400);
+    });
+
+    it('clamps a lone old from to from + 366 days, in the list and the CSV', async () => {
+      await at('2025-06-01T00:00:00.000Z', 'safe.linked');
+      const qs = '?types=safe.linked&from=2025-01-01T00:00:00Z';
+      const { body } = await list(admin.cookie, qs).expect(200);
+      // to = 2026-01-02T00:00Z: the 2026-02-01 event is out
+      expect(types(body)).toEqual([
+        '2026-01-01 safe.linked',
+        '2025-06-01 safe.linked',
+      ]);
+      const csv = await http()
+        .get(`/v1/orgs/${orgId}/activity.csv${qs}`)
+        .set('Cookie', admin.cookie)
+        .buffer(true)
+        .parse((r, cb) => {
+          let data = '';
+          r.setEncoding('utf8');
+          r.on('data', (c) => (data += c));
+          r.on('end', () => cb(null, data));
+        })
+        .expect(200);
+      expect((csv.body as string).trim().split('\n')).toHaveLength(3);
     });
 
     it('closes a lone to at to - 366 days', async () => {

@@ -247,40 +247,30 @@ export function readItems(
 }
 
 /**
- * Sum of each run's rows per token, in Postgres numeric (exact), as text so
- * JS never sees a float; ordered by stored token. Runs without rows: [].
+ * Column `totals` of run `r`: its rows summed per token in Postgres numeric
+ * (exact), as text so JS never sees a float, ordered by stored token. Part
+ * of the statement that reads the run, so both see one snapshot.
  */
-async function runTotals(
-  em: Pick<EntityManager, 'query'>,
-  orgId: string,
-  runIds: Array<string>,
-): Promise<Map<string, Array<PayoutTokenTotal>>> {
-  const rows: Array<{
-    run_id: string;
-    token: string;
-    symbol: string;
-    decimals: number;
-    amount_raw: string;
-  }> = await em.query(
-    `SELECT i.run_id, i.token, min(i.symbol) AS symbol, i.decimals,
-            sum(i.amount_raw)::text AS amount_raw
-       FROM payout_items i WHERE i.org_id = $1 AND i.run_id = ANY($2::uuid[])
-      GROUP BY i.run_id, i.token, i.decimals
-      ORDER BY i.run_id, i.token, i.decimals`,
-    [orgId, runIds],
-  );
-  const totals = new Map<string, Array<PayoutTokenTotal>>(
-    runIds.map((id) => [id, []]),
-  );
-  for (const r of rows) {
-    totals.get(r.run_id)!.push({
-      token: r.token === 'native' ? 'native' : getAddress(r.token),
-      symbol: r.symbol,
-      decimals: r.decimals,
-      amountRaw: r.amount_raw,
-    });
-  }
-  return totals;
+const TOTALS_COLUMN = `(SELECT coalesce(json_agg(t ORDER BY t.token, t.decimals), '[]')
+    FROM (SELECT i.token, min(i.symbol) AS symbol, i.decimals,
+                 sum(i.amount_raw)::text AS amount_raw
+            FROM payout_items i WHERE i.org_id = r.org_id AND i.run_id = r.id
+           GROUP BY i.token, i.decimals) t) AS totals`;
+
+type TotalsRow = {
+  token: string;
+  symbol: string;
+  decimals: number;
+  amount_raw: string;
+};
+
+function toTotals(rows: Array<TotalsRow>): Array<PayoutTokenTotal> {
+  return rows.map((t) => ({
+    token: t.token === 'native' ? 'native' : getAddress(t.token),
+    symbol: t.symbol,
+    decimals: t.decimals,
+    amountRaw: t.amount_raw,
+  }));
 }
 
 /** The run's calls in line order, as the UI and B7 compare them. */
@@ -579,13 +569,14 @@ export class PayoutRunsService {
         safe_tx_hash: string | null;
         created_by: string | null;
         built: boolean;
+        totals: Array<TotalsRow>;
         created_at: Date;
         /** full precision (microseconds) for the cursor */
         created_at_text: string;
       }> = await em.query(
         `SELECT r.id, r.name, r.status, r.chain_id, r.safe_address::text AS safe_address,
                 ls.id AS linked_safe_id, r.safe_tx_hash, r.created_at, r.created_by,
-                r.calls IS NOT NULL AS built,
+                r.calls IS NOT NULL AS built, ${TOTALS_COLUMN},
                 to_char(r.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at_text,
                 (SELECT count(*)::int FROM payout_items i
                   WHERE i.org_id = r.org_id AND i.run_id = r.id) AS item_count
@@ -606,11 +597,7 @@ export class PayoutRunsService {
         orgId,
         page.map((r) => r.created_by),
       );
-      const totals = await runTotals(
-        em,
-        orgId,
-        page.map((r) => r.id),
-      );
+
       const items = page.map((r) => ({
         id: r.id,
         name: r.name,
@@ -623,7 +610,7 @@ export class PayoutRunsService {
         createdAt: r.created_at.toISOString(),
         createdBy: (r.created_by && creators.get(r.created_by)) || null,
         built: r.built,
-        totals: totals.get(r.id)!,
+        totals: toTotals(r.totals),
       }));
       return {
         items,
@@ -1117,9 +1104,10 @@ export class PayoutRunsService {
     items: Array<PayoutItemView>;
     rows: Array<PayoutItemRow>;
   }> {
-    const [r]: Array<PayoutRunRow & { linked_safe_id: string | null }> =
-      await em.query(
-        `SELECT ${RUN_COLUMNS},
+    const [r]: Array<
+      PayoutRunRow & { linked_safe_id: string | null; totals: Array<TotalsRow> }
+    > = await em.query(
+        `SELECT ${RUN_COLUMNS}, ${TOTALS_COLUMN},
                 (SELECT ls.id FROM linked_safes ls
                   WHERE ls.org_id = r.org_id AND ls.chain_id = r.chain_id
                     AND ls.address = r.safe_address) AS linked_safe_id
@@ -1158,7 +1146,6 @@ export class PayoutRunsService {
     const releasable = latestAttempt?.releasable ?? false;
 
     const creators = await people(em, this.encryption, orgId, [r.created_by]);
-    const totals = await runTotals(em, orgId, [r.id]);
     return {
       run: {
         id: r.id,
@@ -1167,7 +1154,7 @@ export class PayoutRunsService {
         createdAt: r.created_at.toISOString(),
         createdBy: (r.created_by && creators.get(r.created_by)) || null,
         built: r.calls !== null,
-        totals: totals.get(r.id)!,
+        totals: toTotals(r.totals),
         chainId: r.chain_id,
         safeAddress: getAddress(r.safe_address),
         linkedSafeId: r.linked_safe_id,
