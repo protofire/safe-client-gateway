@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  Get,
   HttpCode,
   Post,
   Req,
@@ -12,20 +13,28 @@ import { AuthService } from '@/modules/org/auth/auth.service';
 import { z } from 'zod';
 import { OrgSession, RequireStrongAuth } from '@/modules/org/auth/decorators';
 import { setSessionCookie } from '@/modules/org/auth/session.guard';
-import { FactorsService } from '@/modules/org/auth/totp/factors.service';
-import { client } from '@/modules/org/orgs/parse';
+import {
+  FactorsService,
+  type FactorProof,
+} from '@/modules/org/auth/totp/factors.service';
+import { client, parse } from '@/modules/org/orgs/parse';
 import { ValidationPipe } from '@/validation/pipes/validation.pipe';
 import { OrgApiBody } from '@/modules/org/common/org-api-body.decorator';
 
 const CodeSchema = z.object({ code: z.string().min(1).max(16) });
-const StepUpSchema = z
-  .object({
-    code: z.string().min(1).max(16).optional(),
-    recoveryCode: z.string().min(1).max(64).optional(),
-  })
-  .refine((b) => (b.code === undefined) !== (b.recoveryCode === undefined), {
-    error: 'Give exactly one of code and recoveryCode',
-  });
+const ProofFields = z.object({
+  code: z.string().min(1).max(16).optional(),
+  recoveryCode: z.string().min(1).max(64).optional(),
+});
+const StepUpSchema = ProofFields.refine(
+  (b) => (b.code === undefined) !== (b.recoveryCode === undefined),
+  { error: 'Give exactly one of code and recoveryCode' },
+);
+/** Required (by the service) when the user has TOTP; at most one of the two. */
+export const FactorProofSchema = ProofFields.refine(
+  (b) => b.code === undefined || b.recoveryCode === undefined,
+  { error: 'Give at most one of code and recoveryCode' },
+);
 
 @Controller({ path: 'orgs/auth', version: '1' })
 export class TotpController {
@@ -75,13 +84,37 @@ export class TotpController {
     return { ok: true };
   }
 
+  /** Also needs a current TOTP code or a recovery code in the body (403 `totp_code_required`). */
   @Delete('totp')
+  @OrgApiBody(FactorProofSchema)
   @HttpCode(204)
   @RequireStrongAuth()
   async remove(
     @OrgSession() session: OrgSession,
     @Req() req: Request,
+    @Body() body: unknown,
   ): Promise<void> {
+    const proof: FactorProof = parse(FactorProofSchema, body ?? {});
+    await this.factors.requireCurrentFactor(session.userId, proof);
     await this.factors.remove(session, client(req));
+  }
+
+  @Get('totp/recovery-codes')
+  recoveryCodes(
+    @OrgSession() session: OrgSession,
+  ): Promise<{ remaining: number }> {
+    return this.factors.recoveryCodesRemaining(session.userId);
+  }
+
+  /** New codes, returned once; the old ones stop working. Needs a current TOTP code. */
+  @Post('totp/recovery-codes/regenerate')
+  @OrgApiBody(CodeSchema)
+  @HttpCode(200)
+  regenerateRecoveryCodes(
+    @OrgSession() session: OrgSession,
+    @Body(new ValidationPipe(CodeSchema)) body: { code: string },
+    @Req() req: Request,
+  ): Promise<{ recoveryCodes: Array<string> }> {
+    return this.factors.regenerateRecoveryCodes(session, body.code, client(req));
   }
 }

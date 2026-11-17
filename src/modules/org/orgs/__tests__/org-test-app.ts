@@ -56,6 +56,8 @@ export type TestUser = {
 };
 
 const EMAIL_HASH_KEY = randomBytes(32).toString('base64');
+/** The TOTP secret of `user({ totp: true })`; codes via `totpCode`. */
+export const TEST_TOTP_SECRET = 'JBSWY3DPEHPK3PXP';
 
 /** Org feature modules on a fresh org DB, Resend stubbed, mail key set. */
 export async function createOrgTestApp(
@@ -149,7 +151,7 @@ export async function createOrgTestApp(
         await t.sql.query(
           `INSERT INTO factors (user_id, kind, secret_encrypted, confirmed_at)
            VALUES ($1, 'totp', $2, now())`,
-          [seeded.userId, encryption.encrypt('JBSWY3DPEHPK3PXP')],
+          [seeded.userId, encryption.encrypt(TEST_TOTP_SECRET)],
         );
       }
       return {

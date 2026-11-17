@@ -30,6 +30,7 @@ import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.se
 import { ORG_REDIS } from '@/modules/org/auth/nonce.store';
 import { AccountController } from '@/modules/org/account/account.controller';
 import { OrgAccountModule } from '@/modules/org/account/account.module';
+import { FactorsService } from '@/modules/org/auth/totp/factors.service';
 import { AccountService } from '@/modules/org/account/account.service';
 import { ActivityModule } from '@/modules/org/activity/activity.module';
 import { AddressBookModule } from '@/modules/org/address-book/address-book.module';
@@ -421,6 +422,10 @@ describe('route order of static org routes', () => {
       controllers: [AccountController],
       providers: [
         { provide: AccountService, useValue: { delete: deleteAccount } },
+        {
+          provide: FactorsService,
+          useValue: { requireCurrentFactor: jest.fn() },
+        },
       ],
     })
     class AccountStubModule {}

@@ -6,5 +6,6 @@ import { TotpController } from '@/modules/org/auth/totp/totp.controller';
 @Module({
   controllers: [TotpController],
   providers: [FactorsService],
+  exports: [FactorsService],
 })
 export class OrgTotpModule {}

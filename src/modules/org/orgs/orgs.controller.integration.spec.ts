@@ -1,10 +1,14 @@
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { createSiweMessage } from 'viem/siwe';
-import { APP_URL } from '@/modules/org/auth/__tests__/auth-test-app';
+import {
+  APP_URL,
+  totpCode,
+} from '@/modules/org/auth/__tests__/auth-test-app';
 import { SecurityEvents } from '@/modules/org/auth/security-events';
 import { PurgeProcessor } from '@/modules/org/jobs/purge.processor';
 import {
   createOrgTestApp,
+  TEST_TOTP_SECRET,
   type OrgTestApp,
 } from '@/modules/org/orgs/__tests__/org-test-app';
 
@@ -635,7 +639,11 @@ describe('organizations (org)', () => {
     const user = await t.user({ email: 'f6@example.com', totp: true });
     const orgId = await t.createOrg(user);
 
-    await t.del('/v1/orgs/auth/totp').set('Cookie', user.cookie).expect(204);
+    await t
+      .del('/v1/orgs/auth/totp')
+      .set('Cookie', user.cookie)
+      .send({ code: totpCode(TEST_TOTP_SECRET, new Date()) })
+      .expect(204);
 
     const res = await t
       .patch(`/v1/orgs/${orgId}`)

@@ -1,5 +1,6 @@
 import {
   ConflictException,
+  ForbiddenException,
   HttpException,
   HttpStatus,
   Inject,
@@ -27,6 +28,8 @@ const FAILURE_WINDOW_SECONDS = 15 * 60;
 const RECOVERY_CODES = 10;
 
 type Client = { ip: string; userAgent: string | null };
+/** A current TOTP code or an unused recovery code; at most one. */
+export type FactorProof = { code?: string; recoveryCode?: string };
 
 /** 80-bit code shown as `xxxxx-xxxxx-xxxxx-xxxxx` (hex). */
 function newRecoveryCode(): string {
@@ -186,8 +189,90 @@ export class FactorsService {
   }
 
   /**
-   * Caller is behind `@RequireStrongAuth()`. Removes the factor and its
-   * recovery codes and revokes the user's other sessions.
+   * For destructive account changes (TOTP removal, account deletion), on top
+   * of step-up: a user with confirmed TOTP proves possession again in the
+   * same request. 403 `totp_code_required` without a proof, 401 for a wrong
+   * one (counts toward the TOTP failure limit). The proof is spent.
+   */
+  async requireCurrentFactor(
+    userId: string,
+    proof: FactorProof,
+  ): Promise<void> {
+    const [{ enabled }] = await this.db.query(
+      `SELECT EXISTS (SELECT 1 FROM factors WHERE user_id = $1 AND kind = 'totp'
+         AND confirmed_at IS NOT NULL) AS enabled`,
+      [userId],
+    );
+    if (!enabled) return;
+    if (proof.code === undefined && proof.recoveryCode === undefined) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        message: 'Confirm with a current authenticator code or a recovery code',
+        code: 'totp_code_required',
+      });
+    }
+    await this.attempt(userId, () =>
+      proof.code !== undefined
+        ? this.useTotp(userId, proof.code)
+        : this.useRecoveryCode(userId, proof.recoveryCode!),
+    );
+  }
+
+  /** Unused recovery codes; 0 without TOTP. */
+  async recoveryCodesRemaining(userId: string): Promise<{ remaining: number }> {
+    const [{ remaining }] = await this.db.query(
+      `SELECT count(*)::int AS remaining FROM recovery_codes r
+       WHERE r.user_id = $1 AND r.used_at IS NULL
+         AND EXISTS (SELECT 1 FROM factors
+           WHERE user_id = $1 AND kind = 'totp' AND confirmed_at IS NOT NULL)`,
+      [userId],
+    );
+    return { remaining };
+  }
+
+  /**
+   * New recovery codes for a current TOTP code (a recovery code cannot mint
+   * more); the old ones stop working. The codes are returned only here.
+   */
+  async regenerateRecoveryCodes(
+    session: OrgSession,
+    code: string,
+    client: Client,
+  ): Promise<{ recoveryCodes: Array<string> }> {
+    const { userId } = session;
+    await this.attempt(userId, () => this.useTotp(userId, code));
+    const recoveryCodes = Array.from(
+      { length: RECOVERY_CODES },
+      newRecoveryCode,
+    );
+    await this.db.transaction(async (em) => {
+      await this.lockUser(em, userId);
+      // removed between the code check and the lock
+      if (!(await this.confirmedFactor(em, userId))) {
+        throw new UnauthorizedException('Invalid code');
+      }
+      await em.query(`DELETE FROM recovery_codes WHERE user_id = $1`, [userId]);
+      await em.query(
+        `INSERT INTO recovery_codes (user_id, code_hash)
+         SELECT $1, unnest($2::text[])`,
+        [userId, recoveryCodes.map(hashRecoveryCode)],
+      );
+      await this.securityEvents.record(
+        userId,
+        'security.recovery_codes_regenerated',
+        {},
+        client.ip,
+        client.userAgent,
+        em,
+      );
+    });
+    return { recoveryCodes };
+  }
+
+  /**
+   * Caller is behind `@RequireStrongAuth()` and passed
+   * {@link requireCurrentFactor}. Removes the factor and its recovery codes
+   * and revokes the user's other sessions.
    */
   async remove(session: OrgSession, client: Client): Promise<void> {
     const { userId } = session;

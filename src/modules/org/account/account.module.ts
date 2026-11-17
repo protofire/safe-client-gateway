@@ -5,10 +5,11 @@ import { LinkIdentityController } from '@/modules/org/account/link-identity.cont
 import { ActivityModule } from '@/modules/org/activity/activity.module';
 import { OrgEmailOtpModule } from '@/modules/org/auth/email-otp/email-otp.module';
 import { OrgOidcModule } from '@/modules/org/auth/oidc/oidc.module';
+import { OrgTotpModule } from '@/modules/org/auth/totp/totp.module';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
 
 @Module({
-  imports: [ActivityModule, OrgOidcModule, OrgEmailOtpModule],
+  imports: [ActivityModule, OrgOidcModule, OrgEmailOtpModule, OrgTotpModule],
   controllers: [AccountController, LinkIdentityController],
   providers: [AccountService, OrgTransaction],
 })

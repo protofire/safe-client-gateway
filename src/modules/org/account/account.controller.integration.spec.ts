@@ -1,5 +1,8 @@
+import { totpCode } from '@/modules/org/auth/__tests__/auth-test-app';
+import { sha256Hex } from '@/modules/org/crypto/hashing';
 import {
   createOrgTestApp,
+  TEST_TOTP_SECRET,
   type OrgTestApp,
   type TestUser,
 } from '@/modules/org/orgs/__tests__/org-test-app';
@@ -42,10 +45,22 @@ describe('account deletion (org)', () => {
       `INSERT INTO factors (user_id, kind, secret_encrypted, confirmed_at) VALUES ($1, 'totp', 'x', now())`,
       [b.userId],
     );
+    await t.sql.query(
+      `INSERT INTO recovery_codes (user_id, code_hash) VALUES ($1, $2)`,
+      [b.userId, sha256Hex('aaaaabbbbbcccccddddd')],
+    );
 
-    await deleteAccount(b).expect(204);
+    await deleteAccount(b)
+      .send({ recoveryCode: 'aaaaa-bbbbb-ccccc-ddddd' })
+      .expect(204);
 
-    for (const table of ['identities', 'factors', 'sessions', 'members']) {
+    for (const table of [
+      'identities',
+      'factors',
+      'recovery_codes',
+      'sessions',
+      'members',
+    ]) {
       expect(
         await t.sql.query(`SELECT 1 FROM ${table} WHERE user_id = $1`, [
           b.userId,
@@ -66,6 +81,28 @@ describe('account deletion (org)', () => {
     const res = await deleteAccount(user).expect(403);
 
     expect(res.body.code).toBe('step_up_required');
+  });
+
+  it('asks a user with TOTP for a current code or recovery code as well (403 totp_code_required, 401 wrong)', async () => {
+    const user = await t.user({ email: 'totp-del@example.com', totp: true });
+
+    const missing = await deleteAccount(user).expect(403);
+    expect(missing.body.code).toBe('totp_code_required');
+    const right = totpCode(TEST_TOTP_SECRET, new Date());
+    await deleteAccount(user)
+      .send({ code: right === '000000' ? '111111' : '000000' })
+      .expect(401);
+    await t
+      .http()
+      .get('/v1/orgs/auth/me')
+      .set('Cookie', user.cookie)
+      .expect(200);
+
+    await deleteAccount(user).send({ code: right }).expect(204);
+    const [row] = await t.sql.query(`SELECT status FROM users WHERE id = $1`, [
+      user.userId,
+    ]);
+    expect(row.status).toBe('deleted');
   });
 
   it('blocks the last admin from deleting their account', async () => {

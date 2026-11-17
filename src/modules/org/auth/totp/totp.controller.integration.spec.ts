@@ -1,4 +1,4 @@
-import { createHmac, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import type request from 'supertest';
 import type { DataSource } from 'typeorm';
 import { OrgTotpModule } from '@/modules/org/auth/totp/totp.module';
@@ -7,27 +7,11 @@ import {
   createAuthTestApp,
   MINUTE,
   seedUser,
+  totpCode,
   type AuthTestApp,
 } from '@/modules/org/auth/__tests__/auth-test-app';
 import { SecurityEvents } from '@/modules/org/auth/security-events';
 import { sha256Hex } from '@/modules/org/crypto/hashing';
-
-// Independent RFC 6238 generator (SHA-1, 6 digits, 30 s), so the test does not trust totp.ts
-function totpCode(secretBase32: string, at: Date): string {
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-  let bits = '';
-  for (const ch of secretBase32)
-    bits += alphabet.indexOf(ch).toString(2).padStart(5, '0');
-  const key = Buffer.from(bits.match(/.{8}/g)!.map((b) => parseInt(b, 2)));
-  const counter = Buffer.alloc(8);
-  counter.writeBigUInt64BE(BigInt(Math.floor(at.getTime() / 30_000)));
-  const mac = createHmac('sha1', key).update(counter).digest();
-  const offset = mac[mac.length - 1] & 0x0f;
-  return String((mac.readUInt32BE(offset) & 0x7fffffff) % 1_000_000).padStart(
-    6,
-    '0',
-  );
-}
 
 type Enrolled = {
   userId: string;
@@ -299,7 +283,11 @@ describe('TOTP factors (org)', () => {
       .send({ code: totpCode(user.secret, at()) })
       .expect(200);
     const cookie = cookieFrom(stepUp, '__Host-org_session');
-    await t.del('/v1/orgs/auth/totp').set('Cookie', cookie).expect(204);
+    await t
+      .del('/v1/orgs/auth/totp')
+      .set('Cookie', cookie)
+      .send({ recoveryCode: user.recoveryCodes[0] })
+      .expect(204);
 
     expect((await me(cookie)).hasTotp).toBe(false);
     const [{ n }] = await t.sql.query(
@@ -379,7 +367,11 @@ describe('TOTP factors (org)', () => {
     await t.http().get('/v1/orgs/auth/me').set('Cookie', other).expect(401);
 
     const later = await addSession(t.sql, user.userId);
-    await t.del('/v1/orgs/auth/totp').set('Cookie', current).expect(204);
+    await t
+      .del('/v1/orgs/auth/totp')
+      .set('Cookie', current)
+      .send({ recoveryCode: (confirm.body.recoveryCodes as Array<string>)[0] })
+      .expect(204);
     await t.http().get('/v1/orgs/auth/me').set('Cookie', later).expect(401);
     await t.http().get('/v1/orgs/auth/me').set('Cookie', current).expect(200);
   });
@@ -419,10 +411,127 @@ describe('TOTP factors (org)', () => {
       await t
         .del('/v1/orgs/auth/totp')
         .set('Cookie', enrolledUser.cookie)
+        .send({ recoveryCode: enrolledUser.recoveryCodes[0] })
         .expect(500);
     } finally {
       failingRemove.mockRestore();
     }
     expect((await me(enrolledUser.cookie)).hasTotp).toBe(true);
+  });
+
+  describe('2FA hardening', () => {
+    const remaining = async (cookie: string): Promise<number> =>
+      (
+        await t
+          .http()
+          .get('/v1/orgs/auth/totp/recovery-codes')
+          .set('Cookie', cookie)
+          .expect(200)
+      ).body.remaining;
+
+    it('refuses to remove TOTP without a current code (403) or with a wrong one (401), even after step-up', async () => {
+      const user = await enrolled();
+
+      const missing = await t
+        .del('/v1/orgs/auth/totp')
+        .set('Cookie', user.cookie)
+        .expect(403);
+      expect(missing.body.code).toBe('totp_code_required');
+      const wrong =
+        totpCode(user.secret, at()) === '000000' ? '111111' : '000000';
+      await t
+        .del('/v1/orgs/auth/totp')
+        .set('Cookie', user.cookie)
+        .send({ code: wrong })
+        .expect(401);
+      await t
+        .del('/v1/orgs/auth/totp')
+        .set('Cookie', user.cookie)
+        .send({ code: '1', recoveryCode: user.recoveryCodes[0] })
+        .expect(400);
+      expect((await me(user.cookie)).hasTotp).toBe(true);
+
+      // confirm used the current step: the next one removes it
+      shift(30_000);
+      await t
+        .del('/v1/orgs/auth/totp')
+        .set('Cookie', user.cookie)
+        .send({ code: totpCode(user.secret, at()) })
+        .expect(204);
+      expect((await me(user.cookie)).hasTotp).toBe(false);
+    });
+
+    it('counts unused recovery codes; 0 without TOTP', async () => {
+      const plain = await seedUser(t.sql);
+      expect(await remaining(plain.cookie)).toBe(0);
+      const user = await enrolled();
+      expect(await remaining(user.cookie)).toBe(10);
+
+      await t
+        .post('/v1/orgs/auth/step-up/totp')
+        .set('Cookie', user.cookie)
+        .send({ recoveryCode: user.recoveryCodes[0] })
+        .expect(200)
+        .then((r) => (user.cookie = cookieFrom(r, '__Host-org_session')));
+
+      expect(await remaining(user.cookie)).toBe(9);
+    });
+
+    it('regenerates recovery codes for a current TOTP code only, once, invalidating the old ones', async () => {
+      const user = await enrolled();
+      shift(30_000);
+      // a recovery code cannot mint new ones
+      await t
+        .post('/v1/orgs/auth/totp/recovery-codes/regenerate')
+        .set('Cookie', user.cookie)
+        .send({ recoveryCode: user.recoveryCodes[0] })
+        .expect(422);
+      await t
+        .post('/v1/orgs/auth/totp/recovery-codes/regenerate')
+        .set('Cookie', user.cookie)
+        .send({ code: '000000' === totpCode(user.secret, at()) ? '111111' : '000000' })
+        .expect(401);
+
+      const res = await t
+        .post('/v1/orgs/auth/totp/recovery-codes/regenerate')
+        .set('Cookie', user.cookie)
+        .send({ code: totpCode(user.secret, at()) })
+        .expect(200);
+
+      const fresh = res.body.recoveryCodes as Array<string>;
+      expect(fresh).toHaveLength(10);
+      expect(fresh.filter((c) => user.recoveryCodes.includes(c))).toEqual([]);
+      expect(await remaining(user.cookie)).toBe(10);
+      await t
+        .post('/v1/orgs/auth/step-up/totp')
+        .set('Cookie', user.cookie)
+        .send({ recoveryCode: user.recoveryCodes[1] })
+        .expect(401);
+      await t
+        .post('/v1/orgs/auth/step-up/totp')
+        .set('Cookie', user.cookie)
+        .send({ recoveryCode: fresh[0] })
+        .expect(200);
+      const events: Array<{ type: string }> = await t.sql.query(
+        `SELECT type FROM user_security_events WHERE user_id = $1 AND type = 'security.recovery_codes_regenerated'`,
+        [user.userId],
+      );
+      expect(events).toHaveLength(1);
+      // the same step cannot regenerate twice
+      await t
+        .post('/v1/orgs/auth/totp/recovery-codes/regenerate')
+        .set('Cookie', user.cookie)
+        .send({ code: totpCode(user.secret, at()) })
+        .expect(401);
+    });
+
+    it('answers 401 to a regenerate without TOTP', async () => {
+      const user = await seedUser(t.sql);
+      await t
+        .post('/v1/orgs/auth/totp/recovery-codes/regenerate')
+        .set('Cookie', user.cookie)
+        .send({ code: '123456' })
+        .expect(401);
+    });
   });
 });
