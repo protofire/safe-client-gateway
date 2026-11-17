@@ -417,6 +417,12 @@ describe('TOTP factors (org)', () => {
       failingRemove.mockRestore();
     }
     expect((await me(enrolledUser.cookie)).hasTotp).toBe(true);
+    // the failed removal did not spend the recovery code
+    const [{ unused }] = await t.sql.query(
+      `SELECT count(*)::int AS unused FROM recovery_codes WHERE user_id = $1 AND used_at IS NULL`,
+      [enrolledUser.userId],
+    );
+    expect(unused).toBe(10);
   });
 
   describe('2FA hardening', () => {

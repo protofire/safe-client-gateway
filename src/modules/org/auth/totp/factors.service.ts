@@ -192,13 +192,15 @@ export class FactorsService {
    * For destructive account changes (TOTP removal, account deletion), on top
    * of step-up: a user with confirmed TOTP proves possession again in the
    * same request. 403 `totp_code_required` without a proof, 401 for a wrong
-   * one (counts toward the TOTP failure limit). The proof is spent.
+   * one (counts toward the TOTP failure limit). Pass the change's transaction
+   * as `em`, after its own checks: the proof is spent only if it commits.
    */
   async requireCurrentFactor(
     userId: string,
     proof: FactorProof,
+    em: Pick<EntityManager, 'query'> = this.db,
   ): Promise<void> {
-    const [{ enabled }] = await this.db.query(
+    const [{ enabled }] = await em.query(
       `SELECT EXISTS (SELECT 1 FROM factors WHERE user_id = $1 AND kind = 'totp'
          AND confirmed_at IS NOT NULL) AS enabled`,
       [userId],
@@ -213,8 +215,8 @@ export class FactorsService {
     }
     await this.attempt(userId, () =>
       proof.code !== undefined
-        ? this.useTotp(userId, proof.code)
-        : this.useRecoveryCode(userId, proof.recoveryCode!),
+        ? this.useTotp(userId, proof.code, em)
+        : this.useRecoveryCode(userId, proof.recoveryCode!, em),
     );
   }
 
@@ -270,14 +272,20 @@ export class FactorsService {
   }
 
   /**
-   * Caller is behind `@RequireStrongAuth()` and passed
-   * {@link requireCurrentFactor}. Removes the factor and its recovery codes
+   * Caller is behind `@RequireStrongAuth()`; checks `proof` with
+   * {@link requireCurrentFactor} in the same transaction. Removes the factor and its recovery codes
    * and revokes the user's other sessions.
    */
-  async remove(session: OrgSession, client: Client): Promise<void> {
+  async remove(
+    session: OrgSession,
+    client: Client,
+    proof: FactorProof,
+  ): Promise<void> {
     const { userId } = session;
     await this.db.transaction(async (em) => {
       await this.lockUser(em, userId);
+      // in the removal's transaction: a failed removal does not spend it
+      await this.requireCurrentFactor(userId, proof, em);
       await em.query(`DELETE FROM factors WHERE user_id = $1`, [userId]);
       await em.query(`DELETE FROM recovery_codes WHERE user_id = $1`, [userId]);
       // without a wallet the user has no strong factor left: this session is
@@ -306,12 +314,16 @@ export class FactorsService {
   }
 
   /** A7: the step is accepted by exactly one caller. */
-  private async useTotp(userId: string, code: string): Promise<boolean> {
+  private async useTotp(
+    userId: string,
+    code: string,
+    em: Pick<EntityManager, 'query'> = this.db,
+  ): Promise<boolean> {
     const [factor]: Array<{
       id: string;
       secret: string;
       lastUsedStep: string | null;
-    }> = await this.db.query(
+    }> = await em.query(
       `SELECT id, secret_encrypted AS "secret", last_used_step AS "lastUsedStep"
        FROM factors WHERE user_id = $1 AND confirmed_at IS NOT NULL`,
       [userId],
@@ -325,7 +337,7 @@ export class FactorsService {
       factor.lastUsedStep === null ? null : Number(factor.lastUsedStep),
     );
     if (!check.ok) return false;
-    const [, updated] = await this.db.query(
+    const [, updated] = await em.query(
       `UPDATE factors SET last_used_step = $2, updated_at = $3
        WHERE id = $1 AND (last_used_step IS NULL OR last_used_step < $2)`,
       [factor.id, check.step, now],
@@ -337,8 +349,9 @@ export class FactorsService {
   private async useRecoveryCode(
     userId: string,
     code: string,
+    em: Pick<EntityManager, 'query'> = this.db,
   ): Promise<boolean> {
-    const [, updated] = await this.db.query(
+    const [, updated] = await em.query(
       `UPDATE recovery_codes SET used_at = $3, updated_at = $3
        WHERE code_hash = $1 AND user_id = $2 AND used_at IS NULL
          AND EXISTS (SELECT 1 FROM factors

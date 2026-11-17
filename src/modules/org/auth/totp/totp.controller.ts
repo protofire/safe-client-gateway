@@ -95,8 +95,7 @@ export class TotpController {
     @Body() body: unknown,
   ): Promise<void> {
     const proof: FactorProof = parse(FactorProofSchema, body ?? {});
-    await this.factors.requireCurrentFactor(session.userId, proof);
-    await this.factors.remove(session, client(req));
+    await this.factors.remove(session, client(req), proof);
   }
 
   @Get('totp/recovery-codes')

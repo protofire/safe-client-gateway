@@ -1,4 +1,5 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import type { EntityManager } from 'typeorm';
 import { ActivityLog } from '@/modules/org/activity/activity-log.service';
 import type { OrgSession } from '@/modules/org/auth/decorators';
 import { SecurityEvents } from '@/modules/org/auth/security-events';
@@ -101,7 +102,15 @@ export class AccountService {
     return { displayName };
   }
 
-  async delete(userId: string): Promise<void> {
+  /**
+   * `confirm` runs in the deletion's transaction after the last-admin check
+   * (so a refused deletion does not spend a TOTP or recovery code); a wrong
+   * proof rolls everything back.
+   */
+  async delete(
+    userId: string,
+    confirm: (em: EntityManager) => Promise<void> = async () => {},
+  ): Promise<void> {
     const now = this.clock.now();
     try {
       await this.tx.runInOrgTx(async (em) => {
@@ -153,6 +162,10 @@ export class AccountService {
           });
         }
         await em.query(`DELETE FROM members WHERE user_id = $1`, [userId]);
+        // the last-admin trigger checks now instead of at commit, so a
+        // refused deletion fails before `confirm` spends a code
+        await em.query(`SET CONSTRAINTS members_keep_one_admin IMMEDIATE`);
+        await confirm(em);
         for (const table of [
           'identities',
           'factors',

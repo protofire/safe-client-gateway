@@ -467,7 +467,7 @@ describe('route order of static org routes', () => {
         .delete('/v1/orgs/account')
         .set('Cookie', '__Host-org_session=token')
         .expect(204);
-      expect(deleteAccount).toHaveBeenCalledWith('user-1');
+      expect(deleteAccount).toHaveBeenCalledWith('user-1', expect.any(Function));
       await request(app.getHttpServer())
         .post('/v1/orgs/invitations/accept')
         .set('Cookie', '__Host-org_session=token')
