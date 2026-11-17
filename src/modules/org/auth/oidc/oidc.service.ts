@@ -20,6 +20,7 @@ import {
 import { SecurityEvents } from '@/modules/org/auth/security-events';
 import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
 import { Clock, type IClock } from '@/modules/org/common/clock';
+import { DisplayName } from '@/modules/org/common/display-text';
 import { ipBucket, RateLimiter } from '@/modules/org/common/rate-limiter';
 import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
 import {
@@ -45,6 +46,8 @@ export type VerifiedIdentity = {
   issuer: string;
   subject: string;
   email: string;
+  /** The issuer's profile name; seeds the display name of a new user. */
+  name?: string;
 };
 type Client = { ip: string; userAgent: string | null };
 
@@ -218,7 +221,7 @@ export class OidcService {
       throw new CallbackError('failed');
     }
 
-    let identity: { subject: string; email: string; authTime?: number };
+    let identity: Awaited<ReturnType<OidcClient['signIn']>>;
     try {
       identity = await this.client.signIn(
         args.code,
@@ -232,6 +235,7 @@ export class OidcService {
       issuer: this.client.issuerId,
       subject: identity.subject,
       email: identity.email,
+      name: identity.name,
     };
     const redirectUrl = new URL(record.returnTo, this.postLoginRedirect);
     if (linkUserId !== undefined) {
@@ -403,8 +407,11 @@ export class OidcService {
     if (existing) return known(existing);
     try {
       return await this.db.transaction(async (em) => {
+        // a profile name that breaks the display-name rules is dropped, not fixed
+        const displayName = DisplayName.safeParse(identity.name).data ?? null;
         const [{ id }] = await em.query(
-          `INSERT INTO users DEFAULT VALUES RETURNING id`,
+          `INSERT INTO users (display_name) VALUES ($1) RETURNING id`,
+          [displayName],
         );
         const [created] = await em.query(
           `INSERT INTO identities (user_id, kind, oidc_issuer, oidc_subject, email_encrypted, email_hash)

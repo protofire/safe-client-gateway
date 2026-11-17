@@ -74,12 +74,18 @@ export class OidcClient {
   /**
    * Code → verified identity. Requires `email_verified === true`.
    * `authTime`: the `auth_time` claim (seconds), when a number.
+   * `name`: the `profile` scope's `name` claim, when a string.
    */
   async signIn(
     code: string,
     verifier: string,
     nonce: string,
-  ): Promise<{ subject: string; email: string; authTime?: number }> {
+  ): Promise<{
+    subject: string;
+    email: string;
+    name?: string;
+    authTime?: number;
+  }> {
     const { tokenEndpoint, jwks } = await this.discover();
     const res = await fetch(tokenEndpoint, {
       method: 'POST',
@@ -118,6 +124,7 @@ export class OidcClient {
     return {
       subject: payload.sub,
       email: payload.email,
+      ...(typeof payload.name === 'string' ? { name: payload.name } : {}),
       ...(typeof payload.auth_time === 'number'
         ? { authTime: payload.auth_time }
         : {}),

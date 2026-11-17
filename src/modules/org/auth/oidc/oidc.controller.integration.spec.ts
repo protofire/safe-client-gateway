@@ -237,6 +237,38 @@ describe('OIDC sign-in (org)', () => {
     });
   });
 
+  it("seeds a new user's display name from the profile name; drops an invalid one; never overwrites on later sign-ins", async () => {
+    const nameOf = async (res: request.Response): Promise<string | null> =>
+      (
+        await t
+          .http()
+          .get('/v1/orgs/auth/me')
+          .set('Cookie', cookieFrom(res, '__Host-org_session'))
+          .expect(200)
+      ).body.user.displayName;
+
+    // the DB is not reset between tests: a fresh email is a fresh subject
+    mock.setClaims({ name: '  Alice Liddell ' });
+    expect(
+      await nameOf(
+        await callback(...withCookie(await start('', 'liddell@example.com'))),
+      ),
+    ).toBe('Alice Liddell');
+    mock.setClaims({ name: 'Someone Else' });
+    expect(
+      await nameOf(
+        await callback(...withCookie(await start('', 'liddell@example.com'))),
+      ),
+    ).toBe('Alice Liddell');
+
+    mock.setClaims({ name: '0xabc123' });
+    expect(
+      await nameOf(
+        await callback(...withCookie(await start('', 'hex@example.com'))),
+      ),
+    ).toBeNull();
+  });
+
   it('adds orgLinkHint=1 when another user signs in with a code to the same email, and never merges', async () => {
     const key = Buffer.from(
       t.app
