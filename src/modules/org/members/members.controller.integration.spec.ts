@@ -451,6 +451,9 @@ describe('members and invitations (org)', () => {
       await t.addMember(orgId, member, 'member');
       const invitedEmail = `carol.${randomBytes(3).toString('hex')}@example.com`;
       await inviteEmail(orgId, admin, invitedEmail);
+      await t.sql.query(`UPDATE users SET display_name = 'Boss' WHERE id = $1`, [
+        admin.userId,
+      ]);
 
       const asAdmin = (
         await t
@@ -474,6 +477,7 @@ describe('members and invitations (org)', () => {
           status: 'active',
           role: 'admin',
           identity: { kind: 'email', value: adminEmail },
+          displayName: 'Boss',
         },
         {
           id: expect.any(String),
@@ -481,6 +485,7 @@ describe('members and invitations (org)', () => {
           status: 'active',
           role: 'member',
           identity: { kind: 'wallet', value: member.wallet },
+          displayName: null,
         },
         {
           id: expect.any(String),
@@ -488,6 +493,7 @@ describe('members and invitations (org)', () => {
           status: 'invited',
           role: 'member',
           identity: { kind: 'email', value: invitedEmail },
+          displayName: null,
           invitedAt: expect.any(String),
           expiresAt: expect.any(String),
         },

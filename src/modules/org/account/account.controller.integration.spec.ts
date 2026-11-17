@@ -138,4 +138,107 @@ describe('account deletion (org)', () => {
     );
     expect(row).toEqual({ actorUserId: b.userId, ip: null, ua: null });
   });
+
+  describe('display name', () => {
+    const setName = (user: TestUser, displayName: unknown): ReturnType<OrgTestApp['patch']> =>
+      t.patch('/v1/orgs/account').set('Cookie', user.cookie).send({ displayName });
+
+    it('sets a trimmed name, shows it in members, /auth/me and the activity actor, and clears it with null', async () => {
+      const { orgId, a, b } = await twoAdmins();
+
+      const res = await setName(b, '  Bob Builder ').expect(200);
+
+      expect(res.body).toEqual({ displayName: 'Bob Builder' });
+      const me = await t
+        .http()
+        .get('/v1/orgs/auth/me')
+        .set('Cookie', b.cookie)
+        .expect(200);
+      expect(me.body.user).toEqual({ id: b.userId, displayName: 'Bob Builder' });
+      const members = await t
+        .http()
+        .get(`/v1/orgs/${orgId}/members`)
+        .set('Cookie', a.cookie)
+        .expect(200);
+      const named = (
+        members.body as Array<{ userId: string; displayName: string | null }>
+      ).map((m) => [m.userId, m.displayName]);
+      expect(named).toEqual(
+        expect.arrayContaining([
+          [a.userId, null],
+          [b.userId, 'Bob Builder'],
+        ]),
+      );
+      const activity = await t
+        .http()
+        .get(`/v1/orgs/${orgId}/activity?type=security.display_name_changed`)
+        .set('Cookie', a.cookie)
+        .expect(200);
+      expect(activity.body.items).toEqual([
+        expect.objectContaining({
+          actorUserId: b.userId,
+          actorDisplayName: 'Bob Builder',
+          payload: { cleared: false },
+        }),
+      ]);
+
+      await setName(b, null).expect(200, { displayName: null });
+      const [row] = await t.sql.query(
+        `SELECT display_name FROM users WHERE id = $1`,
+        [b.userId],
+      );
+      expect(row.display_name).toBeNull();
+    });
+
+    it.each([
+      ['empty after trim', '   '],
+      ['longer than 64', 'x'.repeat(65)],
+      ['a control character', 'Bob\u0007'],
+      ['not a string', 42],
+    ])('rejects a name that is %s with 400', async (_, value) => {
+      const user = await t.user({ wallet: true });
+      await setName(user, value).expect(400);
+    });
+
+    it('needs no step-up and changes only the caller', async () => {
+      const a = await t.user({ wallet: true, strong: false });
+      const b = await t.user({ wallet: true });
+
+      await setName(a, 'Alice').expect(200);
+
+      const rows: Array<{ id: string; displayName: string | null }> =
+        await t.sql.query(
+          `SELECT id, display_name AS "displayName" FROM users WHERE id = ANY($1)`,
+          [[a.userId, b.userId]],
+        );
+      expect(
+        Object.fromEntries(rows.map((r) => [r.id, r.displayName])),
+      ).toEqual({
+        [a.userId]: 'Alice',
+        [b.userId]: null,
+      });
+    });
+
+    it('erases the name when the account is deleted', async () => {
+      const { orgId, a, b } = await twoAdmins();
+      await setName(b, 'Bob').expect(200);
+
+      await deleteAccount(b).expect(204);
+
+      const [row] = await t.sql.query(
+        `SELECT display_name FROM users WHERE id = $1`,
+        [b.userId],
+      );
+      expect(row.display_name).toBeNull();
+      const activity = await t
+        .http()
+        .get(`/v1/orgs/${orgId}/activity?type=security.display_name_changed`)
+        .set('Cookie', a.cookie)
+        .expect(200);
+      expect(activity.body.items[0]).toMatchObject({
+        actorUserId: null,
+        actorDisplayName: null,
+      });
+    });
+  });
 });

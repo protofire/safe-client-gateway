@@ -1,16 +1,50 @@
-import { Controller, Delete, HttpCode, Res } from '@nestjs/common';
-import type { Response } from 'express';
+import {
+  Body,
+  Controller,
+  Delete,
+  HttpCode,
+  Patch,
+  Req,
+  Res,
+} from '@nestjs/common';
+import type { Request, Response } from 'express';
+import { z } from 'zod';
 import { AccountService } from '@/modules/org/account/account.service';
 import { OrgSession, RequireStrongAuth } from '@/modules/org/auth/decorators';
+import { OrgApiBody } from '@/modules/org/common/org-api-body.decorator';
+import { client, parse } from '@/modules/org/orgs/parse';
 import {
   SESSION_COOKIE,
   SESSION_COOKIE_OPTIONS,
 } from '@/modules/org/auth/session.guard';
 
+export const DisplayNameSchema = z.object({
+  // null clears it
+  displayName: z
+    .string()
+    .trim()
+    .min(1)
+    .max(64)
+    .refine((v) => !/\p{Cc}/u.test(v), { error: 'No control characters' })
+    .nullable(),
+});
+
 /** Static `/v1/orgs/account` routes: registered before any `:orgId` controller. */
 @Controller({ path: 'orgs/account', version: '1' })
 export class AccountController {
   constructor(private readonly account: AccountService) {}
+
+  /** The caller's own display name, shown to the other members of their orgs. */
+  @Patch()
+  @OrgApiBody(DisplayNameSchema)
+  setDisplayName(
+    @OrgSession() session: OrgSession,
+    @Body() body: unknown,
+    @Req() req: Request,
+  ): Promise<{ displayName: string | null }> {
+    const { displayName } = parse(DisplayNameSchema, body);
+    return this.account.setDisplayName(session.userId, displayName, client(req));
+  }
 
   /** 409 `last_admin` while the user is the last admin of any org. */
   @Delete()

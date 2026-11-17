@@ -267,8 +267,9 @@ export class OidcService {
     identity: VerifiedIdentity,
     client: Client,
   ): Promise<{ userId: string; token: string; linkHint: boolean } | null> {
-    const userId = await this.findOrCreateUser(identity);
-    if (userId === null) return null;
+    const found = await this.findOrCreateUser(identity);
+    if (found === null) return null;
+    const { userId, identityId } = found;
     const method = identity.issuer === EMAIL_OTP_ISSUER ? 'email_otp' : 'oidc';
     const { token } = await this.sessions.create({
       userId,
@@ -278,6 +279,7 @@ export class OidcService {
       idleTtlSeconds: this.idleTtlSeconds,
       absoluteTtlSeconds: this.absoluteTtlSeconds,
       userAgent: client.userAgent,
+      identityId,
     });
     await this.securityEvents.record(
       userId,
@@ -365,7 +367,7 @@ export class OidcService {
    */
   private async findOrCreateUser(
     identity: VerifiedIdentity,
-  ): Promise<string | null> {
+  ): Promise<{ userId: string; identityId: string } | null> {
     const { issuer, subject } = identity;
     const emailEncrypted = this.encryption.encrypt(identity.email);
     const emailHash = hmacEmail(identity.email, this.emailHashKey);
@@ -384,16 +386,17 @@ export class OidcService {
       id: string;
       userId: string;
       status: string;
-    }): Promise<string | null> => {
+    }): Promise<{ userId: string; identityId: string } | null> => {
       if (row.status !== 'active') return null;
+      const found = { userId: row.userId, identityId: row.id };
       // the IdP may have changed the address since the last sign-in; an
       // email-code identity is its address (subject = email HMAC)
-      if (issuer === EMAIL_OTP_ISSUER) return row.userId;
+      if (issuer === EMAIL_OTP_ISSUER) return found;
       await this.db.query(
         `UPDATE identities SET email_encrypted = $2, email_hash = $3, updated_at = $4 WHERE id = $1`,
         [row.id, emailEncrypted, emailHash, this.clock.now()],
       );
-      return row.userId;
+      return found;
     };
 
     const existing = await find();
@@ -403,12 +406,12 @@ export class OidcService {
         const [{ id }] = await em.query(
           `INSERT INTO users DEFAULT VALUES RETURNING id`,
         );
-        await em.query(
+        const [created] = await em.query(
           `INSERT INTO identities (user_id, kind, oidc_issuer, oidc_subject, email_encrypted, email_hash)
-           VALUES ($1, 'oidc', $2, $3, $4, $5)`,
+           VALUES ($1, 'oidc', $2, $3, $4, $5) RETURNING id`,
           [id, issuer, subject, emailEncrypted, emailHash],
         );
-        return id as string;
+        return { userId: id as string, identityId: created.id as string };
       });
     } catch (error) {
       // a concurrent first sign-in of the same identity won the unique index

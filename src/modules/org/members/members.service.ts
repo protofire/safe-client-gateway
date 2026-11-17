@@ -39,6 +39,7 @@ export type MemberView = {
   status: 'invited' | 'active' | 'declined';
   role: string | null;
   identity: { kind: 'wallet' | 'email'; value: string };
+  displayName: string | null;
   invitedAt?: string;
   expiresAt?: string;
 };
@@ -64,6 +65,7 @@ export function toMemberView(
       row.identity.kind === 'email' && !full
         ? { kind: 'email', value: maskEmail(row.identity.value) }
         : row.identity,
+    displayName: row.displayName,
     ...(row.status === 'invited' && row.invitedAt
       ? { invitedAt: new Date(row.invitedAt).toISOString() }
       : {}),

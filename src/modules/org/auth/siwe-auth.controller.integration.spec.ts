@@ -233,7 +233,7 @@ describe('SIWE auth (org)', () => {
       .set('Cookie', sessionCookie(res))
       .expect(200);
     expect(me.body).toEqual({
-      user: { id: res.body.user.id },
+      user: { id: res.body.user.id, displayName: null },
       identities: [
         {
           id: expect.any(String),
@@ -241,6 +241,7 @@ describe('SIWE auth (org)', () => {
           walletAddress: privateKeyToAccount(pk).address,
         },
       ],
+      sessionIdentityId: me.body.identities[0].id,
       hasTotp: false,
       lastStrongAuthAt: expect.any(String),
       canCreateOrganization: true,

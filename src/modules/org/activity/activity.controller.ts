@@ -52,6 +52,7 @@ type Row = {
   type: string;
   actor_user_id: string | null;
   actor_status: string | null;
+  actor_display_name: string | null;
   target_type: string | null;
   target_id: string | null;
   payload: Record<string, unknown>;
@@ -210,6 +211,7 @@ export class ActivityController {
     params.push(limit);
     return this.dataSource.query(
       `SELECT e.id, e.type, e.actor_user_id, u.status AS actor_status,
+              u.display_name AS actor_display_name,
               e.target_type, e.target_id, e.payload, e.ip_encrypted, e.user_agent,
               to_char(e.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at
          FROM activity_events e
@@ -231,6 +233,8 @@ export class ActivityController {
       id: row.id,
       type: row.type,
       actorUserId,
+      // read now, never copied into the event: a rename shows everywhere
+      actorDisplayName: deleted ? null : row.actor_display_name,
       targetType: row.target_type,
       targetId: row.target_id,
       payload: row.payload,

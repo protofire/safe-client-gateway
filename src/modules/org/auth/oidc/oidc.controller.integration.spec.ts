@@ -150,7 +150,7 @@ describe('OIDC sign-in (org)', () => {
       .set('Cookie', session)
       .expect(200);
     expect(me.body).toEqual({
-      user: { id: expect.any(String) },
+      user: { id: expect.any(String), displayName: null },
       identities: [
         {
           id: expect.any(String),
@@ -159,6 +159,7 @@ describe('OIDC sign-in (org)', () => {
           email: 'alice@example.com',
         },
       ],
+      sessionIdentityId: me.body.identities[0].id,
       hasTotp: false,
       lastStrongAuthAt: null,
       canCreateOrganization: true,

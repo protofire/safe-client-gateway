@@ -28,6 +28,8 @@ export class SessionsRepository {
     idleTtlSeconds: number;
     absoluteTtlSeconds: number;
     userAgent: string | null;
+    /** The identity the user signed in with (`/auth/me` marks it current). */
+    identityId: string;
   }): Promise<{ id: string; token: string }> {
     const token = generateToken();
     const expiresAt = addSeconds(args.now, args.absoluteTtlSeconds);
@@ -37,8 +39,8 @@ export class SessionsRepository {
     );
     const [{ id }] = await this.db.query(
       `INSERT INTO sessions (user_id, token_hash, amr, last_strong_auth_at,
-         expires_at, idle_expires_at, user_agent, created_at, updated_at)
-       VALUES ($1, $2, $3, $8, $5, $6, $7, $4, $4) RETURNING id`,
+         expires_at, idle_expires_at, user_agent, identity_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $8, $5, $6, $7, $9, $4, $4) RETURNING id`,
       [
         args.userId,
         sha256Hex(token),
@@ -48,6 +50,7 @@ export class SessionsRepository {
         idleExpiresAt,
         args.userAgent,
         args.strong ? args.now : null,
+        args.identityId,
       ],
     );
     return { id, token };

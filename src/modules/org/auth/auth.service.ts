@@ -38,11 +38,13 @@ const WINDOW_SECONDS = 60;
 const UNIQUE_VIOLATION = '23505';
 
 export type MeDto = {
-  user: { id: string };
+  user: { id: string; displayName: string | null };
   identities: Array<
     | { id: string; kind: 'wallet'; walletAddress: string }
     | { id: string; kind: 'oidc'; issuer: string; email: string | null }
   >;
+  /** The identity this session signed in with; null if since removed. */
+  sessionIdentityId: string | null;
   hasTotp: boolean;
   lastStrongAuthAt: string | null;
   canCreateOrganization: boolean;
@@ -122,7 +124,7 @@ export class AuthService {
     attempt: Attempt & { userAgent: string | null },
   ): Promise<{ userId: string; token: string }> {
     const address = await this.verifySiwe(attempt);
-    const userId = await this.findOrCreateWalletUser(address);
+    const { userId, identityId } = await this.findOrCreateWalletUser(address);
     const [user] = await this.db.query(
       `SELECT status FROM users WHERE id = $1`,
       [userId],
@@ -138,6 +140,7 @@ export class AuthService {
       idleTtlSeconds: this.idleTtlSeconds,
       absoluteTtlSeconds: this.absoluteTtlSeconds,
       userAgent: attempt.userAgent,
+      identityId,
     });
     await this.securityEvents.record(
       userId,
@@ -236,8 +239,17 @@ export class AuthService {
        FROM identities WHERE user_id = $1 ORDER BY created_at, id`,
       [session.userId],
     );
+    const [{ displayName, identityId }]: Array<{
+      displayName: string | null;
+      identityId: string | null;
+    }> = await this.db.query(
+      `SELECT u.display_name AS "displayName", s.identity_id AS "identityId"
+       FROM users u JOIN sessions s ON s.user_id = u.id
+       WHERE u.id = $1 AND s.id = $2`,
+      [session.userId, session.sessionId],
+    );
     return {
-      user: { id: session.userId },
+      user: { id: session.userId, displayName },
       identities: rows.map((r) =>
         r.kind === 'wallet'
           ? { id: r.id, kind: 'wallet', walletAddress: r.walletAddress! }
@@ -250,6 +262,7 @@ export class AuthService {
                 : null,
             },
       ),
+      sessionIdentityId: identityId,
       hasTotp: await this.hasConfirmedTotp(session.userId),
       lastStrongAuthAt: session.lastStrongAuthAt?.toISOString() ?? null,
       canCreateOrganization: await this.canCreateOrganization(session.userId),
@@ -348,14 +361,18 @@ export class AuthService {
     }
   }
 
-  private async findOrCreateWalletUser(address: Address): Promise<string> {
-    const find = async (): Promise<string | undefined> => {
+  private async findOrCreateWalletUser(
+    address: Address,
+  ): Promise<{ userId: string; identityId: string }> {
+    const find = async (): Promise<
+      { userId: string; identityId: string } | undefined
+    > => {
       const [row] = await this.db.query(
-        `SELECT user_id AS "userId" FROM identities
+        `SELECT user_id AS "userId", id AS "identityId" FROM identities
          WHERE kind = 'wallet' AND wallet_address = $1`,
         [address],
       );
-      return row?.userId;
+      return row;
     };
     const existing = await find();
     if (existing) return existing;
@@ -364,11 +381,11 @@ export class AuthService {
         const [{ id }] = await em.query(
           `INSERT INTO users DEFAULT VALUES RETURNING id`,
         );
-        await em.query(
-          `INSERT INTO identities (user_id, kind, wallet_address) VALUES ($1, 'wallet', $2)`,
+        const [identity] = await em.query(
+          `INSERT INTO identities (user_id, kind, wallet_address) VALUES ($1, 'wallet', $2) RETURNING id`,
           [id, address],
         );
-        return id as string;
+        return { userId: id as string, identityId: identity.id as string };
       });
     } catch (error) {
       // a concurrent first sign-in of the same wallet won the unique index

@@ -71,6 +71,36 @@ export class AccountService {
     );
   }
 
+  /** Audited without the names: activity payloads outlive account deletion. */
+  async setDisplayName(
+    userId: string,
+    displayName: string | null,
+    client: { ip: string; userAgent: string | null },
+  ): Promise<{ displayName: string | null }> {
+    await this.tx.runInOrgTx(async (em) => {
+      const [user]: Array<{ displayName: string | null }> = await em.query(
+        `SELECT display_name AS "displayName" FROM users
+         WHERE id = $1 AND status = 'active' FOR NO KEY UPDATE`,
+        [userId],
+      );
+      if (!user) throw new NotFoundException();
+      if (user.displayName === displayName) return;
+      await em.query(
+        `UPDATE users SET display_name = $2, updated_at = $3 WHERE id = $1`,
+        [userId, displayName, this.clock.now()],
+      );
+      await this.securityEvents.record(
+        userId,
+        'security.display_name_changed',
+        { cleared: displayName === null },
+        client.ip,
+        client.userAgent,
+        em,
+      );
+    });
+    return { displayName };
+  }
+
   async delete(userId: string): Promise<void> {
     const now = this.clock.now();
     try {
@@ -98,7 +128,7 @@ export class AccountService {
         }
         // UPDATE … RETURNING resolves to [rows, affected] in TypeORM's postgres driver
         const [[user]]: [Array<{ id: string }>, number] = await em.query(
-          `UPDATE users SET status = 'deleted', deleted_at = $2, updated_at = $2
+          `UPDATE users SET status = 'deleted', deleted_at = $2, updated_at = $2, display_name = NULL
            WHERE id = $1 AND status = 'active' RETURNING id`,
           [userId, now],
         );

@@ -8,6 +8,7 @@ type Row = {
   status: 'invited' | 'active' | 'declined';
   role: string | null;
   permissions: Array<string> | null;
+  displayName: string | null;
   wallet: string | null;
   emailEncrypted: string | null;
   targetWallet: string | null;
@@ -24,6 +25,7 @@ export type MemberRow = {
   /** Permissions of `role`; empty without a role. */
   permissions: Array<string>;
   identity: MemberIdentity;
+  displayName: string | null;
   invitedAt: Date | null;
   expiresAt: Date | null;
 };
@@ -41,10 +43,11 @@ export async function memberRows(
 ): Promise<Array<MemberRow>> {
   const rows: Array<Row> = await em.query(
     `SELECT m.id, m.user_id AS "userId", m.status, role.key AS role, role.permissions,
-       w.wallet_address AS wallet, e.email_encrypted AS "emailEncrypted",
+       u.display_name AS "displayName", w.wallet_address AS wallet, e.email_encrypted AS "emailEncrypted",
        i.target_wallet AS "targetWallet", i.target_email_encrypted AS "targetEmailEncrypted",
        i.created_at AS "invitedAt", i.expires_at AS "expiresAt"
      FROM members m
+     LEFT JOIN users u ON u.id = m.user_id AND u.status = 'active'
      LEFT JOIN LATERAL (
        SELECT r.key, r.permissions FROM role_bindings rb JOIN roles r ON r.id = rb.role_id
        WHERE rb.member_id = m.id AND rb.scope = 'org'
@@ -79,6 +82,7 @@ export async function memberRows(
       role: r.role,
       permissions: r.permissions ?? [],
       identity,
+      displayName: r.displayName,
       invitedAt: r.invitedAt,
       expiresAt: r.expiresAt,
     };
