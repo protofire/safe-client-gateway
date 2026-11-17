@@ -48,6 +48,89 @@ describe('members and invitations (org)', () => {
       .set('Cookie', user.cookie)
       .send({ token });
 
+  describe('invitation preview', () => {
+    const preview = (
+      token: string,
+      ip = '10.77.0.1',
+    ): ReturnType<OrgTestApp['post']> =>
+      t
+        .post('/v1/orgs/invitations/preview')
+        .set('X-Forwarded-For', ip)
+        .send({ token });
+
+    it('shows a signed-out invitee the org, inviter, role, expiry and masked target', async () => {
+      const admin = await t.user({ wallet: true });
+      await t.sql.query(`UPDATE users SET display_name = 'Ann' WHERE id = $1`, [
+        admin.userId,
+      ]);
+      const orgId = await t.createOrg(admin, 'Preview Co');
+      const to = email();
+      const { token } = await inviteEmail(orgId, admin, to);
+
+      const res = await preview(token).expect(200);
+
+      expect(res.body).toEqual({
+        orgName: 'Preview Co',
+        invitedBy: {
+          displayName: 'Ann',
+          identity: `${admin.wallet!.slice(0, 6)}…${admin.wallet!.slice(-4)}`,
+        },
+        role: 'member',
+        expiresAt: expect.any(String),
+        target: `${to[0]}***@example.com`,
+      });
+      // accept answers the org id for the redirect
+      const invitee = await t.user({ email: to });
+      await accept(invitee, token).expect(200, { orgId });
+    });
+
+    it('answers one 404 invitation_invalid for unknown, used, expired and deleted-org tokens', async () => {
+      const admin = await t.user({ wallet: true });
+      const orgId = await t.createOrg(admin);
+      const used = email();
+      const { token: usedToken } = await inviteEmail(orgId, admin, used);
+      await accept(await t.user({ email: used }), usedToken).expect(200);
+      const { token: expiredToken } = await inviteEmail(orgId, admin, email());
+      await t.sql.query(
+        `UPDATE invitations SET expires_at = now() - interval '1 second'
+         WHERE org_id = $1 AND accepted_at IS NULL`,
+        [orgId],
+      );
+      const other = await t.createOrg(admin, 'Gone');
+      const { token: goneToken } = await inviteEmail(other, admin, email());
+      await t.sql.query(
+        `UPDATE organizations SET status = 'deleted', deleted_at = now(), purge_after = now() WHERE id = $1`,
+        [other],
+      );
+
+      const bodies = [];
+      for (const token of [
+        randomBytes(32).toString('base64url'),
+        usedToken,
+        expiredToken,
+        goneToken,
+      ]) {
+        bodies.push((await preview(token, '10.77.1.1').expect(404)).body);
+      }
+      expect(new Set(bodies.map((b) => JSON.stringify(b))).size).toBe(1);
+      expect(bodies[0]).toEqual({
+        statusCode: 404,
+        message: expect.any(String),
+        code: 'invitation_invalid',
+      });
+    });
+
+    it('answers 400 for a malformed token and 429 after 30 previews a minute from one IP', async () => {
+      await preview('short').expect(400);
+      const token = randomBytes(32).toString('base64url');
+      const statuses: Array<number> = [];
+      for (let i = 0; i < 31; i++) statuses.push((await preview(token)).status);
+      expect(statuses.slice(0, 30)).toEqual(Array(30).fill(404));
+      expect(statuses[30]).toBe(429);
+      await preview(token, '10.77.0.2').expect(404);
+    });
+  });
+
   describe('email invitations', () => {
     it('mails the accept URL with the token in the fragment through Resend', async () => {
       const admin = await t.user({ wallet: true });
@@ -227,7 +310,19 @@ describe('members and invitations (org)', () => {
         .set('Cookie', joiner.cookie)
         .expect(200);
       expect(listed.body).toEqual([
-        { id: orgId, name: 'Wallets', status: 'active', myStatus: 'invited' },
+        {
+          id: orgId,
+          name: 'Wallets',
+          status: 'active',
+          myStatus: 'invited',
+          invitation: {
+            invitedBy: {
+              displayName: null,
+              identity: `${admin.wallet!.slice(0, 6)}…${admin.wallet!.slice(-4)}`,
+            },
+            expiresAt: expect.any(String),
+          },
+        },
       ]);
       const outsider = await t.user({ wallet: true });
       await t

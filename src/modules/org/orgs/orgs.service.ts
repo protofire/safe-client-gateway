@@ -8,6 +8,7 @@ import type { EntityManager } from 'typeorm';
 import { ActivityLog } from '@/modules/org/activity/activity-log.service';
 import { AuthService } from '@/modules/org/auth/auth.service';
 import { Clock, type IClock } from '@/modules/org/common/clock';
+import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
 import { RateLimiter } from '@/modules/org/common/rate-limiter';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import { SecurityNotifier } from '@/modules/org/mail/security-notifier';
@@ -17,6 +18,7 @@ import {
   mapLastAdmin,
   recheckPermission,
 } from '@/modules/org/orgs/org-lock';
+import { people } from '@/modules/org/members/person';
 import type { Actor } from '@/modules/org/orgs/parse';
 import { PermissionResolver } from '@/modules/org/permissions/permission.resolver';
 import { PERMISSIONS } from '@/modules/org/permissions/permissions';
@@ -37,6 +39,16 @@ export type OrgListItem = {
   status: 'active' | 'deleted';
   myStatus: 'active' | 'invited';
   purgeAfter?: string;
+  /** `myStatus: 'active'` only */
+  myRole?: string | null;
+  safesCount?: number;
+  /** active members */
+  membersCount?: number;
+  /** `myStatus: 'invited'` only */
+  invitation?: {
+    invitedBy: { displayName: string | null; identity: string | null } | null;
+    expiresAt: string;
+  };
 };
 
 export type OrgView = {
@@ -81,6 +93,7 @@ export class OrgsService {
     private readonly notifier: SecurityNotifier,
     private readonly rateLimiter: RateLimiter,
     private readonly auth: AuthService,
+    private readonly encryption: FieldEncryptionService,
     @Inject(Clock) private readonly clock: IClock,
   ) {}
 
@@ -142,15 +155,28 @@ export class OrgsService {
     userId: string,
     includeDeleted: boolean,
   ): Promise<Array<OrgListItem>> {
-    const rows: Array<{
-      id: string;
-      name: string;
-      status: 'active' | 'deleted';
-      myStatus: 'active' | 'invited';
-      purgeAfter: Date | null;
-    }> = await this.tx.runInOrgTx((em) =>
-      em.query(
-        `SELECT o.id, o.name, o.status, 'active' AS "myStatus", o.purge_after AS "purgeAfter"
+    const { rows, inviters } = await this.tx.runInOrgTx(async (em) => {
+      const rows: Array<{
+        id: string;
+        name: string;
+        status: 'active' | 'deleted';
+        myStatus: 'active' | 'invited';
+        purgeAfter: Date | null;
+        myRole: string | null;
+        safesCount: number | null;
+        membersCount: number | null;
+        invitedBy: string | null;
+        expiresAt: Date | null;
+      }> = await em.query(
+        `SELECT o.id, o.name, o.status, 'active' AS "myStatus", o.purge_after AS "purgeAfter",
+           (SELECT r.key FROM role_bindings rb JOIN roles r ON r.id = rb.role_id
+             WHERE rb.member_id = m.id AND rb.scope = 'org'
+               AND (r.org_id IS NULL OR r.org_id = m.org_id)
+             ORDER BY r.key LIMIT 1) AS "myRole",
+           (SELECT count(*)::int FROM linked_safes ls WHERE ls.org_id = o.id) AS "safesCount",
+           (SELECT count(*)::int FROM members x JOIN users u ON u.id = x.user_id AND u.status = 'active'
+             WHERE x.org_id = o.id AND x.status = 'active') AS "membersCount",
+           NULL::uuid AS "invitedBy", NULL::timestamptz AS "expiresAt"
          FROM members m JOIN organizations o ON o.id = m.org_id
          WHERE m.user_id = $1 AND m.status = 'active'
            AND (o.status = 'active' OR ($2 AND EXISTS (
@@ -158,29 +184,59 @@ export class OrgsService {
              WHERE rb.member_id = m.id AND rb.scope = 'org'
                AND (r.org_id IS NULL OR r.org_id = m.org_id)
                AND 'org.delete' = ANY(r.permissions))))
-         UNION
-         SELECT o.id, o.name, o.status, 'invited', NULL
-         FROM invitations i
-         JOIN members m ON m.id = i.member_id AND m.status = 'invited'
-         JOIN organizations o ON o.id = i.org_id AND o.status = 'active'
-         WHERE i.accepted_at IS NULL AND i.declined_at IS NULL AND i.expires_at > $3
-           -- only wallet invitations, the ones answerable by org id (A9);
-           -- email invitations are answered with the mailed token
-           AND i.target_wallet IN (SELECT wallet_address FROM identities WHERE user_id = $1 AND kind = 'wallet')
-           AND NOT EXISTS (SELECT 1 FROM members x WHERE x.org_id = o.id AND x.user_id = $1 AND x.status = 'active')
+         UNION ALL
+         -- one row per org: the newest invitation, the one accept-by-id answers
+         SELECT * FROM (
+           SELECT DISTINCT ON (o.id) o.id, o.name, o.status, 'invited', NULL::timestamptz,
+             NULL, NULL::int, NULL::int, i.invited_by, i.expires_at
+           FROM invitations i
+           JOIN members m ON m.id = i.member_id AND m.status = 'invited'
+           JOIN organizations o ON o.id = i.org_id AND o.status = 'active'
+           WHERE i.accepted_at IS NULL AND i.declined_at IS NULL AND i.expires_at > $3
+             -- only wallet invitations, the ones answerable by org id (A9);
+             -- email invitations are answered with the mailed token
+             AND i.target_wallet IN (SELECT wallet_address FROM identities WHERE user_id = $1 AND kind = 'wallet')
+             AND NOT EXISTS (SELECT 1 FROM members x WHERE x.org_id = o.id AND x.user_id = $1 AND x.status = 'active')
+           ORDER BY o.id, i.created_at DESC, i.id) invited
          ORDER BY name, id`,
         [userId, includeDeleted, this.clock.now()],
-      ),
-    );
-    return rows.map((r) => ({
-      id: r.id,
-      name: r.name,
-      status: r.status,
-      myStatus: r.myStatus,
-      ...(r.status === 'deleted' && r.purgeAfter
-        ? { purgeAfter: new Date(r.purgeAfter).toISOString() }
-        : {}),
-    }));
+      );
+      const inviters = await people(
+        em,
+        this.encryption,
+        rows.map((r) => r.invitedBy),
+      );
+      return { rows, inviters };
+    });
+    return rows.map((r) => {
+      const inviter = r.invitedBy ? inviters.get(r.invitedBy) : undefined;
+      return {
+        id: r.id,
+        name: r.name,
+        status: r.status,
+        myStatus: r.myStatus,
+        ...(r.status === 'deleted' && r.purgeAfter
+          ? { purgeAfter: new Date(r.purgeAfter).toISOString() }
+          : {}),
+        ...(r.myStatus === 'active'
+          ? {
+              myRole: r.myRole,
+              safesCount: r.safesCount ?? 0,
+              membersCount: r.membersCount ?? 0,
+            }
+          : {
+              invitation: {
+                invitedBy: inviter
+                  ? {
+                      displayName: inviter.displayName,
+                      identity: inviter.identity,
+                    }
+                  : null,
+                expiresAt: new Date(r.expiresAt!).toISOString(),
+              },
+            }),
+      };
+    });
   }
 
   async get(orgId: string): Promise<OrgView> {

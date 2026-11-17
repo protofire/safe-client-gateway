@@ -65,6 +65,53 @@ describe('organizations (org)', () => {
     expect(event).toEqual({ type: 'org.created', actorUserId: owner.userId });
   });
 
+  it('lists my role and the active member and linked Safe counts of each org', async () => {
+    const admin = await t.user({ wallet: true });
+    const member = await t.user({ wallet: true });
+    const gone = await t.user({ wallet: true });
+    const orgId = await t.createOrg(admin, 'Counted');
+    await t.addMember(orgId, member, 'member');
+    await t.addMember(orgId, gone, 'member');
+    // a deleted user's row does not count
+    await t.sql.query(`UPDATE users SET status = 'deleted' WHERE id = $1`, [
+      gone.userId,
+    ]);
+    await t.sql.query(
+      `INSERT INTO linked_safes (org_id, chain_id, address)
+       VALUES ($1, '1', '0x0000000000000000000000000000000000000a11'),
+              ($1, '10', '0x0000000000000000000000000000000000000a11')`,
+      [orgId],
+    );
+    const other = await t.createOrg(member, 'Mine');
+
+    const res = await t
+      .http()
+      .get('/v1/orgs')
+      .set('Cookie', member.cookie)
+      .expect(200);
+
+    expect(res.body).toEqual([
+      {
+        id: orgId,
+        name: 'Counted',
+        status: 'active',
+        myStatus: 'active',
+        myRole: 'member',
+        safesCount: 2,
+        membersCount: 2,
+      },
+      {
+        id: other,
+        name: 'Mine',
+        status: 'active',
+        myStatus: 'active',
+        myRole: 'admin',
+        safesCount: 0,
+        membersCount: 1,
+      },
+    ]);
+  });
+
   it('rejects an empty or too long name', async () => {
     const owner = await t.user();
     for (const name of ['', '   ', 'x'.repeat(65)]) {
@@ -282,6 +329,9 @@ describe('organizations (org)', () => {
           status: 'deleted',
           myStatus: 'active',
           purgeAfter: expect.any(String),
+          myRole: 'admin',
+          safesCount: 0,
+          membersCount: 2,
         },
       ]);
       await t

@@ -9,9 +9,12 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { z } from 'zod';
-import { OrgSession } from '@/modules/org/auth/decorators';
-import { InvitationsService } from '@/modules/org/members/invitations.service';
-import { actor, parse } from '@/modules/org/orgs/parse';
+import { OrgSession, Public } from '@/modules/org/auth/decorators';
+import {
+  InvitationsService,
+  type InvitationPreview,
+} from '@/modules/org/members/invitations.service';
+import { actor, client, parse } from '@/modules/org/orgs/parse';
 import { OrgApiBody } from '@/modules/org/common/org-api-body.decorator';
 
 const TokenSchema = z.object({ token: z.string().min(16).max(128) });
@@ -25,6 +28,19 @@ const TokenSchema = z.object({ token: z.string().min(16).max(128) });
 @Controller({ path: 'orgs', version: '1' })
 export class InvitationsController {
   constructor(private readonly invitations: InvitationsService) {}
+
+  /** Signed out; POST so the token never lands in a URL or access log. */
+  @Public()
+  @Post('invitations/preview')
+  @OrgApiBody(TokenSchema)
+  @HttpCode(200)
+  preview(
+    @Req() req: Request,
+    @Body() body: unknown,
+  ): Promise<InvitationPreview> {
+    const { token } = parse(TokenSchema, body);
+    return this.invitations.preview(token, client(req).ip);
+  }
 
   @Post('invitations/accept')
   @OrgApiBody(TokenSchema)

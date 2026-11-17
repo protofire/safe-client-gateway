@@ -16,7 +16,7 @@ import {
 } from '@/logging/logging.interface';
 import { ActivityLog } from '@/modules/org/activity/activity-log.service';
 import { Clock, type IClock } from '@/modules/org/common/clock';
-import { RateLimiter } from '@/modules/org/common/rate-limiter';
+import { ipBucket, RateLimiter } from '@/modules/org/common/rate-limiter';
 import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
 import {
   generateToken,
@@ -34,6 +34,7 @@ import {
   type MemberIdentity,
 } from '@/modules/org/members/identity-mask';
 import { memberRows } from '@/modules/org/members/member-rows';
+import { person } from '@/modules/org/members/person';
 import {
   assertCanGrant,
   systemRole,
@@ -57,6 +58,19 @@ const INVITES_PER_HOUR = 30;
 // per inviting user across all their orgs (up to 10): 2 orgs' worth, so one
 // account cannot turn 10 x 30 into a mail cannon (item 7)
 const INVITES_PER_USER_PER_HOUR = 60;
+// signed-out token lookups, like the email-code verify limit
+const PREVIEWS_PER_IP_PER_MINUTE = 30;
+
+/** What a signed-out invitee may see before signing in. */
+export type InvitationPreview = {
+  orgName: string;
+  /** null when the inviter's account is gone */
+  invitedBy: { displayName: string | null; identity: string | null } | null;
+  role: typeof INVITATION_ROLE_KEY;
+  expiresAt: string;
+  /** the invited wallet or email, masked */
+  target: string;
+};
 
 export type InviteTarget = { wallet: string } | { email: string };
 
@@ -285,6 +299,55 @@ export class InvitationsService {
         by.userId,
       ),
     };
+  }
+
+  /**
+   * Signed out. Unknown, used, expired and revoked tokens, and deleted orgs,
+   * all answer the same 404 `invitation_invalid`.
+   */
+  async preview(token: string, ip: string): Promise<InvitationPreview> {
+    await this.rateLimiter.enforce(
+      `invitations:preview:ip:${ipBucket(ip)}`,
+      PREVIEWS_PER_IP_PER_MINUTE,
+      60,
+    );
+    return this.tx.runInOrgTx(async (em) => {
+      const [row]: Array<{
+        orgName: string;
+        invitedBy: string | null;
+        targetWallet: string | null;
+        targetEmailEncrypted: string | null;
+        expiresAt: Date;
+      }> = await em.query(
+        `SELECT o.name AS "orgName", i.invited_by AS "invitedBy",
+           i.target_wallet AS "targetWallet", i.target_email_encrypted AS "targetEmailEncrypted",
+           i.expires_at AS "expiresAt"
+         FROM invitations i
+         JOIN members m ON m.id = i.member_id AND m.status = 'invited'
+         JOIN organizations o ON o.id = i.org_id AND o.status = 'active'
+         WHERE i.token_hash = $1 AND i.accepted_at IS NULL AND i.declined_at IS NULL
+           AND i.expires_at > $2`,
+        [sha256Hex(token), this.clock.now()],
+      );
+      if (!row) throw invalidInvitation();
+      const inviter = await person(em, this.encryption, row.invitedBy);
+      return {
+        orgName: row.orgName,
+        invitedBy: inviter
+          ? { displayName: inviter.displayName, identity: inviter.identity }
+          : null,
+        role: INVITATION_ROLE_KEY,
+        expiresAt: new Date(row.expiresAt).toISOString(),
+        target: maskIdentity(
+          row.targetWallet
+            ? { kind: 'wallet', value: row.targetWallet }
+            : {
+                kind: 'email',
+                value: this.encryption.decrypt(row.targetEmailEncrypted!),
+              },
+        ),
+      };
+    });
   }
 
   acceptByToken(token: string, by: Actor): Promise<{ orgId: string }> {
