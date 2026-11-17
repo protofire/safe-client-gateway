@@ -233,8 +233,11 @@ export class FactorsService {
   }
 
   /**
-   * New recovery codes for a current TOTP code (a recovery code cannot mint
-   * more); the old ones stop working. The codes are returned only here.
+   * Caller is behind `@RequireStrongAuth()`. New recovery codes for a current
+   * TOTP code (a recovery code cannot mint more), checked and spent under the
+   * user lock in the transaction that replaces the codes: a factor removed
+   * meanwhile fails, a failed write keeps the step. The old codes stop
+   * working, other sessions end (as on TOTP removal); returned only here.
    */
   async regenerateRecoveryCodes(
     session: OrgSession,
@@ -242,22 +245,24 @@ export class FactorsService {
     client: Client,
   ): Promise<{ recoveryCodes: Array<string> }> {
     const { userId } = session;
-    await this.attempt(userId, () => this.useTotp(userId, code));
     const recoveryCodes = Array.from(
       { length: RECOVERY_CODES },
       newRecoveryCode,
     );
     await this.db.transaction(async (em) => {
       await this.lockUser(em, userId);
-      // removed between the code check and the lock
-      if (!(await this.confirmedFactor(em, userId))) {
-        throw new UnauthorizedException('Invalid code');
-      }
+      await this.attempt(userId, () => this.useTotp(userId, code, em));
       await em.query(`DELETE FROM recovery_codes WHERE user_id = $1`, [userId]);
       await em.query(
         `INSERT INTO recovery_codes (user_id, code_hash)
          SELECT $1, unnest($2::text[])`,
         [userId, recoveryCodes.map(hashRecoveryCode)],
+      );
+      await this.sessions.revokeOthers(
+        userId,
+        session.sessionId,
+        this.clock.now(),
+        em,
       );
       await this.securityEvents.record(
         userId,

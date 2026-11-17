@@ -105,10 +105,11 @@ export class TotpController {
     return this.factors.recoveryCodesRemaining(session.userId);
   }
 
-  /** New codes, returned once; the old ones stop working. Needs a current TOTP code. */
+  /** New codes, returned once; the old ones stop working, other sessions end. Step-up and a current TOTP code. */
   @Post('totp/recovery-codes/regenerate')
   @OrgApiBody(CodeSchema)
   @HttpCode(200)
+  @RequireStrongAuth()
   regenerateRecoveryCodes(
     @OrgSession() session: OrgSession,
     @Body(new ValidationPipe(CodeSchema)) body: { code: string },

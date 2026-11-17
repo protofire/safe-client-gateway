@@ -531,13 +531,63 @@ describe('TOTP factors (org)', () => {
         .expect(401);
     });
 
-    it('answers 401 to a regenerate without TOTP', async () => {
-      const user = await seedUser(t.sql);
+    it('needs step-up (403 totp_required without TOTP, step_up_required when stale) and ends the other sessions', async () => {
+      const plain = await seedUser(t.sql);
+      const none = await t
+        .post('/v1/orgs/auth/totp/recovery-codes/regenerate')
+        .set('Cookie', plain.cookie)
+        .send({ code: '123456' })
+        .expect(403);
+      expect(none.body.code).toBe('totp_required');
+
+      const user = await enrolled();
+      const other = await addSession(t.sql, user.userId);
+      shift(31 * MINUTE);
+      const stale = await t
+        .post('/v1/orgs/auth/totp/recovery-codes/regenerate')
+        .set('Cookie', user.cookie)
+        .send({ code: totpCode(user.secret, at()) })
+        .expect(403);
+      expect(stale.body.code).toBe('step_up_required');
+      const stepUp = await t
+        .post('/v1/orgs/auth/step-up/totp')
+        .set('Cookie', user.cookie)
+        .send({ recoveryCode: user.recoveryCodes[0] })
+        .expect(200);
+      const cookie = cookieFrom(stepUp, '__Host-org_session');
+
+      await t
+        .post('/v1/orgs/auth/totp/recovery-codes/regenerate')
+        .set('Cookie', cookie)
+        .send({ code: totpCode(user.secret, at()) })
+        .expect(200);
+
+      await t.http().get('/v1/orgs/auth/me').set('Cookie', other).expect(401);
+      await t.http().get('/v1/orgs/auth/me').set('Cookie', cookie).expect(200);
+    });
+
+    it('keeps the TOTP step and the old codes when the regenerate write fails', async () => {
+      const user = await enrolled();
+      shift(30_000);
+      const code = totpCode(user.secret, at());
+      const failing = jest
+        .spyOn(t.app.get(SecurityEvents), 'record')
+        .mockRejectedValueOnce(new Error('audit down'));
+      try {
+        await t
+          .post('/v1/orgs/auth/totp/recovery-codes/regenerate')
+          .set('Cookie', user.cookie)
+          .send({ code })
+          .expect(500);
+      } finally {
+        failing.mockRestore();
+      }
+      // the same step still works, and so do the old codes
       await t
         .post('/v1/orgs/auth/totp/recovery-codes/regenerate')
         .set('Cookie', user.cookie)
-        .send({ code: '123456' })
-        .expect(401);
+        .send({ code })
+        .expect(200);
     });
   });
 });
