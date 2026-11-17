@@ -14,7 +14,7 @@ const NAME_MAX = 64;
 
 /**
  * Parses the Safe{Wallet} address book export (`address,name,chainId`; extra
- * columns are ignored). Invalid lines, malformed quoting included, are
+ * columns are ignored). An empty chainId means all networks. Invalid lines, malformed quoting included, are
  * reported, never thrown.
  */
 export function parseSafeAddressBookCsv(text: string): {
@@ -46,7 +46,7 @@ export function parseSafeAddressBookCsv(text: string): {
       errors.push({ line, reason: 'Invalid address' });
     } else if (name.length < 1 || name.length > NAME_MAX) {
       errors.push({ line, reason: `Name must be 1-${NAME_MAX} characters` });
-    } else if (!/^[1-9]\d{0,17}$/.test(chainId)) {
+    } else if (chainId !== '' && !/^[1-9]\d{0,17}$/.test(chainId)) {
       errors.push({ line, reason: 'Invalid chainId' });
     } else {
       rows.push({ line, address, name, chainId });

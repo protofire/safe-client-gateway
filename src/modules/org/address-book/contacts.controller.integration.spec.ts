@@ -204,8 +204,14 @@ describe('org address book', () => {
   const listOf = async (
     path: string,
     who: { cookie: string },
-  ): Promise<Array<{ id: string; name: string; address: string }>> =>
-    (await get(path, who).expect(200)).body;
+  ): Promise<
+    Array<{
+      id: string;
+      name: string;
+      address: string;
+      chainIds: Array<string>;
+    }>
+  > => (await get(path, who).expect(200)).body;
   const upload = (
     org: string,
     who: { cookie: string },
@@ -504,7 +510,11 @@ describe('org address book', () => {
 
     const other = await write('post', `${path}/withdraw`, admin).expect(403);
     expect(other.body.code).toBe('not_requester');
-    await write('post', `${orgB}/contact-requests/${req.body.id}/withdraw`, adminB).expect(404);
+    await write(
+      'post',
+      `${orgB}/contact-requests/${req.body.id}/withdraw`,
+      adminB,
+    ).expect(404);
 
     const res = await write('post', `${path}/withdraw`, member).expect(200);
 
@@ -621,6 +631,27 @@ describe('org address book', () => {
       .expect(413);
   });
 
+  it('imports an empty chainId as all networks, which wins on merge', async () => {
+    await seed(orgA, 'Everywhere', ADDR, []);
+    await seed(orgA, 'Specific', ADDR2, ['1']);
+    const csv = [
+      'address,name,chainId',
+      `${ADDR},Everywhere,10`,
+      `${ADDR2},Specific,`,
+      `${ADDR3},New,137`,
+      `${ADDR3},New,`,
+    ].join('\n');
+    const res = await upload(orgA, admin, csv).expect(200);
+    expect(res.body).toEqual({ created: 1, updated: 2, skipped: [] });
+    const chains = Object.fromEntries(
+      (await listOf(`${orgA}/contacts`, admin)).map((c) => [
+        c.address,
+        c.chainIds,
+      ]),
+    );
+    expect(chains).toEqual({ [ADDR]: [], [ADDR2]: [], [ADDR3]: [] });
+  });
+
   it('rejects the whole import with 422 invalid_rows on malformed quoting and writes nothing', async () => {
     const before = await listOf(`${orgA}/contacts`, admin);
     const csv = [
@@ -681,8 +712,16 @@ describe('org address book', () => {
     }).expect(400);
     await write('post', `${orgA}/contacts`, admin, {
       ...body,
-      chainIds: [],
+      address: ADDR2,
+      chainIds: ['0'],
     }).expect(400);
+    // an empty list means all networks
+    const all = await write('post', `${orgA}/contacts`, admin, {
+      ...body,
+      address: ADDR3,
+      chainIds: [],
+    }).expect(201);
+    expect(all.body.chainIds).toEqual([]);
     await write('post', `${orgA}/contacts`, admin, {
       ...body,
       name: 'n'.repeat(65),
@@ -693,6 +732,7 @@ describe('org address book', () => {
   it('exports CSV with formula-like names neutralised', async () => {
     await seed(orgA, '=HYPERLINK("http://evil")', ADDR, ['1', '10']);
     await seed(orgA, '@cmd', ADDR2, ['1']);
+    await seed(orgA, 'Everywhere', ADDR3, []);
     const res = await get(`${orgA}/contacts.csv`, member).expect(200);
     expect(res.headers['content-type']).toContain('text/csv');
     const lines = res.text.trim().split('\n');
@@ -700,7 +740,8 @@ describe('org address book', () => {
     expect(res.text).toContain(`"'=HYPERLINK(""http://evil"")"`);
     expect(res.text).toContain(`'@cmd`);
     expect(res.text).not.toMatch(/,=HYPERLINK/);
-    expect(lines).toHaveLength(4);
+    expect(lines).toHaveLength(5);
+    expect(lines).toContain(`${ADDR3},Everywhere,,`);
     expect(await events('export.downloaded')).toHaveLength(1);
     expect((await events('export.downloaded'))[0].payload).toEqual({
       what: 'contacts',
@@ -711,9 +752,10 @@ describe('org address book', () => {
   it('filters by search, tag and chainId and returns checksummed addresses', async () => {
     await seed(orgA, 'Alice 100%', ADDR.toLowerCase(), ['1'], ['team']);
     await seed(orgA, 'Bob', ADDR2.toLowerCase(), ['10'], ['vendor', 'team']);
+    await seed(orgA, 'Carol', ADDR3, [], ['other']);
     const names = async (qs: string): Promise<Array<string>> =>
       (await listOf(`${orgA}/contacts${qs}`, member)).map((c) => c.name);
-    expect(await names('')).toEqual(['Alice 100%', 'Bob']);
+    expect(await names('')).toEqual(['Alice 100%', 'Bob', 'Carol']);
     expect(await names('?search=ali')).toEqual(['Alice 100%']);
     expect(await names(`?search=${ADDR2.slice(2, 10).toLowerCase()}`)).toEqual([
       'Bob',
@@ -722,10 +764,11 @@ describe('org address book', () => {
     expect(await names('?search=_')).toEqual([]);
     expect(await names('?tag=VENDOR')).toEqual(['Bob']);
     expect(await names('?tag=team')).toEqual(['Alice 100%', 'Bob']);
-    expect(await names('?chainId=10')).toEqual(['Bob']);
+    // an all-networks contact matches every chain
+    expect(await names('?chainId=10')).toEqual(['Bob', 'Carol']);
     expect(await names('?chainId=1&tag=team')).toEqual(['Alice 100%']);
     const all = await listOf(`${orgA}/contacts`, member);
-    expect(all.map((c) => c.address)).toEqual([ADDR, ADDR2]);
+    expect(all.map((c) => c.address)).toEqual([ADDR, ADDR2, ADDR3]);
   });
 
   describe('concurrency, staleness and limits', () => {

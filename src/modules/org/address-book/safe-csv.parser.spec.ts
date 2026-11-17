@@ -11,11 +11,13 @@ describe('parseSafeAddressBookCsv', () => {
       `${A},,1\r\n` +
       `${A},Name,abc\r\n` +
       '\r\n' +
-      `${A.toLowerCase()},Lower,137\r\n`;
+      `${A.toLowerCase()},Lower,137\r\n` +
+      `${A},All networks,\r\n`;
     const { rows, errors } = parseSafeAddressBookCsv(text);
     expect(rows).toEqual([
       { line: 2, address: A, name: 'Acme, "Inc"', chainId: '1' },
       { line: 7, address: A.toLowerCase(), name: 'Lower', chainId: '137' },
+      { line: 8, address: A, name: 'All networks', chainId: '' },
     ]);
     expect(errors).toEqual([
       { line: 3, reason: 'Invalid address' },

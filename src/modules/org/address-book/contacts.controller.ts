@@ -119,7 +119,8 @@ export class ContactsController {
     let page = first;
     for (;;) {
       for (const c of page) {
-        for (const chainId of c.chainIds) {
+        // all networks exports as one row with an empty chainId (import reads it back)
+        for (const chainId of c.chainIds.length > 0 ? c.chainIds : ['']) {
           yield {
             address: c.address,
             name: c.name,

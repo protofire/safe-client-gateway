@@ -75,8 +75,10 @@ export class ContactsService {
         where.push(`tags @> $${params.length}::text[]`);
       }
       if (f.chainId) {
-        params.push([f.chainId]);
-        where.push(`chain_ids @> $${params.length}::text[]`);
+        params.push(f.chainId);
+        where.push(
+          `(cardinality(chain_ids) = 0 OR chain_ids @> ARRAY[$${params.length}::text])`,
+        );
       }
       const rows: Array<Row> = await em.query(
         `SELECT ${COLUMNS} FROM contacts WHERE ${where.join(' AND ')} ORDER BY name, id`,
@@ -176,20 +178,28 @@ export class ContactsService {
       reason: string;
       lines?: Array<number>;
     }> = [...parsed.errors];
-    // One contact per address: its chains are the union of the CSV rows
+    // One contact per address: its chains are the union of the CSV rows; an
+    // empty chainId (all networks) wins over any specific chain
     const byAddress = new Map<
       string,
-      { name: string; chainIds: Set<string>; lines: Array<number> }
+      {
+        name: string;
+        chainIds: Set<string>;
+        all: boolean;
+        lines: Array<number>;
+      }
     >();
     for (const r of parsed.rows) {
       const key = r.address.toLowerCase();
       const g = byAddress.get(key) ?? {
         name: r.name,
         chainIds: new Set<string>(),
+        all: false,
         lines: [],
       };
       g.name = r.name;
-      g.chainIds.add(r.chainId);
+      if (r.chainId === '') g.all = true;
+      else g.chainIds.add(r.chainId);
       g.lines.push(r.line);
       byAddress.set(key, g);
     }
@@ -208,12 +218,14 @@ export class ContactsService {
       const over: Array<number> = [];
       let overAddresses = 0;
       for (const [address, g] of byAddress) {
-        const chainIds = [...g.chainIds].slice(0, MAX_CHAINS);
+        const chainIds = g.all ? [] : [...g.chainIds].slice(0, MAX_CHAINS);
         const id = existing.get(address);
         if (id) {
+          // all networks on either side stays all networks
           await em.query(
             `UPDATE contacts SET name = $3,
-                    chain_ids = (ARRAY(SELECT x FROM unnest(chain_ids || $4::text[]) x GROUP BY x ORDER BY x::numeric))[1:${MAX_CHAINS}],
+                    chain_ids = CASE WHEN cardinality(chain_ids) = 0 OR cardinality($4::text[]) = 0 THEN '{}'::text[]
+                      ELSE (ARRAY(SELECT x FROM unnest(chain_ids || $4::text[]) x GROUP BY x ORDER BY x::numeric))[1:${MAX_CHAINS}] END,
                     version = version + 1, updated_at = now()
               WHERE org_id = $1 AND id = $2`,
             [orgId, id, g.name, chainIds],

@@ -12,9 +12,9 @@ const address = z
   .string()
   .refine((v) => isAddress(v, { strict: false }), 'Invalid address')
   .transform((v) => getAddress(v));
+// empty = all networks (an EOA has the same address on every chain)
 const chainIds = z
   .array(z.string().regex(/^[1-9]\d{0,17}$/))
-  .min(1)
   .max(MAX_CHAINS)
   .transform((v) => [...new Set(v)]);
 const tags = z

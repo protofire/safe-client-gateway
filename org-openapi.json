@@ -498,7 +498,6 @@
                           },
                           "address": { "type": "string" },
                           "chainIds": {
-                            "minItems": 1,
                             "maxItems": 100,
                             "type": "array",
                             "items": {
@@ -540,7 +539,6 @@
                           },
                           "address": { "type": "string" },
                           "chainIds": {
-                            "minItems": 1,
                             "maxItems": 100,
                             "type": "array",
                             "items": {
@@ -710,7 +708,6 @@
                   "name": { "type": "string", "minLength": 1, "maxLength": 64 },
                   "address": { "type": "string" },
                   "chainIds": {
-                    "minItems": 1,
                     "maxItems": 100,
                     "type": "array",
                     "items": { "type": "string", "pattern": "^[1-9]\\d{0,17}$" }
@@ -776,7 +773,6 @@
                   "name": { "type": "string", "minLength": 1, "maxLength": 64 },
                   "address": { "type": "string" },
                   "chainIds": {
-                    "minItems": 1,
                     "maxItems": 100,
                     "type": "array",
                     "items": { "type": "string", "pattern": "^[1-9]\\d{0,17}$" }
