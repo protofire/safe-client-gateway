@@ -20,6 +20,7 @@ import { CsvService } from '@/modules/csv-export/csv-utils/csv.service';
 import { ACTIVITY_EVENT_TYPES } from '@/modules/org/activity/activity-event-types';
 import { ActivityLog } from '@/modules/org/activity/activity-log.service';
 import { OrgSession } from '@/modules/org/auth/decorators';
+import { Clock, type IClock } from '@/modules/org/common/clock';
 import { csvCast, limitExports } from '@/modules/org/common/csv';
 import { RateLimiter } from '@/modules/org/common/rate-limiter';
 import { FieldEncryptionService } from '@/modules/org/crypto/field-encryption.service';
@@ -58,20 +59,29 @@ const ListFields = FilterFields.extend({
   limit: z.coerce.number().int().min(1).max(MAX_LIMIT).default(DEFAULT_LIMIT),
 });
 
-function checkRange(
-  f: { from?: string; to?: string },
-  ctx: z.RefinementCtx,
-): void {
-  if (f.from === undefined || f.to === undefined) return;
-  const span = Date.parse(f.to) - Date.parse(f.from);
-  if (span < 0) ctx.addIssue({ code: 'custom', message: '`from` is after `to`' });
-  if (span > MAX_RANGE_MS) {
-    ctx.addIssue({ code: 'custom', message: 'Range is longer than 366 days' });
-  }
-}
-const FilterSchema = FilterFields.superRefine(checkRange);
-const ListQuerySchema = ListFields.superRefine(checkRange);
+const FilterSchema = FilterFields;
+const ListQuerySchema = ListFields;
 type Filter = z.infer<typeof FilterSchema>;
+
+/**
+ * A range given on one side is closed on the other (to = now, from = to -
+ * 366 days), so every dated query spans at most 366 days; 400 otherwise.
+ */
+function bounded<F extends { from?: string; to?: string }>(
+  f: F,
+  now: Date,
+): F {
+  if (f.from === undefined && f.to === undefined) return f;
+  const to = f.to ?? now.toISOString();
+  const from =
+    f.from ?? new Date(Date.parse(to) - MAX_RANGE_MS).toISOString();
+  const span = Date.parse(to) - Date.parse(from);
+  if (span < 0) throw new BadRequestException('`from` is after `to`');
+  if (span > MAX_RANGE_MS) {
+    throw new BadRequestException('Range is longer than 366 days');
+  }
+  return { ...f, from, to };
+}
 
 // OpenAPI only: `types` as the array the preprocess accepts
 const FilterDoc = FilterFields.extend({ types: EventTypes.optional() });
@@ -121,6 +131,7 @@ export class ActivityController {
     private readonly csv: CsvService,
     private readonly rateLimiter: RateLimiter,
     @Inject(LoggingService) private readonly logger: ILoggingService,
+    @Inject(Clock) private readonly clock: IClock,
   ) {}
 
   @Get('activity')
@@ -131,7 +142,8 @@ export class ActivityController {
     @OrgSession() session: OrgSession,
     @Query() query: unknown,
   ): Promise<{ items: Array<unknown>; nextCursor: string | null }> {
-    const { cursor, limit, ...filter } = parse(ListQuerySchema, query);
+    const { cursor, limit, ...rest } = parse(ListQuerySchema, query);
+    const filter = bounded(rest, this.clock.now());
     const orgId = req.params.orgId;
     const rows = await this.page(
       orgId,
@@ -158,7 +170,7 @@ export class ActivityController {
     @OrgSession() session: OrgSession,
     @Query() query: unknown,
   ): Promise<void> {
-    const filter = parse(FilterSchema, query);
+    const filter = bounded(parse(FilterSchema, query), this.clock.now());
     const orgId = req.params.orgId;
     await limitExports(this.rateLimiter, session.userId);
     await this.dataSource.transaction((em) =>
@@ -258,7 +270,10 @@ export class ActivityController {
     params.push(limit);
     return this.dataSource.query(
       `SELECT e.id, e.type, e.actor_user_id, u.status AS actor_status,
-              u.display_name AS actor_display_name,
+              -- shown only while the actor is an active member of this org
+              CASE WHEN EXISTS (SELECT 1 FROM members m WHERE m.org_id = e.org_id
+                AND m.user_id = e.actor_user_id AND m.status = 'active')
+              THEN u.display_name END AS actor_display_name,
               e.target_type, e.target_id, e.payload, e.ip_encrypted, e.user_agent,
               to_char(e.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at
          FROM activity_events e

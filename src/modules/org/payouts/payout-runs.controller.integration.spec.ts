@@ -1201,6 +1201,46 @@ describe('payout runs API', () => {
     expect(detail.body.run.linkedSafeId).toBeNull();
   });
 
+  it('shows the creator name only while a member, and no creator once their account is deleted', async () => {
+    const creator = await signIn();
+    const [{ id: memberId }] = await sql.query(
+      `INSERT INTO members (org_id, user_id, status) VALUES ($1, $2, 'active') RETURNING id`,
+      [orgA, creator.userId],
+    );
+    await sql.query(
+      `INSERT INTO role_bindings (member_id, role_id, scope)
+         SELECT $1, id, 'org' FROM roles WHERE org_id IS NULL AND key = 'member'`,
+      [memberId],
+    );
+    await sql.query(`UPDATE users SET display_name = 'Cara' WHERE id = $1`, [
+      creator.userId,
+    ]);
+    const { run } = await createRun(rows, creator);
+    const creatorOf = async (): Promise<unknown> =>
+      (await get(`${orgA}/payout-runs/${run.id}`, member).expect(200)).body.run
+        .createdBy;
+    expect(await creatorOf()).toMatchObject({ displayName: 'Cara' });
+
+    await sql.query(`UPDATE members SET status = 'declined' WHERE id = $1`, [
+      memberId,
+    ]);
+    expect(await creatorOf()).toEqual({
+      userId: creator.userId,
+      displayName: null,
+      identity: expect.any(String),
+    });
+
+    await sql.query(`UPDATE users SET status = 'deleted' WHERE id = $1`, [
+      creator.userId,
+    ]);
+    expect(await creatorOf()).toBeNull();
+    const listed = await get(`${orgA}/payout-runs`, member).expect(200);
+    expect(
+      (listed.body as PayoutRunPage).items.find((i) => i.id === run.id)
+        ?.createdBy,
+    ).toBeNull();
+  });
+
   it('pages the run list newest first by cursor (limit default 50, max 100)', async () => {
     const { run } = await createRun();
     // 6 more runs with distinct and equal creation times (ties broken by id)

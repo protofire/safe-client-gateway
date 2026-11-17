@@ -302,24 +302,27 @@ export class InvitationsService {
   }
 
   /**
-   * Signed out. Unknown, used, expired and revoked tokens, and deleted orgs,
-   * all answer the same 404 `invitation_invalid`.
+   * Signed out. Malformed, unknown, used, expired and revoked tokens, and
+   * deleted orgs, all answer the same 404 `invitation_invalid`.
    */
-  async preview(token: string, ip: string): Promise<InvitationPreview> {
+  async preview(token: string | null, ip: string): Promise<InvitationPreview> {
+    // before any token check: every attempt counts
     await this.rateLimiter.enforce(
       `invitations:preview:ip:${ipBucket(ip)}`,
       PREVIEWS_PER_IP_PER_MINUTE,
       60,
     );
+    if (token === null) throw invalidInvitation();
     return this.tx.runInOrgTx(async (em) => {
       const [row]: Array<{
+        orgId: string;
         orgName: string;
         invitedBy: string | null;
         targetWallet: string | null;
         targetEmailEncrypted: string | null;
         expiresAt: Date;
       }> = await em.query(
-        `SELECT o.name AS "orgName", i.invited_by AS "invitedBy",
+        `SELECT o.id AS "orgId", o.name AS "orgName", i.invited_by AS "invitedBy",
            i.target_wallet AS "targetWallet", i.target_email_encrypted AS "targetEmailEncrypted",
            i.expires_at AS "expiresAt"
          FROM invitations i
@@ -330,7 +333,12 @@ export class InvitationsService {
         [sha256Hex(token), this.clock.now()],
       );
       if (!row) throw invalidInvitation();
-      const inviter = await person(em, this.encryption, row.invitedBy);
+      const inviter = await person(
+        em,
+        this.encryption,
+        row.orgId,
+        row.invitedBy,
+      );
       return {
         orgName: row.orgName,
         invitedBy: inviter

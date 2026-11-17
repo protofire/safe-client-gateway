@@ -18,7 +18,7 @@ import {
   mapLastAdmin,
   recheckPermission,
 } from '@/modules/org/orgs/org-lock';
-import { people } from '@/modules/org/members/person';
+import { person, type PersonRef } from '@/modules/org/members/person';
 import type { Actor } from '@/modules/org/orgs/parse';
 import { PermissionResolver } from '@/modules/org/permissions/permission.resolver';
 import { PERMISSIONS } from '@/modules/org/permissions/permissions';
@@ -201,15 +201,20 @@ export class OrgsService {
          ORDER BY name, id`,
         [userId, includeDeleted, this.clock.now()],
       );
-      const inviters = await people(
-        em,
-        this.encryption,
-        rows.map((r) => r.invitedBy),
-      );
+      // per org: an inviter's name shows only while they are its member
+      const inviters = new Map<string, PersonRef | null>();
+      for (const r of rows) {
+        if (r.invitedBy) {
+          inviters.set(
+            r.id,
+            await person(em, this.encryption, r.id, r.invitedBy),
+          );
+        }
+      }
       return { rows, inviters };
     });
     return rows.map((r) => {
-      const inviter = r.invitedBy ? inviters.get(r.invitedBy) : undefined;
+      const inviter = inviters.get(r.id);
       return {
         id: r.id,
         name: r.name,

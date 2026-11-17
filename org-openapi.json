@@ -628,13 +628,7 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "properties": {
-                  "reason": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 280
-                  }
-                }
+                "properties": { "reason": { "type": "string" } }
               }
             }
           }

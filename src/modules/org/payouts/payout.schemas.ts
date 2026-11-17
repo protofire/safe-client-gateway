@@ -97,9 +97,6 @@ export type PayoutTokenTotal = {
   amountRaw: string;
 };
 
-/** A run's creator; null once their account is gone. */
-export type PayoutRunCreator = PersonRef | null;
-
 export type PayoutRunListItem = {
   id: string;
   name: string;
@@ -110,7 +107,8 @@ export type PayoutRunListItem = {
   itemCount: number;
   safeTxHash: string | null;
   createdAt: string;
-  createdBy: PayoutRunCreator;
+  /** null once their account is gone */
+  createdBy: PersonRef | null;
   /** the current version has a built transaction */
   built: boolean;
   totals: Array<PayoutTokenTotal>;
@@ -136,7 +134,8 @@ export type PayoutRunView = {
   name: string;
   status: PayoutRunStatus;
   createdAt: string;
-  createdBy: PayoutRunCreator;
+  /** null once their account is gone */
+  createdBy: PersonRef | null;
   /** the current version has a built transaction (`calls` set) */
   built: boolean;
   totals: Array<PayoutTokenTotal>;

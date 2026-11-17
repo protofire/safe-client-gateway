@@ -47,7 +47,7 @@ export async function memberRows(
        i.target_wallet AS "targetWallet", i.target_email_encrypted AS "targetEmailEncrypted",
        i.created_at AS "invitedAt", i.expires_at AS "expiresAt"
      FROM members m
-     LEFT JOIN users u ON u.id = m.user_id AND u.status = 'active'
+     LEFT JOIN users u ON u.id = m.user_id AND u.status = 'active' AND m.status = 'active'
      LEFT JOIN LATERAL (
        SELECT r.key, r.permissions FROM role_bindings rb JOIN roles r ON r.id = rb.role_id
        WHERE rb.member_id = m.id AND rb.scope = 'org'

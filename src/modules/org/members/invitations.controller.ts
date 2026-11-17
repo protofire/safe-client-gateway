@@ -38,8 +38,12 @@ export class InvitationsController {
     @Req() req: Request,
     @Body() body: unknown,
   ): Promise<InvitationPreview> {
-    const { token } = parse(TokenSchema, body);
-    return this.invitations.preview(token, client(req).ip);
+    // a malformed token is just another invalid one (no 400 to probe with)
+    const parsed = TokenSchema.safeParse(body);
+    return this.invitations.preview(
+      parsed.success ? parsed.data.token : null,
+      client(req).ip,
+    );
   }
 
   @Post('invitations/accept')

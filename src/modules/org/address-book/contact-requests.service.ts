@@ -97,18 +97,24 @@ export class ContactRequestsService {
 
   private async views(
     em: EntityManager,
+    orgId: string,
     rows: Array<Row>,
   ): Promise<Array<ContactRequest>> {
     const requesters = await people(
       em,
       this.encryption,
+      orgId,
       rows.map((r) => r.requested_by),
     );
     return rows.map((r) => toRequest(r, requesters));
   }
 
-  private async view(em: EntityManager, row: Row): Promise<ContactRequest> {
-    return (await this.views(em, [row]))[0];
+  private async view(
+    em: EntityManager,
+    orgId: string,
+    row: Row,
+  ): Promise<ContactRequest> {
+    return (await this.views(em, orgId, [row]))[0];
   }
 
   async list(
@@ -134,7 +140,7 @@ export class ContactRequestsService {
       const page = rows.slice(0, q.limit);
       const last = page[page.length - 1];
       return {
-        items: await this.views(em, page),
+        items: await this.views(em, orgId, page),
         nextCursor:
           rows.length > q.limit
             ? Buffer.from(JSON.stringify([last.ts, last.id])).toString(
@@ -176,7 +182,7 @@ export class ContactRequestsService {
           LIMIT 1`,
         [orgId, input.action, contactId, version, JSON.stringify(payload)],
       );
-      if (same) return this.view(em, same);
+      if (same) return this.view(em, orgId, same);
 
       const [counts]: Array<{ org: number; mine: number }> = await em.query(
         `SELECT count(*)::int AS org, (count(*) FILTER (WHERE requested_by = $2))::int AS mine
@@ -214,7 +220,7 @@ export class ContactRequestsService {
               ...(input.action === 'update' ? input.payload : {}),
             };
       await this.event(em, orgId, 'created', row, shown, actor);
-      return this.view(em, row);
+      return this.view(em, orgId, row);
     }, orgId);
   }
 
@@ -264,7 +270,7 @@ export class ContactRequestsService {
       }
       const decided = await this.decide(em, orgId, id, 'approved', actor);
       await this.event(em, orgId, 'approved', decided, result, actor);
-      return this.view(em, decided);
+      return this.view(em, orgId, decided);
     }, orgId);
   }
 
@@ -299,7 +305,7 @@ export class ContactRequestsService {
         await this.subject(em, orgId, req),
         actor,
       );
-      return this.view(em, decided);
+      return this.view(em, orgId, decided);
     }, orgId);
   }
 
@@ -329,7 +335,7 @@ export class ContactRequestsService {
         await this.subject(em, orgId, req),
         actor,
       );
-      return this.view(em, decided);
+      return this.view(em, orgId, decided);
     }, orgId);
   }
 

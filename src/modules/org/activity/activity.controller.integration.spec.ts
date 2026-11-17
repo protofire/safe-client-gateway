@@ -352,11 +352,11 @@ describe('org activity log', () => {
     it('takes types repeated or comma-separated, with the date range', async () => {
       const repeated = await list(
         admin.cookie,
-        '?types=safe.linked&types=safe.unlinked&from=2026-01-02T00:00:00Z',
+        '?types=safe.linked&types=safe.unlinked&from=2026-01-02T00:00:00Z&to=2026-03-01T00:00:00Z',
       ).expect(200);
       const comma = await list(
         admin.cookie,
-        '?types=safe.linked,safe.unlinked&from=2026-01-02T00:00:00%2B00:00',
+        '?types=safe.linked,safe.unlinked&from=2026-01-02T00:00:00%2B00:00&to=2026-03-01T00:00:00Z',
       ).expect(200);
       expect(types(repeated.body)).toEqual([
         '2026-02-01 safe.linked',
@@ -371,12 +371,36 @@ describe('org activity log', () => {
       ['from after to', '?from=2026-02-01T00:00:00Z&to=2026-01-01T00:00:00Z'],
       ['a range over 366 days', '?from=2025-01-01T00:00:00Z&to=2026-01-03T00:00:00Z'],
       ['a date without a time', '?from=2026-01-01'],
+      ['a lone from more than 366 days ago', '?from=2000-01-01T00:00:00Z'],
     ])('answers 400 for %s', async (_, qs) => {
       await list(admin.cookie, qs).expect(400);
       await http()
         .get(`/v1/orgs/${orgId}/activity.csv${qs}`)
         .set('Cookie', admin.cookie)
         .expect(400);
+    });
+
+    it('closes a lone to at to - 366 days', async () => {
+      await at('2025-01-30T00:00:00.000Z', 'safe.linked');
+      await at('2025-01-31T00:00:00.000Z', 'safe.linked');
+      const { body } = await list(
+        admin.cookie,
+        '?types=safe.linked&to=2026-01-31T00:00:00Z',
+      ).expect(200);
+      // 2026 is not a leap year: 366 days back is 2025-01-30
+      expect(types(body)).toEqual([
+        '2026-01-01 safe.linked',
+        '2025-01-31 safe.linked',
+        '2025-01-30 safe.linked',
+      ]);
+      const { body: earlier } = await list(
+        admin.cookie,
+        '?types=safe.linked&to=2026-01-31T00:00:01Z',
+      ).expect(200);
+      expect(types(earlier)).toEqual([
+        '2026-01-01 safe.linked',
+        '2025-01-31 safe.linked',
+      ]);
     });
 
     it('applies the same filters to the CSV export', async () => {

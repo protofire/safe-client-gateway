@@ -120,14 +120,50 @@ describe('members and invitations (org)', () => {
       });
     });
 
-    it('answers 400 for a malformed token and 429 after 30 previews a minute from one IP', async () => {
-      await preview('short').expect(400);
+    it('counts every preview toward 30 a minute per IP, malformed tokens too, and answers them the same 404', async () => {
       const token = randomBytes(32).toString('base64url');
+      const malformed = await preview('short').expect(404);
+      expect(malformed.body).toEqual((await preview(token).expect(404)).body);
       const statuses: Array<number> = [];
-      for (let i = 0; i < 31; i++) statuses.push((await preview(token)).status);
-      expect(statuses.slice(0, 30)).toEqual(Array(30).fill(404));
-      expect(statuses[30]).toBe(429);
+      for (let i = 0; i < 28; i++) statuses.push((await preview(token)).status);
+      expect(statuses).toEqual(Array(28).fill(404));
+      await preview('short').expect(429);
       await preview(token, '10.77.0.2').expect(404);
+    });
+
+    it('shows the inviter name only while the inviter is a member of that org', async () => {
+      const admin = await t.user({ wallet: true });
+      const other = await t.user({ wallet: true });
+      const orgId = await t.createOrg(admin);
+      await t.addMember(orgId, other, 'admin');
+      await t.sql.query(`UPDATE users SET display_name = 'Olga' WHERE id = $1`, [
+        other.userId,
+      ]);
+      const to = email();
+      const { token } = await inviteEmail(orgId, other, to);
+      expect((await preview(token).expect(200)).body.invitedBy).toEqual({
+        displayName: 'Olga',
+        identity: expect.any(String),
+      });
+
+      // a declined row keeps the user id; the name is no longer shown
+      await t.sql.query(
+        `UPDATE members SET status = 'declined' WHERE org_id = $1 AND user_id = $2`,
+        [orgId, other.userId],
+      );
+      const members = await t
+        .http()
+        .get(`/v1/orgs/${orgId}/members`)
+        .set('Cookie', admin.cookie)
+        .expect(200);
+      expect(
+        (members.body as Array<{ userId: string; displayName: string | null }>)
+          .find((m) => m.userId === other.userId)?.displayName,
+      ).toBeNull();
+      expect((await preview(token).expect(200)).body.invitedBy).toEqual({
+        displayName: null,
+        identity: expect.any(String),
+      });
     });
   });
 
