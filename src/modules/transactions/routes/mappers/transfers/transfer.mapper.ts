@@ -30,7 +30,6 @@ export class TransferMapper {
       null,
       null,
       transfer.transactionHash,
-      transfer.hederaTransactionId,
     );
   }
 
