@@ -52,7 +52,6 @@ function setup(
   opts: {
     safes?: Array<typeof SAFE>;
     budget?: Partial<TransactionsBudget>;
-    ttlMs?: number;
     decoder?: IDataDecoderRepository;
     mapTransaction?: MultisigTransactionMapper['mapTransaction'];
   } = {},
@@ -102,7 +101,6 @@ function setup(
     { mapTransaction } as unknown as MultisigTransactionMapper,
     undefined,
     opts.budget,
-    opts.ttlMs,
   );
   return { service, repo, mapTransaction };
 }
@@ -333,7 +331,7 @@ describe('OrgTransactionsService', () => {
         0,
       );
 
-    it('after a failed read, Queue, Counts and History skip that Safe and still report it unavailable', async () => {
+    it('after a failed read, Queue and Counts (one surface) and History (its own) skip that Safe and still report it unavailable', async () => {
       const { service, repo } = setup({ safes: [bad, good] });
       failBad(repo);
 
@@ -345,12 +343,15 @@ describe('OrgTransactionsService', () => {
         limit: 25,
       });
       const counts = await service.counts('org', 'user', {});
+      expect(touched(repo)).toBe(1);
+      await service.list('org', 'user', { tab: 'history', limit: 25 });
+      expect(touched(repo)).toBe(2);
       const history = await service.list('org', 'user', {
         tab: 'history',
         limit: 25,
       });
 
-      expect(touched(repo)).toBe(1);
+      expect(touched(repo)).toBe(2);
       expect(queue.unavailableSafeIds).toEqual([bad.id]);
       expect(queue.complete).toBe(false);
       expect(counts.complete).toBe(false);
@@ -358,7 +359,7 @@ describe('OrgTransactionsService', () => {
       expect(history.complete).toBe(false);
     });
 
-    it('a failed first History read is remembered for Queue too', async () => {
+    it('a failed first History read is remembered for History only', async () => {
       const { service, repo } = setup({ safes: [bad, good] });
       failBad(repo);
 
@@ -368,12 +369,16 @@ describe('OrgTransactionsService', () => {
         limit: 25,
       });
 
-      expect(touched(repo)).toBe(1);
+      // History touched it once; Queue read it itself
+      expect(touched(repo)).toBe(2);
       expect(queue.unavailableSafeIds).toEqual([bad.id]);
     });
 
     it('reads the Safe again after the TTL', async () => {
-      const { service, repo } = setup({ safes: [bad, good], ttlMs: 30 });
+      const { service, repo } = setup({
+        safes: [bad, good],
+        budget: { unreadableTtlMs: 30 },
+      });
       failBad(repo);
 
       await service.counts('org', 'user', {});
@@ -398,6 +403,53 @@ describe('OrgTransactionsService', () => {
       expect(repo.getMultisigTransactions).toHaveBeenCalledTimes(3);
     });
 
+    it('a failure on the queue side does not hide the Safe from History, and vice versa', async () => {
+      const a = setup({ safes: [bad, good] });
+      failBad(a.repo);
+      await a.service.counts('org', 'user', {});
+      await a.service.list('org', 'user', { tab: 'history', limit: 25 });
+      // queue read failed (getSafe), then History read it itself (getMultisigTransactions)
+      expect(a.repo.getMultisigTransactions).toHaveBeenCalledWith(
+        expect.objectContaining({ safeAddress: bad.address }),
+      );
+
+      const b = setup({ safes: [bad, good] });
+      failBad(b.repo);
+      await b.service.list('org', 'user', { tab: 'history', limit: 25 });
+      b.repo.getSafe.mockClear();
+      await b.service.counts('org', 'user', {});
+      expect(
+        b.repo.getSafe.mock.calls.filter(([x]) => x.address === bad.address),
+      ).toHaveLength(1);
+    });
+
+    it('a timeout under a deadline shortened by the request budget is not remembered', async () => {
+      const { service, repo } = setup({
+        safes: [good],
+        budget: { totalMs: 160, mappingReserveMs: 50, safeMs: 1_000 },
+      });
+      repo.getSafe.mockImplementationOnce(() => never());
+      await service.counts('org', 'user', {});
+      await service.counts('org', 'user', {});
+      expect(repo.getSafe).toHaveBeenCalledTimes(2);
+    });
+
+    it('drops expired marks when a new one is added', async () => {
+      const { service, repo } = setup({
+        safes: [bad, good],
+        budget: { unreadableTtlMs: 20 },
+      });
+      failBad(repo);
+      await service.counts('org', 'user', {});
+      const memo = (service as unknown as { unreadable: Map<string, number> })
+        .unreadable;
+      expect(memo.size).toBe(1);
+      await new Promise((r) => setTimeout(r, 40));
+      // a different surface fails: the expired queue mark goes
+      await service.list('org', 'user', { tab: 'history', limit: 25 });
+      expect([...memo.keys()]).toEqual([`history:${bad.id}`]);
+    });
+
     it('a Safe skipped because the budget ran out is not remembered', async () => {
       const { service, repo } = setup({
         safes: [good],
@@ -412,6 +464,7 @@ describe('OrgTransactionsService', () => {
         safeMs: 8_000,
         mappingReserveMs: 0,
         decodeRetryMs: 1,
+        unreadableTtlMs: 60_000,
       };
       await service.counts('org', 'user', {});
       expect(repo.getSafe).toHaveBeenCalledTimes(1);
@@ -440,6 +493,14 @@ describe('OrgTransactionsService', () => {
       const getDecodedData = jest.fn(() => Promise.resolve(decoded));
       await run(getDecodedData);
       expect(getDecodedData).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not cache a decode that is not a full match', async () => {
+      const getDecodedData = jest.fn(() =>
+        Promise.resolve({ method: 'm', parameters: [], accuracy: 'NO_MATCH' }),
+      );
+      await run(getDecodedData);
+      expect(getDecodedData).toHaveBeenCalledTimes(2);
     });
 
     it('does not cache a null result', async () => {
