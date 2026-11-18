@@ -445,7 +445,7 @@ describe('linked Safes and overview', () => {
 
   it('renames and clears a Safe name, records safe.renamed once per change, and needs safes.link', async () => {
     const id = await link(orgA, admin, SAFE_A);
-    const patch = (u: User, body: unknown, safeId = id): request.Test =>
+    const patch = (u: User, body: object, safeId = id): request.Test =>
       http()
         .patch(`/v1/orgs/${orgA}/safes/${safeId}`)
         .set('Cookie', u.cookie)
