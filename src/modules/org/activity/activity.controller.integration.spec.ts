@@ -369,7 +369,10 @@ describe('org activity log', () => {
       ['an unknown type', '?types=safe.linked,nope'],
       ['an empty types list', '?types=,'],
       ['from after to', '?from=2026-02-01T00:00:00Z&to=2026-01-01T00:00:00Z'],
-      ['a range over 366 days', '?from=2025-01-01T00:00:00Z&to=2026-01-03T00:00:00Z'],
+      [
+        'a range over 366 days',
+        '?from=2025-01-01T00:00:00Z&to=2026-01-03T00:00:00Z',
+      ],
       ['a date without a time', '?from=2026-01-01'],
     ])('answers 400 for %s', async (_, qs) => {
       await list(admin.cookie, qs).expect(400);

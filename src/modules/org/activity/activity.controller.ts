@@ -66,15 +66,11 @@ type Filter = z.infer<typeof FilterSchema>;
  * 366 days, a lone `from` gets to = min(now, from + 366 days). Both given:
  * 400 when `from` is after `to` or they are more than 366 days apart.
  */
-function bounded<F extends { from?: string; to?: string }>(
-  f: F,
-  now: Date,
-): F {
+function bounded<F extends { from?: string; to?: string }>(f: F, now: Date): F {
   if (f.from === undefined && f.to === undefined) return f;
   const iso = (ms: number): string => new Date(ms).toISOString();
   const to =
-    f.to ??
-    iso(Math.min(now.getTime(), Date.parse(f.from!) + MAX_RANGE_MS));
+    f.to ?? iso(Math.min(now.getTime(), Date.parse(f.from!) + MAX_RANGE_MS));
   const from = f.from ?? iso(Date.parse(to) - MAX_RANGE_MS);
   const span = Date.parse(to) - Date.parse(from);
   if (span < 0) throw new BadRequestException('`from` is after `to`');

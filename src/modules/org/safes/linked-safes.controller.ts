@@ -6,6 +6,7 @@ import {
   HttpCode,
   NotFoundException,
   Param,
+  Patch,
   Post,
   Query,
   Req,
@@ -35,6 +36,10 @@ const LinkSchema = z.object({
   chainId: z.string().regex(/^[1-9]\d{0,19}$/),
   address: z.string().refine((v) => isAddress(v, { strict: false })),
   label: z.string().trim().min(1).max(64).optional(),
+});
+// null clears the name
+const RenameSchema = z.object({
+  label: z.string().trim().min(1).max(64).nullable(),
 });
 // each overview fans out to the tx-service for up to 50 Safes (item 7)
 const OVERVIEWS_PER_USER_PER_MINUTE = 30;
@@ -85,6 +90,27 @@ export class LinkedSafesController {
     await this.linked.unlink(
       req.params.orgId,
       linkedSafeId,
+      actor(req, session.userId),
+    );
+  }
+
+  @Patch('safes/:linkedSafeId')
+  @OrgApiBody(RenameSchema)
+  @RequirePermission('safes.link')
+  @RequireStrongAuth()
+  rename(
+    @Req() req: Request,
+    @OrgSession() session: OrgSession,
+    @Param('linkedSafeId') linkedSafeId: string,
+    @Body() body: unknown,
+  ): Promise<LinkedSafeRow> {
+    if (!z.uuid().safeParse(linkedSafeId).success)
+      throw new NotFoundException();
+    const { label } = parse(RenameSchema, body);
+    return this.linked.rename(
+      req.params.orgId,
+      linkedSafeId,
+      label,
       actor(req, session.userId),
     );
   }

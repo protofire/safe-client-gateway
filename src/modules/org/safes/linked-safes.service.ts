@@ -138,6 +138,63 @@ export class LinkedSafesService {
     return row;
   }
 
+  /** Sets or clears the organization's name for a linked Safe; no event when unchanged. */
+  async rename(
+    orgId: string,
+    linkedSafeId: string,
+    label: string | null,
+    actor: Actor,
+  ): Promise<LinkedSafeRow> {
+    return this.tx.runInOrgTx(async (em) => {
+      await lockOrgs(em, [orgId]);
+      await recheckPermission(
+        this.resolver,
+        em,
+        orgId,
+        actor.userId,
+        'safes.link',
+      );
+      const [row]: Array<{
+        chain_id: string;
+        address: string;
+        label: string | null;
+      }> = await em.query(
+        `SELECT chain_id, address, label FROM linked_safes
+         WHERE id = $1 AND org_id = $2 FOR UPDATE`,
+        [linkedSafeId, orgId],
+      );
+      if (!row) throw new NotFoundException();
+      const address = getAddress(row.address);
+      const result = {
+        id: linkedSafeId,
+        chainId: row.chain_id,
+        address,
+        label,
+      };
+      if (row.label === label) return result;
+      await em.query(`UPDATE linked_safes SET label = $2 WHERE id = $1`, [
+        linkedSafeId,
+        label,
+      ]);
+      await this.activity.record(em, {
+        orgId,
+        actorUserId: actor.userId,
+        type: 'safe.renamed',
+        targetType: 'safe',
+        targetId: linkedSafeId,
+        payload: {
+          chainId: row.chain_id,
+          address,
+          ...(label ? { label } : {}),
+          ...(row.label ? { previousLabel: row.label } : {}),
+        },
+        ip: actor.ip,
+        userAgent: actor.userAgent,
+      });
+      return result;
+    }, orgId);
+  }
+
   /**
    * So the first on-chain change after linking has something to diff
    * against. Item 8: if no other org links the Safe, nobody diffed against

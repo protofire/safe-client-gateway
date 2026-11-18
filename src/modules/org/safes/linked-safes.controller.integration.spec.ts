@@ -443,6 +443,43 @@ describe('linked Safes and overview', () => {
     expect(events).toEqual([{ payload: { chainId: '1', address: SAFE_A } }]);
   });
 
+  it('renames and clears a Safe name, records safe.renamed once per change, and needs safes.link', async () => {
+    const id = await link(orgA, admin, SAFE_A);
+    const patch = (u: User, body: unknown, safeId = id): request.Test =>
+      http()
+        .patch(`/v1/orgs/${orgA}/safes/${safeId}`)
+        .set('Cookie', u.cookie)
+        .set('X-Org-Request', '1')
+        .send(body);
+
+    const res = await patch(admin, { label: '  Ops  ' }).expect(200);
+    expect(res.body).toEqual({
+      id,
+      chainId: '1',
+      address: SAFE_A,
+      label: 'Ops',
+    });
+    await patch(admin, { label: 'Ops' }).expect(200);
+    await patch(admin, { label: null }).expect(200);
+    await patch(admin, { label: '' }).expect(400);
+    await patch(member, { label: 'Mine' }).expect(403);
+    await patch(admin, { label: 'X' }, 'not-a-uuid').expect(404);
+
+    const [row] = await sql.query(
+      `SELECT label FROM linked_safes WHERE id = $1`,
+      [id],
+    );
+    expect(row.label).toBeNull();
+    const events = await sql.query(
+      `SELECT payload FROM activity_events WHERE org_id = $1 AND type = 'safe.renamed' ORDER BY created_at`,
+      [orgA],
+    );
+    expect(events).toEqual([
+      { payload: { chainId: '1', address: SAFE_A, label: 'Ops' } },
+      { payload: { chainId: '1', address: SAFE_A, previousLabel: 'Ops' } },
+    ]);
+  });
+
   it('answers 404 for a linked Safe id of another org', async () => {
     const idB = await link(orgB, adminB, SAFE_A);
     await http()

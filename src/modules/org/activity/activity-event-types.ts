@@ -14,6 +14,7 @@ export const ACTIVITY_EVENT_TYPES = [
   'member.factors_reset',
   'safe.linked',
   'safe.unlinked',
+  'safe.renamed',
   'contact.created',
   'contact.updated',
   'contact.deleted',
