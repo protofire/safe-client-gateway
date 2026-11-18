@@ -44,10 +44,16 @@ export function queueSafeRows(
     perNonce.set(tx.nonce, (perNonce.get(tx.nonce) ?? 0) + 1);
   }
   const rows = page.results.map((tx) =>
-    toRow(safe, tx, 'queue', {
-      awaitingMe: awaitsSignatureFrom(tx, myOwners),
-      conflict: (perNonce.get(tx.nonce) ?? 0) > 1,
-    }),
+    toRow(
+      safe,
+      tx,
+      'queue',
+      {
+        awaitingMe: awaitsSignatureFrom(tx, myOwners),
+        conflict: (perNonce.get(tx.nonce) ?? 0) > 1,
+      },
+      owners,
+    ),
   );
   return { rows, truncated: page.next !== null };
 }

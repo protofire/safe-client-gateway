@@ -272,6 +272,7 @@ type Row = {
   safeTxHash: string;
   kind: string;
   awaitingMe: boolean;
+  signedBy: Array<unknown>;
   transaction: unknown;
 };
 type ListBody = {
@@ -579,6 +580,16 @@ describe('org transactions', () => {
         conflict: true,
         status: 'awaiting_confirmations',
       });
+      expect(body.items[0]).toMatchObject({
+        to: mine.to,
+        value: mine.value,
+        txHash: mine.transactionHash,
+        signedBy: [],
+        owners: expect.any(Array),
+        actions: null,
+        actionsTotal: null,
+      });
+      expect(body.items[2].signedBy).toHaveLength(signedByMe()?.length ?? 0);
       expect(body).toMatchObject({
         nextCursor: null,
         searchedUntil: null,

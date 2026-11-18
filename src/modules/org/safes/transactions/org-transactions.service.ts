@@ -104,6 +104,24 @@ export type ListResponse = {
   truncatedSafeIds: Array<string>;
 };
 
+/** Batch actions get the decoded method of the inner call at the same index. */
+function withMethods(
+  row: MultisigRow,
+  decoded: { parameters?: Array<{ valueDecoded?: unknown }> | null } | null,
+): MultisigRow {
+  const inner = decoded?.parameters?.[0]?.valueDecoded;
+  if (!row.actions || !Array.isArray(inner)) return row;
+  return {
+    ...row,
+    actions: row.actions.map((a, i) => ({
+      ...a,
+      method:
+        (inner[i] as { dataDecoded?: { method?: string } | null } | undefined)
+          ?.dataDecoded?.method ?? null,
+    })),
+  };
+}
+
 /** What the mapping phase needs per row, keyed by `rowKey`. */
 type Source = { tx: MultisigTransaction; safe?: Safe };
 
@@ -424,11 +442,11 @@ export class OrgTransactionsService {
       const left = budgetEnd - Date.now();
       if (!source || left <= 0) return row;
       try {
-        const transaction = await withDeadline(
+        const { transaction, dataDecoded } = await withDeadline(
           this.mapOne(row.chainId, source, () => liveSafe(row), budgetEnd),
           left,
         );
-        return { ...row, transaction };
+        return { ...withMethods(row, dataDecoded), transaction };
       } catch {
         return row;
       }
@@ -441,12 +459,21 @@ export class OrgTransactionsService {
     source: Source,
     liveSafe: () => Promise<Safe>,
     budgetEnd: number,
-  ): Promise<Transaction> {
+  ): Promise<{
+    transaction: Transaction;
+    dataDecoded: Awaited<ReturnType<OrgTransactionsService['decode']>>;
+  }> {
     const [safe, dataDecoded] = await Promise.all([
       source.safe ?? liveSafe(),
       this.decode(chainId, source.tx, budgetEnd),
     ]);
-    return this.mapper.mapTransaction(chainId, source.tx, safe, dataDecoded);
+    const transaction = await this.mapper.mapTransaction(
+      chainId,
+      source.tx,
+      safe,
+      dataDecoded,
+    );
+    return { transaction, dataDecoded };
   }
 
   /**

@@ -16,6 +16,10 @@ import {
   type TransactionsBudget,
 } from '@/modules/org/safes/transactions/org-transactions.service';
 import {
+  multiSendData,
+  packCalls,
+} from '@/modules/org/common/__tests__/multisend.builder';
+import {
   T0,
   executed,
   linked,
@@ -151,6 +155,50 @@ describe('OrgTransactionsService', () => {
         null,
       );
       expect(res.items[0].transaction).toEqual({ id: tx.safeTxHash });
+    });
+
+    it('fills the method of each batch action from the decoded MultiSend, null where undecoded', async () => {
+      const to = getAddress(numberToHex(0x2001, { size: 20 }));
+      const calls = [0, 1].map(() => ({
+        to,
+        value: 0n,
+        data: '0x' as const,
+        operation: 0 as const,
+      }));
+      const decoded = {
+        method: 'multiSend',
+        accuracy: 'FULL_MATCH',
+        parameters: [
+          {
+            name: 'transactions',
+            type: 'bytes',
+            value: '0x',
+            valueDecoded: [
+              { to, dataDecoded: { method: 'transfer', parameters: [] } },
+              { to, dataDecoded: null },
+            ],
+          },
+        ],
+      };
+      const tx = executed(SAFE, 1, T0, {
+        data: multiSendData(packCalls(calls)),
+      });
+      const { service, repo } = setup({
+        decoder: {
+          getDecodedData: jest.fn(() => Promise.resolve(decoded)),
+        } as never,
+      });
+      repo.getMultisigTransactions.mockResolvedValue(page([tx]));
+
+      const res = await service.list('org', 'user', {
+        tab: 'history',
+        limit: 25,
+      });
+
+      expect(res.items[0].actions?.map((a) => a.method)).toEqual([
+        'transfer',
+        null,
+      ]);
     });
 
     it('a decoder rate limit (429) is retried, so the row maps with its decoded data', async () => {
