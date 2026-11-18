@@ -126,6 +126,7 @@
                 "member.factors_reset",
                 "safe.linked",
                 "safe.unlinked",
+                "safe.renamed",
                 "contact.created",
                 "contact.updated",
                 "contact.deleted",
@@ -185,6 +186,7 @@
                   "member.factors_reset",
                   "safe.linked",
                   "safe.unlinked",
+                  "safe.renamed",
                   "contact.created",
                   "contact.updated",
                   "contact.deleted",
@@ -298,6 +300,7 @@
                 "member.factors_reset",
                 "safe.linked",
                 "safe.unlinked",
+                "safe.renamed",
                 "contact.created",
                 "contact.updated",
                 "contact.deleted",
@@ -357,6 +360,7 @@
                   "member.factors_reset",
                   "safe.linked",
                   "safe.unlinked",
+                  "safe.renamed",
                   "contact.created",
                   "contact.updated",
                   "contact.deleted",
@@ -1641,6 +1645,38 @@
           }
         ],
         "responses": { "204": { "description": "" } },
+        "tags": ["LinkedSafes"]
+      },
+      "patch": {
+        "operationId": "LinkedSafesController_rename_v1",
+        "parameters": [
+          {
+            "name": "linkedSafeId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "anyOf": [
+                      { "type": "string", "minLength": 1, "maxLength": 64 },
+                      { "type": "null" }
+                    ]
+                  }
+                },
+                "required": ["label"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "" } },
         "tags": ["LinkedSafes"]
       }
     },
