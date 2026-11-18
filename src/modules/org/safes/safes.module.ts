@@ -10,6 +10,8 @@ import { PermissionsModule } from '@/modules/org/permissions/permissions.module'
 import { LinkedSafesController } from '@/modules/org/safes/linked-safes.controller';
 import { LinkedSafesService } from '@/modules/org/safes/linked-safes.service';
 import { OverviewService } from '@/modules/org/safes/overview.service';
+import { OrgTransactionsController } from '@/modules/org/safes/transactions/org-transactions.controller';
+import { OrgTransactionsService } from '@/modules/org/safes/transactions/org-transactions.service';
 
 /**
  * Reuses the gateway Safe, chains and balances repositories in-process.
@@ -27,7 +29,12 @@ import { OverviewService } from '@/modules/org/safes/overview.service';
     TransactionMappersModule,
     DataDecoderModule,
   ],
-  controllers: [LinkedSafesController],
-  providers: [OrgTransaction, LinkedSafesService, OverviewService],
+  controllers: [LinkedSafesController, OrgTransactionsController],
+  providers: [
+    OrgTransaction,
+    LinkedSafesService,
+    OverviewService,
+    OrgTransactionsService,
+  ],
 })
 export class SafesModule {}
