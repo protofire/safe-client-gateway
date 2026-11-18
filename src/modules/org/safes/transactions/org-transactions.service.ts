@@ -16,10 +16,7 @@ import {
   type LinkedSafeRow,
 } from '@/modules/org/safes/linked-safes.service';
 import { mapLimit, withDeadline } from '@/modules/org/safes/map-limit';
-import {
-  MAX_QUEUED_PER_SAFE,
-  CONCURRENCY,
-} from '@/modules/org/safes/overview.service';
+import { CONCURRENCY } from '@/modules/org/safes/overview.service';
 import {
   decodeCursor,
   encodeCursor,
@@ -38,7 +35,11 @@ import {
   type Counts,
   type QueueSafeRead,
 } from '@/modules/org/safes/transactions/queue-page';
-import type { MultisigRow } from '@/modules/org/safes/transactions/row';
+import {
+  multisigId,
+  rowKey,
+  type MultisigRow,
+} from '@/modules/org/safes/transactions/row';
 import type { Kind } from '@/modules/org/safes/transactions/tx-kind';
 
 /** Injectable so tests can shrink the History window (spec §9: W = 2). */
@@ -60,6 +61,12 @@ const DEFAULT_BUDGET: TransactionsBudget = {
   mappingReserveMs: 3_000,
 };
 const MAPPING_CONCURRENCY = 10;
+
+/** Rows to read, and rows whose chain could not be resolved. */
+type Scope = {
+  safes: Array<LinkedSafeRow>;
+  unknown: Array<LinkedSafeRow>;
+};
 
 export type ScopeQuery = {
   linkedSafeId?: Array<string>;
@@ -84,10 +91,6 @@ export type ListResponse = {
 
 /** What the mapping phase needs per row, keyed by `rowKey`. */
 type Source = { tx: MultisigTransaction; safe?: Safe };
-const rowKey = (linkedSafeId: string, id: string): string =>
-  `${linkedSafeId} ${id}`;
-const txId = (tx: MultisigTransaction): string =>
-  `multisig_${tx.safe}_${tx.safeTxHash}`;
 
 /**
  * Spec 027 §5: the org Transactions list and queue counts over the linked
@@ -117,11 +120,11 @@ export class OrgTransactionsService {
 
   async counts(orgId: string, userId: string, q: ScopeQuery): Promise<Counts> {
     const budgetEnd = Date.now() + this.budget.totalMs;
-    const [safes, wallets] = await Promise.all([
+    const [{ safes, unknown }, wallets] = await Promise.all([
       this.scope(orgId, q, budgetEnd),
       this.linked.wallets(userId),
     ]);
-    const { reads } = await this.queueReads(safes, wallets, budgetEnd);
+    const { reads } = await this.queueReads(safes, unknown, wallets, budgetEnd);
     return queuePage(reads, { limit: Number.MAX_SAFE_INTEGER, after: null })
       .counts;
   }
@@ -132,7 +135,7 @@ export class OrgTransactionsService {
     q: ListQuery,
   ): Promise<ListResponse> {
     const budgetEnd = Date.now() + this.budget.totalMs;
-    const [safes, wallets] = await Promise.all([
+    const [{ safes, unknown }, wallets] = await Promise.all([
       this.scope(orgId, q, budgetEnd),
       this.linked.wallets(userId),
     ]);
@@ -142,13 +145,14 @@ export class OrgTransactionsService {
       kind: q.kind,
       linkedSafeId: q.linkedSafeId,
       chainId: q.chainId,
-      scopeSafeIds: safes.map((r) => r.id),
+      scopeSafeIds: [...safes, ...unknown].map((r) => r.id),
     });
 
     if (q.tab === 'queue') {
       const after = q.cursor ? decodeCursor(q.cursor, s, QueueKeySchema) : null;
       const { reads, sources } = await this.queueReads(
         safes,
+        unknown,
         wallets,
         budgetEnd,
       );
@@ -181,7 +185,7 @@ export class OrgTransactionsService {
         }),
       );
       for (const tx of page.results) {
-        sources.set(rowKey(safe.id, txId(tx)), { tx });
+        sources.set(rowKey(safe.id, multisigId(tx)), { tx });
       }
       return page;
     };
@@ -193,26 +197,32 @@ export class OrgTransactionsService {
       kind: q.kind,
       window: this.window ?? historyWindow(q.kind),
     });
+    const unavailable = [
+      ...page.unavailableSafeIds,
+      ...unknown.map((r) => r.id),
+    ];
     return {
       items: await this.mapRows(page.items, sources, budgetEnd),
       nextCursor: page.nextKey ? encodeCursor(page.nextKey, s) : null,
       searchedUntil: page.searchedUntil,
       counts: null,
-      complete: page.unavailableSafeIds.length === 0,
-      unavailableSafeIds: page.unavailableSafeIds,
+      complete: unavailable.length === 0,
+      unavailableSafeIds: unavailable,
       truncatedSafeIds: [],
     };
   }
 
   /**
    * Linked Safes of the org narrowed by `linkedSafeId`, then by `chainId` or
-   * the Safes-page network default: testnets out unless every Safe is on one.
+   * the Safes-page network default: testnets out unless every Safe of the org
+   * is on one. A chain whose config cannot be read is neither: its Safes in
+   * scope come back as `unknown` (unavailable, never read).
    */
   private async scope(
     orgId: string,
     q: ScopeQuery,
     budgetEnd: number,
-  ): Promise<Array<LinkedSafeRow>> {
+  ): Promise<Scope> {
     // the tenant boundary: the org's rows are read under its RLS context
     const rows = await this.linked.rows(orgId);
     const ids = new Set(rows.map((r) => r.id));
@@ -223,9 +233,12 @@ export class OrgTransactionsService {
       ? rows.filter((r) => q.linkedSafeId!.includes(r.id))
       : rows;
     if (q.chainId?.length) {
-      return picked.filter((r) => q.chainId!.includes(r.chainId));
+      return {
+        safes: picked.filter((r) => q.chainId!.includes(r.chainId)),
+        unknown: [],
+      };
     }
-    const chainIds = [...new Set(picked.map((r) => r.chainId))];
+    const chainIds = [...new Set(rows.map((r) => r.chainId))];
     const testnet = new Map(
       await Promise.all(
         chainIds.map(async (chainId) => {
@@ -234,20 +247,28 @@ export class OrgTransactionsService {
             Math.max(1, Math.min(this.budget.safeMs, budgetEnd - Date.now())),
           ).then(
             (chain) => chain.isTestnet,
-            // an unknown or slow chain stays in; its Safes then show as unavailable
-            () => false,
+            () => null,
           );
           return [chainId, isTestnet] as const;
         }),
       ),
     );
-    if (picked.every((r) => testnet.get(r.chainId))) return picked;
-    return picked.filter((r) => !testnet.get(r.chainId));
+    const known = rows.filter((r) => testnet.get(r.chainId) !== null);
+    const onlyTestnets = known.every((r) => testnet.get(r.chainId) === true);
+    return {
+      safes: picked.filter(
+        (r) =>
+          testnet.get(r.chainId) !== null &&
+          (onlyTestnets || testnet.get(r.chainId) === false),
+      ),
+      unknown: picked.filter((r) => testnet.get(r.chainId) === null),
+    };
   }
 
   /** Spec §5 fan-out: `getSafe`, then the newest 100 queued by submission. */
   private async queueReads(
     safes: ReadonlyArray<LinkedSafeRow>,
+    unknown: ReadonlyArray<LinkedSafeRow>,
     wallets: ReadonlySet<string>,
     budgetEnd: number,
   ): Promise<{
@@ -270,13 +291,12 @@ export class OrgTransactionsService {
               const page = await this.safes.getTransactionQueueBySubmission({
                 chainId: row.chainId,
                 safe,
-                limit: MAX_QUEUED_PER_SAFE,
               });
               return { safe, page };
             },
           );
           for (const tx of page.results) {
-            sources.set(rowKey(row.id, txId(tx)), { tx, safe });
+            sources.set(rowKey(row.id, multisigId(tx)), { tx, safe });
           }
           return {
             safe: row,
@@ -287,7 +307,13 @@ export class OrgTransactionsService {
         }
       },
     );
-    return { reads, sources };
+    return {
+      reads: [
+        ...reads,
+        ...unknown.map((safe): QueueSafeRead => ({ safe, failed: true })),
+      ],
+      sources,
+    };
   }
 
   /**

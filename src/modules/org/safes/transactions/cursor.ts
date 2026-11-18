@@ -30,7 +30,7 @@ export type QueueKey = z.infer<typeof QueueKeySchema>;
 
 const CursorSchema = z.object({
   v: z.literal(1),
-  k: z.unknown(),
+  k: z.record(z.string(), z.unknown()),
   s: z.string(),
 });
 
@@ -64,8 +64,9 @@ export function encodeCursor(k: HistoryKey | QueueKey, s: string): string {
 }
 
 /**
- * 400 when malformed or over 512 bytes; 409 `cursor_stale` when the scope
- * hash differs (another tab, other filters, a Safe linked or unlinked).
+ * 400 when malformed (envelope, then key schema) or over 512 bytes; 409 `cursor_stale` when the scope
+ * hash differs (another tab, other filters, a Safe linked or unlinked); the
+ * scope is checked before the key schema, so a cross-tab cursor is 409.
  */
 export function decodeCursor<K>(
   raw: string,

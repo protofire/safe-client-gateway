@@ -119,12 +119,11 @@ export interface ISafeRepository {
 
   /**
    * Returns the Safe Transaction Queue sorted by creation
-   * (newest first), `limit` 100 unless given.
+   * (newest first), fixed at 100.
    */
   getTransactionQueueBySubmission(args: {
     chainId: string;
     safe: Safe;
-    limit?: number;
   }): Promise<Page<MultisigTransaction>>;
 
   getCreationTransaction(args: {

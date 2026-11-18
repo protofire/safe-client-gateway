@@ -55,6 +55,14 @@ function status(tx: MultisigTransaction): MultisigRow['status'] {
     : 'awaiting_confirmations';
 }
 
+/** `multisig_<safe>_<safeTxHash>` */
+export const multisigId = (tx: MultisigTransaction): string =>
+  `multisig_${tx.safe}_${tx.safeTxHash}`;
+
+/** Identity of a row: (linkedSafeId, id). */
+export const rowKey = (linkedSafeId: string, id: string): string =>
+  `${linkedSafeId} ${id}`;
+
 /** Raw row; `transaction` stays null until the page is mapped. */
 export function toRow(
   safe: LinkedSafeRow,
@@ -69,7 +77,7 @@ export function toRow(
   const executedAt = tx.executionDate?.toISOString() ?? null;
   return {
     type: 'multisig',
-    id: `multisig_${tx.safe}_${tx.safeTxHash}`,
+    id: multisigId(tx),
     linkedSafeId: safe.id,
     chainId: safe.chainId,
     safeAddress: tx.safe,
@@ -113,7 +121,7 @@ export function dedupe<R extends Pick<MultisigRow, 'linkedSafeId' | 'id'>>(
 ): Array<R> {
   const seen = new Set<string>();
   return rows.filter((r) => {
-    const key = `${r.linkedSafeId} ${r.id}`;
+    const key = rowKey(r.linkedSafeId, r.id);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

@@ -67,7 +67,7 @@ const labels = (
   pages.map((p) => p.items.map((r) => label(safes, r)));
 
 describe('historyPage', () => {
-  it('regression A: rows at the same second never let an older Safe overtake (W=2, limit=2)', async () => {
+  it('regression A: one Safe resumes by nonceLt across same-second rows (W=2, limit=2; passes without the frontier)', async () => {
     const A = linked('A', '1', 1);
     const B = linked('B', '1', 2);
     const T = T0;
@@ -417,6 +417,43 @@ describe('historyPage', () => {
     expect(pages.every((p) => p.nextKey === null || p.nextKey.n !== 4)).toBe(
       true,
     );
+  });
+
+  it('reads on past a full window of untimed rows: the timed older row is never lost (W=2)', async () => {
+    const A = linked('A', '1', 1);
+    const db: Db = new Map([
+      [
+        'A',
+        [executed(A, 5, null), executed(A, 4, null), executed(A, 3, T0 - 1)],
+      ],
+    ]);
+    const { read, calls } = txService(db);
+
+    const pages = await pageAll([A], read, { limit: 1, window: 2 });
+
+    expect(labels([A], pages)).toEqual([['A3']]);
+    expect(pages.flatMap((p) => p.unavailableSafeIds)).toEqual([]);
+    expect(calls.map((c) => c.offset)).toEqual([0, 2]);
+  });
+
+  it('still reports a Safe unavailable when its untimed rows outlast the refills', async () => {
+    const A = linked('A', '1', 1);
+    const db: Db = new Map([
+      ['A', Array.from({ length: 12 }, (_, i) => executed(A, 20 - i, null))],
+    ]);
+    const { read, calls } = txService(db);
+
+    const page = await historyPage({
+      safes: [A],
+      read,
+      after: null,
+      limit: 5,
+      window: 2,
+    });
+
+    expect(page.unavailableSafeIds).toEqual(['A']);
+    expect(page.items).toEqual([]);
+    expect(calls).toHaveLength(4);
   });
 
   it('lists a failed execution and an on-chain rejection', async () => {

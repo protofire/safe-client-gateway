@@ -1,6 +1,7 @@
 import type { MultisigTransaction } from '@/modules/safe/domain/entities/multisig-transaction.entity';
 import type { LinkedSafeRow } from '@/modules/org/safes/linked-safes.service';
 import { mapLimit } from '@/modules/org/safes/map-limit';
+import { CONCURRENCY } from '@/modules/org/safes/overview.service';
 import type { HistoryKey } from '@/modules/org/safes/transactions/cursor';
 import type { Kind } from '@/modules/org/safes/transactions/tx-kind';
 import {
@@ -53,8 +54,6 @@ export function historyWindow(kind?: ReadonlyArray<Kind>): number {
   return kind?.length ? 200 : 100;
 }
 export const MAX_REFILLS = 3;
-// tx-service reads are ~1-2 s each: same fan-out as the overview
-const CONCURRENCY = 12;
 
 type SafeState = {
   safe: LinkedSafeRow;
@@ -92,7 +91,6 @@ export async function historyPage(args: {
   limit: number;
   kind?: ReadonlyArray<Kind>;
   window: number;
-  maxRefills?: number;
 }): Promise<HistoryPage> {
   const kinds = args.kind?.length ? new Set(args.kind) : null;
   const after = args.after;
@@ -125,10 +123,18 @@ export async function historyPage(args: {
     };
     try {
       await load(s);
+      // a full window of untimed rows gives no key: read on, same cap as the refills
+      for (
+        let i = 0;
+        !s.exhausted && s.examined === null && i < MAX_REFILLS;
+        i++
+      ) {
+        await load(s);
+      }
     } catch {
       return null;
     }
-    // shortcut: a full first window without one timed row gives no key; unreadable until its blocks are indexed
+    // shortcut: still no timed row after the refills, so no key; unreadable until its blocks are indexed
     if (!s.exhausted && s.examined === null) return null;
     return s;
   });
@@ -162,10 +168,9 @@ export async function historyPage(args: {
 
   let f = frontier();
   let rows = matching(f?.key ?? null);
-  const maxRefills = args.maxRefills ?? MAX_REFILLS;
   for (
     let refills = 0;
-    f !== null && rows.length < args.limit && refills < maxRefills;
+    f !== null && rows.length < args.limit && refills < MAX_REFILLS;
     refills++
   ) {
     try {

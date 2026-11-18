@@ -60,6 +60,27 @@ describe('cursor', () => {
     );
   });
 
+  it.each([
+    ['k null', { v: 1, k: null, s: 'x' }],
+    ['k an array', { v: 1, k: [], s: 'x' }],
+    ['s not a string', { v: 1, k: key, s: 7 }],
+  ])('400 on a bad envelope even with a foreign scope: %s', (_, body) => {
+    const raw = Buffer.from(JSON.stringify(body)).toString('base64url');
+
+    expect(() => decodeCursor(raw, scopeHash(scope), HistoryKeySchema)).toThrow(
+      BadRequestException,
+    );
+  });
+
+  it('409 for a cross-tab cursor whose key does not fit the other tab schema', () => {
+    const raw = encodeCursor(key, scopeHash(scope));
+    const queueScope = scopeHash({ ...scope, tab: 'queue' });
+
+    expect(() => decodeCursor(raw, queueScope, QueueKeySchema)).toThrow(
+      ConflictException,
+    );
+  });
+
   it('400 when the key does not fit the tab schema', () => {
     const s = scopeHash(scope);
     const raw = encodeCursor({ ...key, n: -1 }, s);

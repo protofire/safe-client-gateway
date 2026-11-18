@@ -117,7 +117,8 @@ class TestProvidersModule {}
 const MAINNET = '1';
 const POLYGON = '137';
 const SEPOLIA = '11155111';
-const TESTNETS = new Set([SEPOLIA]);
+const BASE_SEPOLIA = '84532';
+const TESTNETS = new Set([SEPOLIA, BASE_SEPOLIA]);
 
 const addr = (n: number): Address => getAddress(numberToHex(n, { size: 20 }));
 const SAFE_A = addr(0xa1);
@@ -163,15 +164,8 @@ function installTxService(): void {
     },
   );
   safeRepo.getTransactionQueueBySubmission.mockImplementation(
-    ({
-      chainId,
-      safe,
-      limit,
-    }: {
-      chainId: string;
-      safe: { address: Address };
-      limit: number;
-    }) => {
+    ({ chainId, safe }: { chainId: string; safe: { address: Address } }) => {
+      const limit = 100;
       const queued = txsOf(chainId, safe.address)
         .filter((tx) => !tx.isExecuted)
         .sort(
@@ -686,6 +680,59 @@ describe('org transactions', () => {
       expect((await counts({ chainId: [SEPOLIA, MAINNET] })).body.queued).toBe(
         2,
       );
+    });
+
+    it('decides the network default over every linked Safe, not over linkedSafeId', async () => {
+      const test1 = await link(orgA, admin, SAFE_A, SEPOLIA);
+      await link(orgA, admin, SAFE_B, MAINNET);
+      queued(SEPOLIA, SAFE_A, 1, 10);
+      queued(MAINNET, SAFE_B, 1, 5);
+
+      let res = await list({ tab: 'queue', linkedSafeId: test1 }).expect(200);
+      expect((res.body as ListBody).items).toEqual([]);
+      expect((res.body as ListBody).counts?.queued).toBe(0);
+      expect((await counts({ linkedSafeId: test1 })).body.queued).toBe(0);
+      res = await list({
+        tab: 'queue',
+        linkedSafeId: test1,
+        chainId: SEPOLIA,
+      }).expect(200);
+      expect((res.body as ListBody).items.map((r) => r.linkedSafeId)).toEqual([
+        test1,
+      ]);
+    });
+
+    it('a chain whose config cannot be read is unavailable, not guessed; the other testnets are listed', async () => {
+      const ok = await link(orgA, admin, SAFE_A, SEPOLIA);
+      const lost = await link(orgA, admin, SAFE_B, BASE_SEPOLIA);
+      queued(SEPOLIA, SAFE_A, 1, 10);
+      queued(BASE_SEPOLIA, SAFE_B, 1, 5);
+      done(SEPOLIA, SAFE_A, 0, 3);
+      done(BASE_SEPOLIA, SAFE_B, 0, 2);
+      chainsRepo.getChain.mockImplementation((chainId: string) =>
+        chainId === BASE_SEPOLIA
+          ? Promise.reject(new Error('config down'))
+          : Promise.resolve({ chainId, isTestnet: true }),
+      );
+
+      safeRepo.getSafe.mockClear();
+      safeRepo.getMultisigTransactions.mockClear();
+      for (const tab of ['queue', 'history']) {
+        const body = (await list({ tab }).expect(200)).body as ListBody;
+        expect(body.items.map((r) => r.linkedSafeId)).toEqual([ok]);
+        expect(body.unavailableSafeIds).toEqual([lost]);
+        expect(body.complete).toBe(false);
+      }
+      expect((await counts()).body).toEqual({
+        queued: 1,
+        awaitingMe: 1,
+        complete: false,
+      });
+      for (const read of [safeRepo.getSafe, safeRepo.getMultisigTransactions]) {
+        expect(read).not.toHaveBeenCalledWith(
+          expect.objectContaining({ chainId: BASE_SEPOLIA }),
+        );
+      }
     });
 
     it('pages across 3 Safes on 2 chains without skipping or repeating', async () => {

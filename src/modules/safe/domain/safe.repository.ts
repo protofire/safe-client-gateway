@@ -262,11 +262,10 @@ export class SafeRepository implements ISafeRepository {
   async getTransactionQueueBySubmission(args: {
     chainId: string;
     safe: Safe;
-    limit?: number;
   }): Promise<Page<MultisigTransaction>> {
     return this._getTransactionQueue({
       ...args,
-      limit: args.limit ?? 100,
+      limit: 100,
       ordering: '-created',
     });
   }
