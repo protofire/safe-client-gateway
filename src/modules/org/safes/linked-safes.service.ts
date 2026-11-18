@@ -28,10 +28,12 @@ import { mapLimit, withDeadline } from '@/modules/org/safes/map-limit';
 /** Abuse limit (spec section 8), checked under the org row lock. */
 export const MAX_LINKED_SAFES = 50;
 const CONCURRENCY = 12;
+// the list reads one Safe per call, so all of them at once (MAX_LINKED_SAFES) fit one wave
+const LIST_CONCURRENCY = MAX_LINKED_SAFES;
 /** Injectable so tests can shrink the list's per-Safe wait. */
 export const LIST_SAFE_TIMEOUT_MS = 'LIST_SAFE_TIMEOUT_MS';
 // one slow chain must not hold the page: past this, the last stored owners and threshold are shown
-const DEFAULT_LIST_SAFE_TIMEOUT_MS = 3_000;
+const DEFAULT_LIST_SAFE_TIMEOUT_MS = 2_000;
 
 export type LinkedSafeRow = {
   id: string;
@@ -331,7 +333,7 @@ export class LinkedSafesService {
     ]);
     const signer = (owners: Array<Address>): boolean =>
       owners.some((o) => wallets.has(o.toLowerCase()));
-    const live = await mapLimit(rows, CONCURRENCY, async (row) => {
+    const live = await mapLimit(rows, LIST_CONCURRENCY, async (row) => {
       try {
         const safe = await withDeadline(
           this.safes.getSafe({ chainId: row.chainId, address: row.address }),
