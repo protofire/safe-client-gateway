@@ -168,8 +168,8 @@ export const OrgConfigurationSchema = z
     ORG_MAIL_FROM: z.string().min(1),
     ORG_MAIL_BASE_URL: url,
 
-    // Read by the reused balances/prices code (balances.providers.safe.prices.apiKey)
-    ORG_PRICES_PROVIDER_API_KEY: z.string().min(1),
+    // CoinGecko Pro key for the reused prices code; unset or empty = public API (rate-limited), as in the gateway
+    ORG_PRICES_PROVIDER_API_KEY: z.string().optional(),
     // Read by BlocklistService (sanctions screening) in reused Safe code
     BLOCKLIST_ENCRYPTED_DATA: z.string().min(1),
     BLOCKLIST_SECRET_KEY: z.string().min(1),

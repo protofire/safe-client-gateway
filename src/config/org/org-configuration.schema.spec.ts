@@ -38,6 +38,19 @@ function validEnv(): Record<string, string> {
 }
 
 describe('OrgConfigurationSchema', () => {
+  it('accepts a missing or empty ORG_PRICES_PROVIDER_API_KEY', () => {
+    const env: Record<string, string> = validEnv();
+    delete env.ORG_PRICES_PROVIDER_API_KEY;
+
+    expect(OrgConfigurationSchema.safeParse(env).success).toBe(true);
+    expect(
+      OrgConfigurationSchema.safeParse({
+        ...env,
+        ORG_PRICES_PROVIDER_API_KEY: '',
+      }).success,
+    ).toBe(true);
+  });
+
   it('requires ORG_MAIL_API_KEY only in production', () => {
     const env: Record<string, string> = validEnv();
     delete env.ORG_MAIL_API_KEY;
