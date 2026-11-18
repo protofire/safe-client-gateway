@@ -293,6 +293,7 @@ export class TransactionVerifierHelper {
       const signature = new SafeSignature({
         hash: args.transaction.safeTxHash,
         signature: confirmation.signature,
+        chainId: args.chainId,
       });
 
       const isBlocked = this.blocklist.some((blockedAddress) => {
@@ -346,6 +347,7 @@ export class TransactionVerifierHelper {
       const signature = new SafeSignature({
         hash: args.proposal.safeTxHash,
         signature: signatureByType,
+        chainId: args.chainId,
       });
 
       const isBlocked = this.blocklist.some((blockedAddress) => {
@@ -432,6 +434,7 @@ export class TransactionVerifierHelper {
     const signature = new SafeSignature({
       signature: args.signature,
       hash: args.transaction.safeTxHash,
+      chainId: args.chainId,
     });
 
     const isBlocked = this.blocklist.some((blockedAddress) => {
