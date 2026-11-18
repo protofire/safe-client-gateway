@@ -1509,6 +1509,32 @@ describe('TransactionApi', () => {
   });
 
   describe('getMultisigTransactions', () => {
+    it('should send nonce__lt and suffix the cache field only when nonceLt is set', async () => {
+      const safeAddress = getAddress(faker.finance.ethereumAddress());
+      const page = pageBuilder().with('results', []).build();
+      mockDataSource.get.mockResolvedValueOnce(rawify(page));
+
+      await service.getMultisigTransactions({
+        safeAddress,
+        ordering: '-nonce',
+        executed: true,
+        nonceLt: 7,
+        limit: 2,
+      });
+
+      expect(mockDataSource.get).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cacheDir: new CacheDir(
+            `${chainId}_multisig_transactions_${safeAddress}`,
+            `-nonce_true_undefined_undefined_undefined_undefined_undefined_undefined_undefined_2_undefined_lt7`,
+          ),
+          networkRequest: {
+            params: expect.objectContaining({ nonce__lt: 7, limit: 2 }),
+          },
+        }),
+      );
+    });
+
     it('should return the multisig transactions retrieved', async () => {
       const multisigTransaction = multisigTransactionBuilder().build();
       const multisigTransactionsPage = pageBuilder()

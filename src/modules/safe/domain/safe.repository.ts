@@ -258,6 +258,18 @@ export class SafeRepository implements ISafeRepository {
     });
   }
 
+  /** Newest submission first; the org Transactions queue reads its newest 100 in one call. */
+  async getTransactionQueueBySubmission(args: {
+    chainId: string;
+    safe: Safe;
+  }): Promise<Page<MultisigTransaction>> {
+    return this._getTransactionQueue({
+      ...args,
+      limit: 100,
+      ordering: '-created',
+    });
+  }
+
   private async _getTransactionQueue(args: {
     chainId: string;
     safe: Safe;
@@ -491,6 +503,7 @@ export class SafeRepository implements ISafeRepository {
     value?: string;
     nonce?: string;
     nonceGte?: number;
+    nonceLt?: number;
     trusted?: boolean;
     limit?: number;
     offset?: number;

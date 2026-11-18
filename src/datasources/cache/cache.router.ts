@@ -353,12 +353,13 @@ export class CacheRouter {
     value?: string;
     nonce?: string;
     nonceGte?: number;
+    nonceLt?: number;
     limit?: number;
     offset?: number;
   }): CacheDir {
     return new CacheDir(
       CacheRouter.getMultisigTransactionsCacheKey(args),
-      `${args.ordering}_${args.executed}_${args.trusted}_${args.executionDateGte}_${args.executionDateLte}_${args.to}_${args.value}_${args.nonce}_${args.nonceGte}_${args.limit}_${args.offset}`,
+      `${args.ordering}_${args.executed}_${args.trusted}_${args.executionDateGte}_${args.executionDateLte}_${args.to}_${args.value}_${args.nonce}_${args.nonceGte}_${args.limit}_${args.offset}${args.nonceLt === undefined ? '' : `_lt${args.nonceLt}`}`,
     );
   }
 

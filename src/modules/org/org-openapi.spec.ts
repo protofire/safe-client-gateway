@@ -123,4 +123,43 @@ describe('org OpenAPI document', () => {
       expect(params.find((p) => p.name === 'types')?.schema.type).toBe('array');
     }
   });
+
+  it('describes the Transactions list and counts with their query parameters', () => {
+    const params = (
+      path: string,
+    ): Array<{ name: string; required: boolean; schema: Schema }> =>
+      (
+        doc.paths[path] as {
+          get: {
+            parameters: Array<{
+              name: string;
+              in: string;
+              required: boolean;
+              schema: Schema;
+            }>;
+          };
+        }
+      ).get.parameters.filter((p) => p.in === 'query');
+    const list = params('/v1/orgs/{orgId}/transactions');
+    expect(list.map((p) => p.name).sort()).toEqual(
+      [
+        'chainId',
+        'cursor',
+        'kind',
+        'limit',
+        'linkedSafeId',
+        'mine',
+        'tab',
+      ].sort(),
+    );
+    expect(list.find((p) => p.name === 'tab')?.required).toBe(true);
+    for (const name of ['linkedSafeId', 'chainId', 'kind']) {
+      expect(list.find((p) => p.name === name)?.schema.type).toBe('array');
+    }
+    expect(
+      params('/v1/orgs/{orgId}/transactions/counts')
+        .map((p) => p.name)
+        .sort(),
+    ).toEqual(['chainId', 'linkedSafeId']);
+  });
 });

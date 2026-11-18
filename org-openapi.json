@@ -1686,6 +1686,87 @@
         "tags": ["LinkedSafes"]
       }
     },
+    "/v1/orgs/{orgId}/transactions": {
+      "get": {
+        "operationId": "OrgTransactionsController_list_v1",
+        "parameters": [
+          {
+            "name": "linkedSafeId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "maxItems": 50,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              }
+            }
+          },
+          {
+            "name": "chainId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "maxItems": 50,
+              "type": "array",
+              "items": { "type": "string", "pattern": "^[1-9]\\d{0,19}$" }
+            }
+          },
+          {
+            "name": "tab",
+            "required": true,
+            "in": "query",
+            "schema": { "type": "string", "enum": ["queue", "history"] }
+          },
+          {
+            "name": "mine",
+            "required": false,
+            "in": "query",
+            "schema": { "type": "string", "enum": ["true", "false"] }
+          },
+          {
+            "name": "kind",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "maxItems": 50,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "transfer",
+                  "settings",
+                  "batch",
+                  "rejection",
+                  "contract"
+                ]
+              }
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": 25,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["OrgTransactions"]
+      }
+    },
     "/v1/orgs/{orgId}/transactions.csv": {
       "get": {
         "operationId": "ControlsController_exportCsv_v1",
@@ -1731,6 +1812,39 @@
         ],
         "responses": { "200": { "description": "" } },
         "tags": ["Controls"]
+      }
+    },
+    "/v1/orgs/{orgId}/transactions/counts": {
+      "get": {
+        "operationId": "OrgTransactionsController_counts_v1",
+        "parameters": [
+          {
+            "name": "linkedSafeId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "maxItems": 50,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              }
+            }
+          },
+          {
+            "name": "chainId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "maxItems": 50,
+              "type": "array",
+              "items": { "type": "string", "pattern": "^[1-9]\\d{0,19}$" }
+            }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["OrgTransactions"]
       }
     },
     "/v1/orgs/account": {
@@ -2723,6 +2837,76 @@
           }
         },
         "required": ["method"]
+      },
+      "SafeAppProvider": {
+        "type": "object",
+        "properties": {
+          "url": { "type": "string" },
+          "name": { "type": "string" }
+        },
+        "required": ["url", "name"]
+      },
+      "SafeAppAccessControl": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "object" },
+          "value": {
+            "nullable": true,
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "required": ["type"]
+      },
+      "SafeAppSocialProfile": {
+        "type": "object",
+        "properties": {
+          "platform": {
+            "type": "string",
+            "enum": ["DISCORD", "GITHUB", "TWITTER", "TELEGRAM", "UNKNOWN"]
+          },
+          "url": { "type": "string" }
+        },
+        "required": ["platform", "url"]
+      },
+      "SafeApp": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "number" },
+          "url": { "type": "string" },
+          "name": { "type": "string" },
+          "iconUrl": { "type": "string", "nullable": true },
+          "description": { "type": "string" },
+          "chainIds": { "type": "array", "items": { "type": "string" } },
+          "provider": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [{ "$ref": "#/components/schemas/SafeAppProvider" }]
+          },
+          "accessControl": {
+            "$ref": "#/components/schemas/SafeAppAccessControl"
+          },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "features": { "type": "array", "items": { "type": "string" } },
+          "developerWebsite": { "type": "string", "nullable": true },
+          "socialProfiles": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/SafeAppSocialProfile" }
+          },
+          "featured": { "type": "boolean" }
+        },
+        "required": [
+          "id",
+          "url",
+          "name",
+          "description",
+          "chainIds",
+          "accessControl",
+          "tags",
+          "features",
+          "socialProfiles",
+          "featured"
+        ]
       }
     }
   }

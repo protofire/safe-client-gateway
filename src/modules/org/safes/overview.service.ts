@@ -15,6 +15,7 @@ import {
 } from '@/modules/org/safes/linked-safes.service';
 import { mapLimit, withDeadline } from '@/modules/org/safes/map-limit';
 import { readQueue } from '@/modules/org/safes/queue-reader';
+import { awaitsSignatureFrom } from '@/modules/org/safes/transactions/row';
 
 // tx-service reads are ~1–2 s each: 12 in flight keeps 50 Safes to a few waves
 export const CONCURRENCY = 12;
@@ -61,9 +62,9 @@ export type Overview = {
 
 /**
  * Staleness: Safe, balances and queue data come through the gateway
- * repositories' caches, and the gateway's webhook invalidation does not reach
- * the `org:` cache prefix. Values can be as old as those repositories' TTLs
- * until Task 11 adds org-side invalidation.
+ * repositories' caches under the `org:` prefix. OrgEventsModule clears the
+ * repository caches of linked Safes on transaction events; anything else
+ * lives for the repositories' TTLs (default 60 s).
  */
 @Injectable()
 export class OverviewService {
@@ -196,15 +197,7 @@ export class OverviewService {
     const awaiting: Array<AwaitingItem> = [];
     if (myOwnerAddresses.length > 0) {
       for (const tx of queued.slice(0, MAX_QUEUED_PER_SAFE)) {
-        const signed = new Set(
-          (tx.confirmations ?? []).map((c) => c.owner.toLowerCase()),
-        );
-        // already executable: nothing left to sign
-        if ((tx.confirmations?.length ?? 0) >= tx.confirmationsRequired) {
-          continue;
-        }
-        // an owner wallet of mine that has not confirmed yet
-        if (myOwnerAddresses.some((o) => !signed.has(o.toLowerCase()))) {
+        if (awaitsSignatureFrom(tx, myOwnerAddresses)) {
           awaiting.push({
             linkedSafeId: row.id,
             chainId: row.chainId,
