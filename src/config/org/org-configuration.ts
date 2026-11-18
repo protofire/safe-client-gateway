@@ -198,7 +198,8 @@ export default () => ({
   // ---- keys read by the reused transaction mappers (TransactionMappersModule) ----
   bridge: {
     baseUri: 'https://li.quest',
-    apiKey: process.env.ORG_BRIDGE_API_KEY,
+    // optional: the LI.FI mapper stays off (features.lifiTransactionsMapping); '' keeps getOrThrow from failing the boot
+    apiKey: process.env.ORG_BRIDGE_API_KEY ?? '',
   },
   earn: {
     testnet: {
