@@ -177,6 +177,14 @@ describe('configureOrgApp', () => {
     await request(app.getHttpServer()).get('/v1/auth/nonce').expect(404);
   });
 
+  it('answers 404 for gateway transaction routes pulled in by the mappers module', async () => {
+    await request(app.getHttpServer())
+      .get(
+        '/v1/chains/1/safes/0x0000000000000000000000000000000000000001/transactions/history',
+      )
+      .expect(404);
+  });
+
   it('lets exact /v1/orgs through for GET and POST', async () => {
     await request(app.getHttpServer()).get('/v1/orgs').expect(200);
     await request(app.getHttpServer()).post('/v1/orgs').expect(201);

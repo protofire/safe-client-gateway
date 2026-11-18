@@ -32,6 +32,7 @@ Object.assign(process.env, {
     keys: { v1: Buffer.alloc(32, 7).toString('base64') },
   }),
   ORG_EMAIL_HASH_KEY: Buffer.alloc(32).toString('base64'),
+  ORG_BRIDGE_API_KEY: 'test-bridge-key',
   ORG_OIDC_ISSUER: 'https://idp.example.com/',
   ORG_OIDC_CLIENT_ID: 'client',
   ORG_OIDC_CLIENT_SECRET: 'secret',

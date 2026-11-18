@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
 import { BalancesModule } from '@/modules/balances/balances.module';
 import { ChainsModule } from '@/modules/chains/chains.module';
+import { DataDecoderModule } from '@/modules/data-decoder/data-decoder.module';
 import { SafeRepositoryModule } from '@/modules/safe/domain/safe.repository.interface';
+import { TransactionMappersModule } from '@/modules/transactions/transaction-mappers.module';
 import { ActivityModule } from '@/modules/org/activity/activity.module';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import { PermissionsModule } from '@/modules/org/permissions/permissions.module';
@@ -22,6 +24,8 @@ import { OverviewService } from '@/modules/org/safes/overview.service';
     BalancesModule,
     ChainsModule,
     SafeRepositoryModule,
+    TransactionMappersModule,
+    DataDecoderModule,
   ],
   controllers: [LinkedSafesController],
   providers: [OrgTransaction, LinkedSafesService, OverviewService],
