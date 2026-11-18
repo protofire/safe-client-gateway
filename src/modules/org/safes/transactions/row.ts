@@ -10,6 +10,10 @@ export const MAX_ACTIONS = 50;
 export type BatchAction = {
   to: Address;
   value: string;
+  /** 0 = call, 1 = delegatecall */
+  operation: 0 | 1;
+  /** inner call data is non-empty */
+  hasData: boolean;
   method: string | null;
 };
 
@@ -28,15 +32,13 @@ export type MultisigRow = {
   confirmations: number;
   /** raw `to` of the multisig transaction */
   to: Address;
-  /** raw value, decimal wei */
-  value: string;
   /** execution hash; null while queued */
   txHash: Hex | null;
   /** oldest first */
   signedBy: Array<{ owner: Address; submittedAt: string }>;
   /** queue: the Safe's current owners; history: null (unknown at execution time) */
   owners: Array<Address> | null;
-  /** batch only: first 50 inner calls; `method` is filled by the mapping phase */
+  /** batch only: first 50 inner calls; filled by the mapping phase (null on raw rows) */
   actions: Array<BatchAction> | null;
   /** batch only: real count of inner calls */
   actionsTotal: number | null;
@@ -86,6 +88,27 @@ export const multisigId = (tx: MultisigTransaction): string =>
 export const rowKey = (linkedSafeId: string, id: string): string =>
   `${linkedSafeId} ${id}`;
 
+/** Batch inner calls of an emitted row; `method` is filled later. */
+export function withActions(
+  row: MultisigRow,
+  tx: MultisigTransaction,
+): MultisigRow {
+  if (row.kind !== 'batch') return row;
+  const calls = unpackMultiSend(tx.data ?? '0x');
+  return {
+    ...row,
+    actions:
+      calls?.slice(0, MAX_ACTIONS).map((c) => ({
+        to: c.to,
+        value: c.value.toString(),
+        operation: c.operation,
+        hasData: c.data !== '0x',
+        method: null,
+      })) ?? null,
+    actionsTotal: calls?.length ?? null,
+  };
+}
+
 /** Raw row; `transaction` stays null until the page is mapped. */
 export function toRow(
   safe: LinkedSafeRow,
@@ -100,7 +123,6 @@ export function toRow(
   const submittedAt = tx.submissionDate.toISOString();
   const executedAt = tx.executionDate?.toISOString() ?? null;
   const kind = txKind(tx, tx.safe);
-  const calls = kind === 'batch' ? unpackMultiSend(tx.data ?? '0x') : null;
   return {
     type: 'multisig',
     id: multisigId(tx),
@@ -113,7 +135,6 @@ export function toRow(
     timestamp: tab === 'queue' ? submittedAt : (executedAt ?? submittedAt),
     confirmations: tx.confirmations?.length ?? 0,
     to: tx.to,
-    value: tx.value,
     txHash: tx.transactionHash,
     signedBy: [...(tx.confirmations ?? [])]
       .sort((a, b) => a.submissionDate.getTime() - b.submissionDate.getTime())
@@ -122,13 +143,8 @@ export function toRow(
         submittedAt: c.submissionDate.toISOString(),
       })),
     owners: tab === 'queue' && owners ? [...owners] : null,
-    actions:
-      calls?.slice(0, MAX_ACTIONS).map((c) => ({
-        to: c.to,
-        value: c.value.toString(),
-        method: null,
-      })) ?? null,
-    actionsTotal: calls?.length ?? null,
+    actions: null,
+    actionsTotal: null,
     threshold: tx.confirmationsRequired,
     proposer: tx.proposer,
     submittedAt,

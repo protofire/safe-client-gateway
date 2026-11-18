@@ -201,6 +201,49 @@ describe('OrgTransactionsService', () => {
       ]);
     });
 
+    it.each([
+      [
+        'fewer decoded entries than actions',
+        [{ to: '0x', dataDecoded: { method: 'transfer', parameters: [] } }],
+        ['transfer', null],
+      ],
+      ['valueDecoded is not an array', { not: 'an array' }, [null, null]],
+    ])(
+      'methods stay null without index shift: %s',
+      async (_n, valueDecoded, expected) => {
+        const to = getAddress(numberToHex(0x2001, { size: 20 }));
+        const calls = [0, 1].map(() => ({
+          to,
+          value: 0n,
+          data: '0x' as const,
+          operation: 0 as const,
+        }));
+        const decoded = {
+          method: 'multiSend',
+          accuracy: 'FULL_MATCH',
+          parameters: [
+            { name: 'transactions', type: 'bytes', value: '0x', valueDecoded },
+          ],
+        };
+        const tx = executed(SAFE, 1, T0, {
+          data: multiSendData(packCalls(calls)),
+        });
+        const { service, repo } = setup({
+          decoder: {
+            getDecodedData: jest.fn(() => Promise.resolve(decoded)),
+          } as never,
+        });
+        repo.getMultisigTransactions.mockResolvedValue(page([tx]));
+
+        const res = await service.list('org', 'user', {
+          tab: 'history',
+          limit: 25,
+        });
+
+        expect(res.items[0].actions?.map((a) => a.method)).toEqual(expected);
+      },
+    );
+
     it('a decoder rate limit (429) is retried, so the row maps with its decoded data', async () => {
       const decoded = {
         method: 'transfer',

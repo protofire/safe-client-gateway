@@ -582,7 +582,6 @@ describe('org transactions', () => {
       });
       expect(body.items[0]).toMatchObject({
         to: mine.to,
-        value: mine.value,
         txHash: mine.transactionHash,
         signedBy: [],
         owners: expect.any(Array),

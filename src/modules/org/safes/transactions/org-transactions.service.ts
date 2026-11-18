@@ -41,6 +41,7 @@ import {
   multisigId,
   rowKey,
   type MultisigRow,
+  withActions,
 } from '@/modules/org/safes/transactions/row';
 import type { Kind } from '@/modules/org/safes/transactions/tx-kind';
 
@@ -440,15 +441,17 @@ export class OrgTransactionsService {
     return mapLimit(rows, MAPPING_CONCURRENCY, async (row) => {
       const source = sources.get(rowKey(row.linkedSafeId, row.id));
       const left = budgetEnd - Date.now();
-      if (!source || left <= 0) return row;
+      if (!source) return row;
+      const base = withActions(row, source.tx);
+      if (left <= 0) return base;
       try {
         const { transaction, dataDecoded } = await withDeadline(
           this.mapOne(row.chainId, source, () => liveSafe(row), budgetEnd),
           left,
         );
-        return { ...withMethods(row, dataDecoded), transaction };
+        return { ...withMethods(base, dataDecoded), transaction };
       } catch {
-        return row;
+        return base;
       }
     });
   }

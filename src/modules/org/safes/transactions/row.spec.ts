@@ -10,7 +10,11 @@ import {
   executed,
   linked,
 } from '@/modules/org/safes/transactions/__tests__/model';
-import { MAX_ACTIONS, toRow } from '@/modules/org/safes/transactions/row';
+import {
+  MAX_ACTIONS,
+  toRow,
+  withActions,
+} from '@/modules/org/safes/transactions/row';
 
 const A = linked('A', '1', 1);
 const addr = (n: number): Address =>
@@ -57,10 +61,11 @@ describe('toRow raw fields', () => {
     const hash = numberToHex(7, { size: 32 });
     const row = toRow(
       A,
-      executed(A, 1, T0, { transactionHash: hash, value: '42' }),
+      executed(A, 1, T0, { transactionHash: hash }),
       'history',
     );
-    expect(row).toMatchObject({ value: '42', txHash: hash });
+    expect(row.txHash).toBe(hash);
+    expect(row).not.toHaveProperty('value');
     expect(row.to).toBe(executed(A, 1, T0).to);
     expect(
       toRow(A, executed(A, 2, null, { transactionHash: null }), 'queue').txHash,
@@ -68,18 +73,20 @@ describe('toRow raw fields', () => {
   });
 
   it('lists the inner calls of a batch with a null method', () => {
-    const row = toRow(A, executed(A, 1, T0, { data: batch(3) }), 'history');
+    const tx = executed(A, 1, T0, { data: batch(3) });
+    const row = withActions(toRow(A, tx, 'history'), tx);
     expect(row.kind).toBe('batch');
     expect(row.actionsTotal).toBe(3);
     expect(row.actions).toEqual([
-      { to: addr(0), value: '0', method: null },
-      { to: addr(1), value: '1', method: null },
-      { to: addr(2), value: '2', method: null },
+      { to: addr(0), value: '0', operation: 0, hasData: false, method: null },
+      { to: addr(1), value: '1', operation: 0, hasData: false, method: null },
+      { to: addr(2), value: '2', operation: 0, hasData: false, method: null },
     ]);
   });
 
   it('caps batch actions at 50 and keeps the real count', () => {
-    const row = toRow(A, executed(A, 1, T0, { data: batch(60) }), 'history');
+    const tx = executed(A, 1, T0, { data: batch(60) });
+    const row = withActions(toRow(A, tx, 'history'), tx);
     expect(row.actions).toHaveLength(MAX_ACTIONS);
     expect(row.actionsTotal).toBe(60);
   });
@@ -93,5 +100,22 @@ describe('toRow raw fields', () => {
     });
     expect(row.to).toBeDefined();
     expect(row.signedBy).toEqual([]);
+  });
+
+  it('flags delegatecalls and non-empty inner data', () => {
+    const data = multiSendData(
+      packCalls([
+        { to: addr(0), value: 0n, data: '0xdeadbeef' as Hex, operation: 1 },
+      ]),
+    );
+    const tx = executed(A, 1, T0, { data });
+    expect(withActions(toRow(A, tx, 'history'), tx).actions).toEqual([
+      { to: addr(0), value: '0', operation: 1, hasData: true, method: null },
+    ]);
+  });
+
+  it('toRow leaves actions to the mapping phase', () => {
+    const row = toRow(A, executed(A, 1, T0, { data: batch(2) }), 'history');
+    expect(row).toMatchObject({ actions: null, actionsTotal: null });
   });
 });
