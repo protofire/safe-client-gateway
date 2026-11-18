@@ -32,7 +32,10 @@ import { ORG_DATA_SOURCE } from '@/modules/org/db/org-data-source';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import { PermissionsModule } from '@/modules/org/permissions/permissions.module';
 import { LinkedSafesController } from '@/modules/org/safes/linked-safes.controller';
-import { LinkedSafesService } from '@/modules/org/safes/linked-safes.service';
+import {
+  LIST_SAFE_TIMEOUT_MS,
+  LinkedSafesService,
+} from '@/modules/org/safes/linked-safes.service';
 import {
   OVERVIEW_SAFE_TIMEOUT_MS,
   OverviewService,
@@ -256,6 +259,7 @@ describe('linked Safes and overview', () => {
         LinkedSafesService,
         OverviewService,
         { provide: OVERVIEW_SAFE_TIMEOUT_MS, useValue: 300 },
+        { provide: LIST_SAFE_TIMEOUT_MS, useValue: 200 },
         { provide: ISafeRepository, useValue: safeRepo },
         { provide: IBalancesRepository, useValue: balancesRepo },
         { provide: IChainsRepository, useValue: chainsRepo },
@@ -536,6 +540,42 @@ describe('linked Safes and overview', () => {
           (s) => !s.iAmSigner,
         ),
       ).toBe(true);
+    });
+
+    it('answers a slow Safe from its stored state (stale) and one without a stored state as unavailable', async () => {
+      safeRepo.getSafe.mockResolvedValue({
+        owners: [admin.wallet],
+        threshold: 1,
+        modules: [],
+        guard: null,
+        version: '1.4.1',
+      });
+      await link(orgA, admin, SAFE_A);
+      await link(orgA, admin, SAFE_B);
+      await sql.query(`DELETE FROM linked_safe_snapshots WHERE address = $1`, [
+        SAFE_B,
+      ]);
+      // the tx-service never answers within the list's wait
+      safeRepo.getSafe.mockImplementation(() => new Promise(() => {}));
+      const started = Date.now();
+      const res = await http()
+        .get(`/v1/orgs/${orgA}/safes`)
+        .set('Cookie', admin.cookie)
+        .expect(200);
+      expect(Date.now() - started).toBeLessThan(2_000);
+      const byAddress = Object.fromEntries(
+        (res.body as Array<{ address: string }>).map((s) => [s.address, s]),
+      );
+      expect(byAddress[SAFE_A]).toMatchObject({
+        owners: [admin.wallet],
+        threshold: 1,
+        iAmSigner: true,
+        stale: true,
+      });
+      expect(byAddress[SAFE_B]).toMatchObject({
+        owners: null,
+        error: 'unavailable',
+      });
     });
   });
 

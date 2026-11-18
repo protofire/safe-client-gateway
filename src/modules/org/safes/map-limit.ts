@@ -17,3 +17,12 @@ export async function mapLimit<T, R>(
   );
   return out;
 }
+
+/** Rejects when `work` has not settled within `ms`; `work` keeps running (its result still fills caches). */
+export function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('Safe deadline exceeded')), ms);
+  });
+  return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
+}

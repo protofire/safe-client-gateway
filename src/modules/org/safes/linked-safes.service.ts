@@ -4,6 +4,7 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  Optional,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { getAddress, type Address } from 'viem';
@@ -22,11 +23,15 @@ import {
   toSnapshot,
 } from '@/modules/org/events/safe-snapshot';
 import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
-import { mapLimit } from '@/modules/org/safes/map-limit';
+import { mapLimit, withDeadline } from '@/modules/org/safes/map-limit';
 
 /** Abuse limit (spec section 8), checked under the org row lock. */
 export const MAX_LINKED_SAFES = 50;
-const CONCURRENCY = 5;
+const CONCURRENCY = 12;
+/** Injectable so tests can shrink the list's per-Safe wait. */
+export const LIST_SAFE_TIMEOUT_MS = 'LIST_SAFE_TIMEOUT_MS';
+// one slow chain must not hold the page: past this, the last stored owners and threshold are shown
+const DEFAULT_LIST_SAFE_TIMEOUT_MS = 3_000;
 
 export type LinkedSafeRow = {
   id: string;
@@ -39,6 +44,8 @@ export type LinkedSafeView = LinkedSafeRow & {
   owners: Array<Address> | null;
   threshold: number | null;
   iAmSigner: boolean;
+  /** owners and threshold are the last stored state: the live read was too slow or failed */
+  stale?: true;
   error?: 'unavailable';
 };
 
@@ -50,6 +57,9 @@ export class LinkedSafesService {
     @Inject(ISafeRepository) private readonly safes: ISafeRepository,
     private readonly resolver: PermissionResolver,
     @Inject(LoggingService) private readonly logger: ILoggingService,
+    @Optional()
+    @Inject(LIST_SAFE_TIMEOUT_MS)
+    private readonly listTimeoutMs: number = DEFAULT_LIST_SAFE_TIMEOUT_MS,
   ) {}
 
   async link(
@@ -319,27 +329,76 @@ export class LinkedSafesService {
       this.rows(orgId),
       this.wallets(userId),
     ]);
-    return mapLimit(rows, CONCURRENCY, async (row) => {
+    const signer = (owners: Array<Address>): boolean =>
+      owners.some((o) => wallets.has(o.toLowerCase()));
+    const live = await mapLimit(rows, CONCURRENCY, async (row) => {
       try {
-        const safe = await this.safes.getSafe({
-          chainId: row.chainId,
-          address: row.address,
-        });
-        return {
-          ...row,
-          owners: safe.owners,
-          threshold: safe.threshold,
-          iAmSigner: safe.owners.some((o) => wallets.has(o.toLowerCase())),
-        };
+        const safe = await withDeadline(
+          this.safes.getSafe({ chainId: row.chainId, address: row.address }),
+          this.listTimeoutMs,
+        );
+        return { row, owners: safe.owners, threshold: safe.threshold };
       } catch {
-        return {
-          ...row,
-          owners: null,
-          threshold: null,
-          iAmSigner: false,
-          error: 'unavailable' as const,
-        };
+        return { row };
       }
     });
+    const missed = live.filter((r) => !('owners' in r));
+    const stored = missed.length
+      ? await this.storedStates(orgId)
+      : new Map<string, { owners: Array<Address>; threshold: number }>();
+    return live.map((r): LinkedSafeView => {
+      if ('owners' in r && r.owners) {
+        return {
+          ...r.row,
+          owners: r.owners,
+          threshold: r.threshold,
+          iAmSigner: signer(r.owners),
+        };
+      }
+      const s = stored.get(`${r.row.chainId}:${r.row.address.toLowerCase()}`);
+      return s
+        ? {
+            ...r.row,
+            owners: s.owners,
+            threshold: s.threshold,
+            iAmSigner: signer(s.owners),
+            stale: true,
+          }
+        : {
+            ...r.row,
+            owners: null,
+            threshold: null,
+            iAmSigner: false,
+            error: 'unavailable',
+          };
+    });
+  }
+
+  /** The stored owners and threshold of the org's Safes, keyed `chainId:address` (lowercase) */
+  private async storedStates(
+    orgId: string,
+  ): Promise<Map<string, { owners: Array<Address>; threshold: number }>> {
+    const rows: Array<{
+      chain_id: string;
+      address: string;
+      owners: Array<string>;
+      threshold: number;
+    }> = await this.tx.runInOrgTx(
+      (em) =>
+        em.query(
+          `SELECT s.chain_id, s.address, s.owners, s.threshold
+             FROM linked_safe_snapshots s
+             JOIN linked_safes l ON l.chain_id = s.chain_id AND l.address = s.address
+            WHERE l.org_id = $1`,
+          [orgId],
+        ),
+      orgId,
+    );
+    return new Map(
+      rows.map((r) => [
+        `${r.chain_id}:${r.address.toLowerCase()}`,
+        { owners: r.owners.map((o) => getAddress(o)), threshold: r.threshold },
+      ]),
+    );
   }
 }

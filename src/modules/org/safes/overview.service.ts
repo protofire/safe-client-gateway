@@ -13,22 +13,17 @@ import {
   LinkedSafesService,
   type LinkedSafeRow,
 } from '@/modules/org/safes/linked-safes.service';
-import { mapLimit } from '@/modules/org/safes/map-limit';
+import { mapLimit, withDeadline } from '@/modules/org/safes/map-limit';
 import { readQueue } from '@/modules/org/safes/queue-reader';
 
-export const CONCURRENCY = 5;
+// tx-service reads are ~1–2 s each: 12 in flight keeps 50 Safes to a few waves
+export const CONCURRENCY = 12;
 /** Injectable so tests can shrink the per-Safe deadline. */
 export const OVERVIEW_SAFE_TIMEOUT_MS = 'OVERVIEW_SAFE_TIMEOUT_MS';
 // ponytail: fixed 8 s per Safe, not configurable; make it config if a chain needs more
 export const DEFAULT_SAFE_TIMEOUT_MS = 8_000;
 
-export function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error('Safe deadline exceeded')), ms);
-  });
-  return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
-}
+export { withDeadline };
 /** A11: at most this many queued transactions are read per Safe. */
 export const MAX_QUEUED_PER_SAFE = 100;
 
@@ -40,6 +35,9 @@ export type OverviewSafe = {
   queuedCount: number;
   queueTruncated: boolean;
   awaitingMySignature: number;
+  /** Read with the balances: fresher than the list's snapshot fallback; absent when unavailable */
+  owners?: Array<Address>;
+  threshold?: number;
   error?: 'unavailable';
 };
 
@@ -139,6 +137,8 @@ export class OverviewService {
         queuedCount: r.queuedCount,
         queueTruncated: r.queueTruncated,
         awaitingMySignature: r.awaiting.length,
+        owners: r.owners,
+        threshold: r.threshold,
       });
     }
     return {
@@ -162,6 +162,8 @@ export class OverviewService {
     queuedCount: number;
     queueTruncated: boolean;
     awaiting: Array<AwaitingItem>;
+    owners: Array<Address>;
+    threshold: number;
   }> {
     const safe = await this.safes.getSafe({
       chainId: row.chainId,
@@ -220,6 +222,8 @@ export class OverviewService {
       queuedCount: Math.min(queued.length, MAX_QUEUED_PER_SAFE),
       queueTruncated,
       awaiting,
+      owners: safe.owners,
+      threshold: safe.threshold,
     };
   }
 }
