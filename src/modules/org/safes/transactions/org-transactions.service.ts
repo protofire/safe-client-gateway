@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
 import { IDataDecoderRepository } from '@/modules/data-decoder/domain/v2/data-decoder.repository.interface';
+import { DataSourceError } from '@/domain/errors/data-source.error';
 import type { MultisigTransaction } from '@/modules/safe/domain/entities/multisig-transaction.entity';
 import type { Safe } from '@/modules/safe/domain/entities/safe.entity';
 import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
@@ -53,12 +54,16 @@ export type TransactionsBudget = {
   safeMs: number;
   /** kept for mapping: no Safe read starts inside it */
   mappingReserveMs: number;
+  /** base wait before retrying a decoder 429, plus up to as much jitter */
+  decodeRetryMs: number;
 };
 // spec §5 Budget
 const DEFAULT_BUDGET: TransactionsBudget = {
   totalMs: 15_000,
   safeMs: 8_000,
   mappingReserveMs: 3_000,
+  // the public decoder answers 429 "Too many requests per second" above ~2/s
+  decodeRetryMs: 500,
 };
 const MAPPING_CONCURRENCY = 10;
 
@@ -356,7 +361,7 @@ export class OrgTransactionsService {
       if (!source || left <= 0) return row;
       try {
         const transaction = await withDeadline(
-          this.mapOne(row.chainId, source, () => liveSafe(row)),
+          this.mapOne(row.chainId, source, () => liveSafe(row), budgetEnd),
           left,
         );
         return { ...row, transaction };
@@ -371,14 +376,40 @@ export class OrgTransactionsService {
     chainId: string,
     source: Source,
     liveSafe: () => Promise<Safe>,
+    budgetEnd: number,
   ): Promise<Transaction> {
     const [safe, dataDecoded] = await Promise.all([
       source.safe ?? liveSafe(),
-      this.decoder.getTransactionDataDecoded({
-        chainId,
-        transaction: source.tx,
-      }),
+      this.decode(chainId, source.tx, budgetEnd),
     ]);
     return this.mapper.mapTransaction(chainId, source.tx, safe, dataDecoded);
+  }
+
+  /**
+   * `getTransactionDataDecoded`, except for a decoder 429: retried within the
+   * budget, then thrown (row keeps `transaction: null`). The repository turns
+   * every error into `null`, and a token transfer mapped without decoded data
+   * reads as "Custom". Other errors still map with no decoded data (spec §4).
+   */
+  private async decode(
+    chainId: string,
+    tx: MultisigTransaction,
+    budgetEnd: number,
+  ): ReturnType<IDataDecoderRepository['getTransactionDataDecoded']> {
+    if (!tx.data || tx.data === '0x') return null;
+    for (;;) {
+      try {
+        return await this.decoder.getDecodedData({
+          chainId,
+          data: tx.data,
+          to: tx.to,
+        });
+      } catch (e) {
+        if (!(e instanceof DataSourceError) || e.code !== 429) return null;
+        const wait = this.budget.decodeRetryMs * (1 + Math.random());
+        if (Date.now() + wait >= budgetEnd) throw e;
+        await new Promise((resolve) => setTimeout(resolve, wait));
+      }
+    }
   }
 }

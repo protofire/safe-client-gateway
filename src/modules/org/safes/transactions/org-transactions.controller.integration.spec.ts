@@ -144,7 +144,7 @@ const safeRepo = {
   getMultisigTransactions: jest.fn(),
 };
 const chainsRepo = { getChain: jest.fn() };
-const decoder = { getTransactionDataDecoded: jest.fn() };
+const decoder = { getDecodedData: jest.fn() };
 const mapper = { mapTransaction: jest.fn() };
 const unreadable = new Set<string>();
 
@@ -491,7 +491,7 @@ describe('org transactions', () => {
     chainsRepo.getChain.mockImplementation((chainId: string) =>
       Promise.resolve({ chainId, isTestnet: TESTNETS.has(chainId) }),
     );
-    decoder.getTransactionDataDecoded.mockResolvedValue(null);
+    decoder.getDecodedData.mockResolvedValue(null);
     mapper.mapTransaction.mockImplementation(
       (_chainId: string, tx: MultisigTransaction) =>
         Promise.resolve({ id: `multisig_${tx.safe}_${tx.safeTxHash}` }),

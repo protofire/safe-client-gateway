@@ -1,5 +1,6 @@
 import { getAddress, numberToHex, type Address } from 'viem';
 import type { IConfigurationService } from '@/config/configuration.service.interface';
+import { DataSourceError } from '@/domain/errors/data-source.error';
 import type { ILoggingService } from '@/logging/logging.interface';
 import type { IChainsRepository } from '@/modules/chains/domain/chains.repository.interface';
 import { DataDecoderRepository } from '@/modules/data-decoder/domain/v2/data-decoder.repository';
@@ -31,6 +32,9 @@ const page = (
   previous: null;
   results: Array<MultisigTransaction>;
 } => ({ count: results.length, next: null, previous: null, results });
+/** What the decoder API client throws on HTTP 429 (`HttpErrorFactory`). */
+const tooManyRequests = (): DataSourceError =>
+  new DataSourceError('An error occurred', 429);
 const never = <T>(): Promise<T> => new Promise<T>(() => undefined);
 
 /** A queued transaction whose safeTxHash does not match its fields. */
@@ -81,7 +85,7 @@ function setup(
     getChain: jest.fn(() => Promise.resolve({ isTestnet: false })),
   };
   const decoder = opts.decoder ?? {
-    getDecodedData: jest.fn(),
+    getDecodedData: jest.fn(() => Promise.reject(new Error('no decoder'))),
     getTransactionDataDecoded: jest.fn(() => Promise.resolve(null)),
   };
   const mapTransaction = jest.fn(
@@ -147,6 +151,59 @@ describe('OrgTransactionsService', () => {
         null,
       );
       expect(res.items[0].transaction).toEqual({ id: tx.safeTxHash });
+    });
+
+    it('a decoder rate limit (429) is retried, so the row maps with its decoded data', async () => {
+      const decoded = {
+        method: 'transfer',
+        parameters: [],
+        accuracy: 'FULL_MATCH',
+      };
+      const api = {
+        getDecodedData: jest
+          .fn()
+          .mockRejectedValueOnce(tooManyRequests())
+          .mockResolvedValue(decoded),
+      };
+      const tx = executed(SAFE, 1, T0, { data: settingsData });
+      const { service, repo, mapTransaction } = setup({
+        decoder: new DataDecoderRepository(api as never, logger),
+        budget: { decodeRetryMs: 1 },
+      });
+      repo.getMultisigTransactions.mockResolvedValue(page([tx]));
+
+      await service.list('org', 'user', { tab: 'history', limit: 25 });
+
+      expect(api.getDecodedData).toHaveBeenCalledTimes(2);
+      expect(mapTransaction).toHaveBeenCalledWith(
+        '1',
+        tx,
+        expect.anything(),
+        decoded,
+      );
+    });
+
+    it('a decoder rate limit that outlasts the budget gives transaction null, never a row mapped without decoded data', async () => {
+      const api = {
+        getDecodedData: jest.fn(() => Promise.reject(tooManyRequests())),
+      };
+      const tx = executed(SAFE, 1, T0, { data: settingsData });
+      const { service, repo, mapTransaction } = setup({
+        decoder: new DataDecoderRepository(api as never, logger),
+        budget: { totalMs: 400, mappingReserveMs: 300, decodeRetryMs: 20 },
+      });
+      repo.getMultisigTransactions.mockResolvedValue(page([tx]));
+
+      const res = await service.list('org', 'user', {
+        tab: 'history',
+        limit: 25,
+      });
+
+      expect(mapTransaction).not.toHaveBeenCalled();
+      expect(res.items[0]).toMatchObject({
+        safeTxHash: tx.safeTxHash,
+        transaction: null,
+      });
     });
 
     it('a verifier rejection of a queued row gives transaction null and keeps the row', async () => {
