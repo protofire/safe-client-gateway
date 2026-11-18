@@ -495,7 +495,9 @@ describe('TOTP factors (org)', () => {
       await t
         .post('/v1/orgs/auth/totp/recovery-codes/regenerate')
         .set('Cookie', user.cookie)
-        .send({ code: '000000' === totpCode(user.secret, at()) ? '111111' : '000000' })
+        .send({
+          code: '000000' === totpCode(user.secret, at()) ? '111111' : '000000',
+        })
         .expect(401);
 
       const res = await t

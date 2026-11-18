@@ -34,4 +34,19 @@ describe('parseSafeAddressBookCsv', () => {
     expect(parseSafeAddressBookCsv('foo,bar\n1,2').errors).toHaveLength(1);
     expect(parseSafeAddressBookCsv('').errors).toHaveLength(1);
   });
+
+  it('rejects a row cut short and names with invisible or bidi characters', () => {
+    const { rows, errors } = parseSafeAddressBookCsv(
+      'address,name,chainId\n' +
+        `${A},Treasury\n` +
+        `${A},Trea\u202Esury,1\n` +
+        `${A},\u200B,1\n`,
+    );
+    expect(rows).toEqual([]);
+    expect(errors).toEqual([
+      { line: 2, reason: 'Row has fewer cells than the header' },
+      { line: 3, reason: expect.stringContaining('visible') },
+      { line: 4, reason: expect.stringContaining('visible') },
+    ]);
+  });
 });

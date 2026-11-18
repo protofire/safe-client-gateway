@@ -136,9 +136,10 @@ describe('members and invitations (org)', () => {
       const other = await t.user({ wallet: true });
       const orgId = await t.createOrg(admin);
       await t.addMember(orgId, other, 'admin');
-      await t.sql.query(`UPDATE users SET display_name = 'Olga' WHERE id = $1`, [
-        other.userId,
-      ]);
+      await t.sql.query(
+        `UPDATE users SET display_name = 'Olga' WHERE id = $1`,
+        [other.userId],
+      );
       const to = email();
       const { token } = await inviteEmail(orgId, other, to);
       expect((await preview(token).expect(200)).body.invitedBy).toEqual({
@@ -157,8 +158,9 @@ describe('members and invitations (org)', () => {
         .set('Cookie', admin.cookie)
         .expect(200);
       expect(
-        (members.body as Array<{ userId: string; displayName: string | null }>)
-          .find((m) => m.userId === other.userId)?.displayName,
+        (
+          members.body as Array<{ userId: string; displayName: string | null }>
+        ).find((m) => m.userId === other.userId)?.displayName,
       ).toBeNull();
       expect((await preview(token).expect(200)).body.invitedBy).toEqual({
         displayName: null,
@@ -582,9 +584,10 @@ describe('members and invitations (org)', () => {
       await t.addMember(orgId, member, 'member');
       const invitedEmail = `carol.${randomBytes(3).toString('hex')}@example.com`;
       await inviteEmail(orgId, admin, invitedEmail);
-      await t.sql.query(`UPDATE users SET display_name = 'Boss' WHERE id = $1`, [
-        admin.userId,
-      ]);
+      await t.sql.query(
+        `UPDATE users SET display_name = 'Boss' WHERE id = $1`,
+        [admin.userId],
+      );
 
       const asAdmin = (
         await t

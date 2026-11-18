@@ -115,6 +115,10 @@ export class TotpController {
     @Body(new ValidationPipe(CodeSchema)) body: { code: string },
     @Req() req: Request,
   ): Promise<{ recoveryCodes: Array<string> }> {
-    return this.factors.regenerateRecoveryCodes(session, body.code, client(req));
+    return this.factors.regenerateRecoveryCodes(
+      session,
+      body.code,
+      client(req),
+    );
   }
 }

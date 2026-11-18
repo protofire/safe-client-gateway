@@ -57,10 +57,7 @@ export type ContactRequest = {
 const COLUMNS = `id, contact_id, contact_version, action, payload, requested_by, status, decided_by, decided_at, decision_reason, created_at,
   to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS ts`;
 
-function toRequest(
-  r: Row,
-  requesters: Map<string, PersonRef>,
-): ContactRequest {
+function toRequest(r: Row, requesters: Map<string, PersonRef>): ContactRequest {
   return {
     id: r.id,
     action: r.action,

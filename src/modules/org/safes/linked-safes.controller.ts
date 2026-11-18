@@ -14,6 +14,7 @@ import {
 import type { Request } from 'express';
 import { isAddress } from 'viem';
 import { z } from 'zod';
+import { visibleText } from '@/modules/org/common/display-text';
 import { OrgSession, RequireStrongAuth } from '@/modules/org/auth/decorators';
 import { RateLimiter } from '@/modules/org/common/rate-limiter';
 import { actor, parse } from '@/modules/org/orgs/parse';
@@ -35,11 +36,11 @@ import {
 const LinkSchema = z.object({
   chainId: z.string().regex(/^[1-9]\d{0,19}$/),
   address: z.string().refine((v) => isAddress(v, { strict: false })),
-  label: z.string().trim().min(1).max(64).optional(),
+  label: visibleText(64).optional(),
 });
 // null clears the name
 const RenameSchema = z.object({
-  label: z.string().trim().min(1).max(64).nullable(),
+  label: visibleText(64).nullable(),
 });
 // each overview fans out to the tx-service for up to 50 Safes (item 7)
 const OVERVIEWS_PER_USER_PER_MINUTE = 30;

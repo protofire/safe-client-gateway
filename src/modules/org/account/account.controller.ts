@@ -43,7 +43,11 @@ export class AccountController {
     @Req() req: Request,
   ): Promise<{ displayName: string | null }> {
     const { displayName } = parse(DisplayNameSchema, body);
-    return this.account.setDisplayName(session.userId, displayName, client(req));
+    return this.account.setDisplayName(
+      session.userId,
+      displayName,
+      client(req),
+    );
   }
 
   /**

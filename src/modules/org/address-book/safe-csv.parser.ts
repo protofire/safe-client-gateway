@@ -1,3 +1,4 @@
+import { visibleText } from '@/modules/org/common/display-text';
 import { isAddress } from 'viem';
 import { csvRecords } from '@/modules/org/common/csv';
 
@@ -42,10 +43,17 @@ export function parseSafeAddressBookCsv(text: string): {
   for (const { line, cells } of body) {
     const [address, name, chainId] = index.map((i) => (cells[i] ?? '').trim());
     if (cells.length === 1 && cells[0].trim() === '') continue;
-    if (!isAddress(address, { strict: true })) {
+    // an empty network cell means all networks; a row cut short must not widen a contact
+    const missingCell = index.some((i) => cells[i] === undefined);
+    if (missingCell) {
+      errors.push({ line, reason: 'Row has fewer cells than the header' });
+    } else if (!isAddress(address, { strict: true })) {
       errors.push({ line, reason: 'Invalid address' });
-    } else if (name.length < 1 || name.length > NAME_MAX) {
-      errors.push({ line, reason: `Name must be 1-${NAME_MAX} characters` });
+    } else if (!visibleText(NAME_MAX).safeParse(name).success) {
+      errors.push({
+        line,
+        reason: `Name must be 1-${NAME_MAX} visible characters`,
+      });
     } else if (chainId !== '' && !/^[1-9]\d{0,17}$/.test(chainId)) {
       errors.push({ line, reason: 'Invalid chainId' });
     } else {

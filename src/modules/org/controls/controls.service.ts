@@ -11,9 +11,8 @@ import {
   CONCURRENCY,
   DEFAULT_SAFE_TIMEOUT_MS,
   OVERVIEW_SAFE_TIMEOUT_MS,
-  withDeadline,
 } from '@/modules/org/safes/overview.service';
-import { mapLimit } from '@/modules/org/safes/map-limit';
+import { mapLimit, withDeadline } from '@/modules/org/safes/map-limit';
 import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
 
 /** A covering policy with no successful scan for this long is reported stale. */

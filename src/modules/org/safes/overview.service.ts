@@ -23,7 +23,6 @@ export const OVERVIEW_SAFE_TIMEOUT_MS = 'OVERVIEW_SAFE_TIMEOUT_MS';
 // ponytail: fixed 8 s per Safe, not configurable; make it config if a chain needs more
 export const DEFAULT_SAFE_TIMEOUT_MS = 8_000;
 
-export { withDeadline };
 /** A11: at most this many queued transactions are read per Safe. */
 export const MAX_QUEUED_PER_SAFE = 100;
 
@@ -38,6 +37,8 @@ export type OverviewSafe = {
   /** Read with the balances: fresher than the list's snapshot fallback; absent when unavailable */
   owners?: Array<Address>;
   threshold?: number;
+  /** one of my wallets is a live owner */
+  iAmSigner?: boolean;
   error?: 'unavailable';
 };
 
@@ -139,6 +140,7 @@ export class OverviewService {
         awaitingMySignature: r.awaiting.length,
         owners: r.owners,
         threshold: r.threshold,
+        iAmSigner: r.owners.some((o) => wallets.has(o.toLowerCase())),
       });
     }
     return {

@@ -466,6 +466,8 @@ describe('linked Safes and overview', () => {
     await patch(admin, { label: 'Ops' }).expect(200);
     await patch(admin, { label: null }).expect(200);
     await patch(admin, { label: '' }).expect(400);
+    await patch(admin, { label: 'Trea\u202Esury' }).expect(400);
+    await patch(admin, { label: '\u200B' }).expect(400);
     await patch(member, { label: 'Mine' }).expect(403);
     await patch(admin, { label: 'X' }, 'not-a-uuid').expect(404);
 
@@ -685,12 +687,30 @@ describe('linked Safes and overview', () => {
         { fiatBalance: '0.1' },
         { fiatBalance: '0.2' },
       ]);
+      safeRepo.getSafe.mockImplementation(({ address }) =>
+        Promise.resolve({
+          owners: address === SAFE_A ? [admin.wallet] : [addr(9)],
+          threshold: 1,
+        }),
+      );
       const res = await overview().expect(200);
       expect(res.body).toMatchObject({
         complete: true,
         unavailableSafeIds: [],
         totals: { fiatTotal: '0.6', partial: false },
       });
+      // live owners, and whether one of my wallets is among them
+      const bySafe = Object.fromEntries(
+        (
+          res.body.safes as Array<{
+            address: string;
+            iAmSigner: boolean;
+            threshold: number;
+          }>
+        ).map((s) => [s.address, s]),
+      );
+      expect(bySafe[SAFE_A]).toMatchObject({ iAmSigner: true, threshold: 1 });
+      expect(bySafe[SAFE_B]).toMatchObject({ iAmSigner: false });
     });
 
     it('accepts the fiat code case-insensitively and rejects unknown codes', async () => {

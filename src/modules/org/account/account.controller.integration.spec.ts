@@ -222,8 +222,14 @@ describe('account deletion (org)', () => {
   });
 
   describe('display name', () => {
-    const setName = (user: TestUser, displayName: unknown): ReturnType<OrgTestApp['patch']> =>
-      t.patch('/v1/orgs/account').set('Cookie', user.cookie).send({ displayName });
+    const setName = (
+      user: TestUser,
+      displayName: unknown,
+    ): ReturnType<OrgTestApp['patch']> =>
+      t
+        .patch('/v1/orgs/account')
+        .set('Cookie', user.cookie)
+        .send({ displayName });
 
     it('sets a trimmed name, shows it in members, /auth/me and the activity actor, and clears it with null', async () => {
       const { orgId, a, b } = await twoAdmins();
@@ -236,7 +242,10 @@ describe('account deletion (org)', () => {
         .get('/v1/orgs/auth/me')
         .set('Cookie', b.cookie)
         .expect(200);
-      expect(me.body.user).toEqual({ id: b.userId, displayName: 'Bob Builder' });
+      expect(me.body.user).toEqual({
+        id: b.userId,
+        displayName: 'Bob Builder',
+      });
       const members = await t
         .http()
         .get(`/v1/orgs/${orgId}/members`)
@@ -302,7 +311,9 @@ describe('account deletion (org)', () => {
     it('stores names NFC-normalised, and the DB refuses a U+202E name written around the API', async () => {
       const user = await t.user({ wallet: true });
 
-      await setName(user, 'Jose\u0301').expect(200, { displayName: 'Jos\u00E9' });
+      await setName(user, 'Jose\u0301').expect(200, {
+        displayName: 'Jos\u00E9',
+      });
 
       await expect(
         t.sql.query(`UPDATE users SET display_name = $2 WHERE id = $1`, [
@@ -375,7 +386,10 @@ describe('account deletion (org)', () => {
     it('hides the name of an actor who left the org from its activity', async () => {
       const { orgId, a, b } = await twoAdmins();
       await setName(b, 'Bob').expect(200);
-      await t.post(`/v1/orgs/${orgId}/members/leave`).set('Cookie', b.cookie).expect(204);
+      await t
+        .post(`/v1/orgs/${orgId}/members/leave`)
+        .set('Cookie', b.cookie)
+        .expect(204);
 
       const activity = await t
         .http()

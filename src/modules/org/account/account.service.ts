@@ -107,7 +107,10 @@ export class AccountService {
       // older (Node 24.11: Unicode 16). Their disagreement is a 400 like any
       // other invalid name, not a 500, and not a spent attempt.
       const { code, constraint } = pgFields(error);
-      if (code === CHECK_VIOLATION && constraint?.startsWith('users_display_name_')) {
+      if (
+        code === CHECK_VIOLATION &&
+        constraint?.startsWith('users_display_name_')
+      ) {
         await this.rateLimiter.refund(limitKey);
         throw new BadRequestException('Invalid display name');
       }

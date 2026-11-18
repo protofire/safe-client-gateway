@@ -23,12 +23,10 @@ import {
   toSnapshot,
 } from '@/modules/org/events/safe-snapshot';
 import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface';
-import { mapLimit, withDeadline } from '@/modules/org/safes/map-limit';
+import { withDeadline } from '@/modules/org/safes/map-limit';
 
 /** Abuse limit (spec section 8), checked under the org row lock. */
 export const MAX_LINKED_SAFES = 50;
-// the list reads one Safe per call, so all of them at once (MAX_LINKED_SAFES) fit one wave
-const LIST_CONCURRENCY = MAX_LINKED_SAFES;
 /** Injectable so tests can shrink the list's per-Safe wait. */
 export const LIST_SAFE_TIMEOUT_MS = 'LIST_SAFE_TIMEOUT_MS';
 // one slow chain must not hold the page: past this, the last stored owners and threshold are shown
@@ -332,17 +330,20 @@ export class LinkedSafesService {
     ]);
     const signer = (owners: Array<Address>): boolean =>
       owners.some((o) => wallets.has(o.toLowerCase()));
-    const live = await mapLimit(rows, LIST_CONCURRENCY, async (row) => {
-      try {
-        const safe = await withDeadline(
-          this.safes.getSafe({ chainId: row.chainId, address: row.address }),
-          this.listTimeoutMs,
-        );
-        return { row, owners: safe.owners, threshold: safe.threshold };
-      } catch {
-        return { row };
-      }
-    });
+    // one read per Safe and at most MAX_LINKED_SAFES of them: all at once, each bounded by the deadline
+    const live = await Promise.all(
+      rows.map(async (row) => {
+        try {
+          const safe = await withDeadline(
+            this.safes.getSafe({ chainId: row.chainId, address: row.address }),
+            this.listTimeoutMs,
+          );
+          return { row, owners: safe.owners, threshold: safe.threshold };
+        } catch {
+          return { row };
+        }
+      }),
+    );
     const missed = live.filter((r) => !('owners' in r));
     const stored = missed.length
       ? await this.storedStates(orgId)

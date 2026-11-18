@@ -1,9 +1,6 @@
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { createSiweMessage } from 'viem/siwe';
-import {
-  APP_URL,
-  totpCode,
-} from '@/modules/org/auth/__tests__/auth-test-app';
+import { APP_URL, totpCode } from '@/modules/org/auth/__tests__/auth-test-app';
 import { SecurityEvents } from '@/modules/org/auth/security-events';
 import { PurgeProcessor } from '@/modules/org/jobs/purge.processor';
 import {

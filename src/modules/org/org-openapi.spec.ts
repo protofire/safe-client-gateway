@@ -120,9 +120,7 @@ describe('org OpenAPI document', () => {
       expect(params.map((p) => p.name)).toEqual(
         expect.arrayContaining(['types', 'from', 'to']),
       );
-      expect(params.find((p) => p.name === 'types')?.schema.type).toBe(
-        'array',
-      );
+      expect(params.find((p) => p.name === 'types')?.schema.type).toBe('array');
     }
   });
 });

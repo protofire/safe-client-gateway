@@ -495,11 +495,7 @@
                       "payload": {
                         "type": "object",
                         "properties": {
-                          "name": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 64
-                          },
+                          "name": { "type": "string" },
                           "address": { "type": "string" },
                           "chainIds": {
                             "maxItems": 100,
@@ -536,11 +532,7 @@
                       "payload": {
                         "type": "object",
                         "properties": {
-                          "name": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 64
-                          },
+                          "name": { "type": "string" },
                           "address": { "type": "string" },
                           "chainIds": {
                             "maxItems": 100,
@@ -709,7 +701,7 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+                  "name": { "type": "string" },
                   "address": { "type": "string" },
                   "chainIds": {
                     "maxItems": 100,
@@ -774,7 +766,7 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+                  "name": { "type": "string" },
                   "address": { "type": "string" },
                   "chainIds": {
                     "maxItems": 100,
@@ -1616,7 +1608,7 @@
                     "pattern": "^[1-9]\\d{0,19}$"
                   },
                   "address": { "type": "string" },
-                  "label": { "type": "string", "minLength": 1, "maxLength": 64 }
+                  "label": { "type": "string" }
                 },
                 "required": ["chainId", "address"]
               }
@@ -1665,10 +1657,7 @@
                 "type": "object",
                 "properties": {
                   "label": {
-                    "anyOf": [
-                      { "type": "string", "minLength": 1, "maxLength": 64 },
-                      { "type": "null" }
-                    ]
+                    "anyOf": [{ "type": "string" }, { "type": "null" }]
                   }
                 },
                 "required": ["label"]

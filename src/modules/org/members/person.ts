@@ -42,7 +42,10 @@ export async function people(
   const masked = (r: (typeof rows)[number]): string | null => {
     if (r.wallet) return maskIdentity({ kind: 'wallet', value: r.wallet });
     if (r.email) {
-      return maskIdentity({ kind: 'email', value: encryption.decrypt(r.email) });
+      return maskIdentity({
+        kind: 'email',
+        value: encryption.decrypt(r.email),
+      });
     }
     return null;
   };
