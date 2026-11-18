@@ -52,6 +52,7 @@ function setup(
   opts: {
     safes?: Array<typeof SAFE>;
     budget?: Partial<TransactionsBudget>;
+    ttlMs?: number;
     decoder?: IDataDecoderRepository;
     mapTransaction?: MultisigTransactionMapper['mapTransaction'];
   } = {},
@@ -101,6 +102,7 @@ function setup(
     { mapTransaction } as unknown as MultisigTransactionMapper,
     undefined,
     opts.budget,
+    opts.ttlMs,
   );
   return { service, repo, mapTransaction };
 }
@@ -303,6 +305,160 @@ describe('OrgTransactionsService', () => {
         [1, null],
       ]);
       expect(res.complete).toBe(true);
+    });
+  });
+
+  describe('unreadable Safe memo', () => {
+    const bad = linked('00000000-0000-4000-8000-000000000021', '1', 0xc1);
+    const good = linked('00000000-0000-4000-8000-000000000022', '1', 0xc2);
+    const failBad = (repo: ReturnType<typeof setup>['repo']): void => {
+      const ok = repo.getSafe.getMockImplementation()!;
+      repo.getSafe.mockImplementation((a: { address: Address }) =>
+        a.address === bad.address ? Promise.reject(new Error('slow')) : ok(a),
+      );
+      repo.getMultisigTransactions.mockImplementation(
+        (a: { safeAddress: Address }) =>
+          a.safeAddress === bad.address
+            ? Promise.reject(new Error('slow'))
+            : Promise.resolve(page([])),
+      );
+    };
+    const touched = (repo: ReturnType<typeof setup>['repo']): number =>
+      [repo.getSafe, repo.getMultisigTransactions].reduce(
+        (n, m) =>
+          n +
+          m.mock.calls.filter(
+            ([a]) => (a.address ?? a.safeAddress) === bad.address,
+          ).length,
+        0,
+      );
+
+    it('after a failed read, Queue, Counts and History skip that Safe and still report it unavailable', async () => {
+      const { service, repo } = setup({ safes: [bad, good] });
+      failBad(repo);
+
+      await service.list('org', 'user', { tab: 'queue', limit: 25 });
+      expect(touched(repo)).toBe(1);
+
+      const queue = await service.list('org', 'user', {
+        tab: 'queue',
+        limit: 25,
+      });
+      const counts = await service.counts('org', 'user', {});
+      const history = await service.list('org', 'user', {
+        tab: 'history',
+        limit: 25,
+      });
+
+      expect(touched(repo)).toBe(1);
+      expect(queue.unavailableSafeIds).toEqual([bad.id]);
+      expect(queue.complete).toBe(false);
+      expect(counts.complete).toBe(false);
+      expect(history.unavailableSafeIds).toEqual([bad.id]);
+      expect(history.complete).toBe(false);
+    });
+
+    it('a failed first History read is remembered for Queue too', async () => {
+      const { service, repo } = setup({ safes: [bad, good] });
+      failBad(repo);
+
+      await service.list('org', 'user', { tab: 'history', limit: 25 });
+      const queue = await service.list('org', 'user', {
+        tab: 'queue',
+        limit: 25,
+      });
+
+      expect(touched(repo)).toBe(1);
+      expect(queue.unavailableSafeIds).toEqual([bad.id]);
+    });
+
+    it('reads the Safe again after the TTL', async () => {
+      const { service, repo } = setup({ safes: [bad, good], ttlMs: 30 });
+      failBad(repo);
+
+      await service.counts('org', 'user', {});
+      await new Promise((r) => setTimeout(r, 50));
+      await service.counts('org', 'user', {});
+
+      expect(touched(repo)).toBe(2);
+    });
+
+    it('a failed History refill does not remember the Safe', async () => {
+      const { service, repo } = setup({ safes: [good] });
+      const rows = [executed(good, 2, T0), executed(good, 1, T0 - 1)];
+      repo.getMultisigTransactions
+        .mockResolvedValueOnce({ ...page([rows[0]]), next: 'more' })
+        .mockRejectedValueOnce(new Error('slow'))
+        .mockResolvedValue(page([]));
+
+      await service.list('org', 'user', { tab: 'history', limit: 5 });
+      await service.list('org', 'user', { tab: 'history', limit: 5 });
+
+      // 1 first window + 1 failed refill, then a fresh first window
+      expect(repo.getMultisigTransactions).toHaveBeenCalledTimes(3);
+    });
+
+    it('a Safe skipped because the budget ran out is not remembered', async () => {
+      const { service, repo } = setup({
+        safes: [good],
+        budget: { totalMs: 100, mappingReserveMs: 100 },
+      });
+      await service.counts('org', 'user', {});
+      expect(repo.getSafe).not.toHaveBeenCalled();
+
+      // the budget is the only thing that changes: the Safe must be read now
+      (service as unknown as { budget: TransactionsBudget }).budget = {
+        totalMs: 15_000,
+        safeMs: 8_000,
+        mappingReserveMs: 0,
+        decodeRetryMs: 1,
+      };
+      await service.counts('org', 'user', {});
+      expect(repo.getSafe).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('decoder cache', () => {
+    const run = async (
+      getDecodedData: jest.Mock,
+      budget: Partial<TransactionsBudget> = {},
+    ): Promise<void> => {
+      const { service, repo } = setup({
+        decoder: { getDecodedData } as never,
+        budget: { decodeRetryMs: 1, ...budget },
+      });
+      repo.getMultisigTransactions.mockResolvedValue(
+        page([executed(SAFE, 1, T0, { data: settingsData })]),
+      );
+      for (let i = 0; i < 2; i++) {
+        await service.list('org', 'user', { tab: 'history', limit: 25 });
+      }
+    };
+
+    it('decodes the same chain, to and data once', async () => {
+      const decoded = { method: 'm', parameters: [], accuracy: 'FULL_MATCH' };
+      const getDecodedData = jest.fn(() => Promise.resolve(decoded));
+      await run(getDecodedData);
+      expect(getDecodedData).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not cache a null result', async () => {
+      const getDecodedData = jest.fn(() => Promise.resolve(null));
+      await run(getDecodedData);
+      expect(getDecodedData).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not cache a 429', async () => {
+      const getDecodedData = jest.fn(() => Promise.reject(tooManyRequests()));
+      await run(getDecodedData, { totalMs: 400, mappingReserveMs: 300 });
+      // every request asked the decoder again
+      expect(getDecodedData.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('does not cache another failure', async () => {
+      const getDecodedData = jest.fn(() => Promise.reject(new Error('down')));
+      await run(getDecodedData);
+      expect(getDecodedData).toHaveBeenCalledTimes(2);
     });
   });
 });

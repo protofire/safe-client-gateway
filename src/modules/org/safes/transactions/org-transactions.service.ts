@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import {
   Inject,
   Injectable,
@@ -65,7 +66,14 @@ const DEFAULT_BUDGET: TransactionsBudget = {
   // the public decoder answers 429 "Too many requests per second" above ~2/s
   decodeRetryMs: 500,
 };
+/** Injectable so tests can shorten how long an unreadable Safe is remembered. */
+export const TRANSACTIONS_UNREADABLE_TTL_MS = 'TRANSACTIONS_UNREADABLE_TTL_MS';
+const DEFAULT_UNREADABLE_TTL_MS = 60_000;
 const MAPPING_CONCURRENCY = 10;
+const DECODE_CACHE_MAX = 2_000;
+
+/** A Safe read not started (budget spent or Safe remembered): not the Safe's fault. */
+class ReadSkipped extends Error {}
 
 /** Rows to read, and rows whose chain could not be resolved. */
 type Scope = {
@@ -105,6 +113,14 @@ type Source = { tx: MultisigTransaction; safe?: Safe };
 @Injectable()
 export class OrgTransactionsService {
   private readonly budget: TransactionsBudget;
+  private readonly unreadableTtlMs: number;
+  // shortcut: per process, not shared between instances; upgrade to the shared cache if several instances make the unavailable banner flicker
+  private readonly unreadable = new Map<string, number>();
+  // in-process: the org module has no general cache access; insertion order = age, oldest dropped
+  private readonly decoded = new Map<
+    string,
+    NonNullable<Awaited<ReturnType<IDataDecoderRepository['getDecodedData']>>>
+  >();
 
   constructor(
     private readonly linked: LinkedSafesService,
@@ -119,8 +135,12 @@ export class OrgTransactionsService {
     @Optional()
     @Inject(TRANSACTIONS_BUDGET)
     budget?: Partial<TransactionsBudget>,
+    @Optional()
+    @Inject(TRANSACTIONS_UNREADABLE_TTL_MS)
+    unreadableTtlMs?: number,
   ) {
     this.budget = { ...DEFAULT_BUDGET, ...budget };
+    this.unreadableTtlMs = unreadableTtlMs ?? DEFAULT_UNREADABLE_TTL_MS;
   }
 
   async counts(orgId: string, userId: string, q: ScopeQuery): Promise<Counts> {
@@ -181,13 +201,18 @@ export class OrgTransactionsService {
     const after = q.cursor ? decodeCursor(q.cursor, s, HistoryKeySchema) : null;
     const sources = new Map<string, Source>();
     const read: HistoryReader = async (safe, hq) => {
-      const page = await this.underSafeDeadline(budgetEnd, () =>
-        this.safes.getMultisigTransactions({
-          chainId: safe.chainId,
-          safeAddress: safe.address,
-          executed: true,
-          ...hq,
-        }),
+      // only the first window marks the Safe: a failed refill read it before
+      const page = await this.readSafe(
+        safe.id,
+        budgetEnd,
+        () =>
+          this.safes.getMultisigTransactions({
+            chainId: safe.chainId,
+            safeAddress: safe.address,
+            executed: true,
+            ...hq,
+          }),
+        hq.offset === 0,
       );
       for (const tx of page.results) {
         sources.set(rowKey(safe.id, multisigId(tx)), { tx });
@@ -286,7 +311,8 @@ export class OrgTransactionsService {
       CONCURRENCY,
       async (row): Promise<QueueSafeRead> => {
         try {
-          const { safe, page } = await this.underSafeDeadline(
+          const { safe, page } = await this.readSafe(
+            row.id,
             budgetEnd,
             async () => {
               const safe = await this.safes.getSafe({
@@ -321,6 +347,28 @@ export class OrgTransactionsService {
     };
   }
 
+  /** `underSafeDeadline`, skipped while the Safe is remembered, remembering a failed read. */
+  private async readSafe<T>(
+    id: string,
+    budgetEnd: number,
+    work: () => Promise<T>,
+    remember = true,
+  ): Promise<T> {
+    const until = this.unreadable.get(id);
+    if (until !== undefined) {
+      if (until > Date.now()) throw new ReadSkipped();
+      this.unreadable.delete(id);
+    }
+    try {
+      return await this.underSafeDeadline(budgetEnd, work);
+    } catch (e) {
+      if (remember && !(e instanceof ReadSkipped)) {
+        this.unreadable.set(id, Date.now() + this.unreadableTtlMs);
+      }
+      throw e;
+    }
+  }
+
   /**
    * A Safe read under `min(safeMs, budgetEnd - reserve - now)`; none starts
    * once the mapping reserve is reached (it then counts as failed).
@@ -330,7 +378,8 @@ export class OrgTransactionsService {
     work: () => Promise<T>,
   ): Promise<T> {
     const left = budgetEnd - this.budget.mappingReserveMs - Date.now();
-    if (left <= 0) return Promise.reject(new Error('Request budget spent'));
+    if (left <= 0)
+      return Promise.reject(new ReadSkipped('Request budget spent'));
     return withDeadline(work(), Math.min(this.budget.safeMs, left));
   }
 
@@ -397,13 +446,23 @@ export class OrgTransactionsService {
     budgetEnd: number,
   ): ReturnType<IDataDecoderRepository['getTransactionDataDecoded']> {
     if (!tx.data || tx.data === '0x') return null;
+    const key = `${chainId}:${tx.to}:${createHash('sha256').update(tx.data).digest('hex')}`;
+    const hit = this.decoded.get(key);
+    if (hit) return hit;
     for (;;) {
       try {
-        return await this.decoder.getDecodedData({
+        const result = await this.decoder.getDecodedData({
           chainId,
           data: tx.data,
           to: tx.to,
         });
+        if (result) {
+          if (this.decoded.size >= DECODE_CACHE_MAX) {
+            this.decoded.delete(this.decoded.keys().next().value!);
+          }
+          this.decoded.set(key, result);
+        }
+        return result;
       } catch (e) {
         if (!(e instanceof DataSourceError) || e.code !== 429) return null;
         const wait = this.budget.decodeRetryMs * (1 + Math.random());
