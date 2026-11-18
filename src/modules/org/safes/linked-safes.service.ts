@@ -27,7 +27,6 @@ import { mapLimit, withDeadline } from '@/modules/org/safes/map-limit';
 
 /** Abuse limit (spec section 8), checked under the org row lock. */
 export const MAX_LINKED_SAFES = 50;
-const CONCURRENCY = 12;
 // the list reads one Safe per call, so all of them at once (MAX_LINKED_SAFES) fit one wave
 const LIST_CONCURRENCY = MAX_LINKED_SAFES;
 /** Injectable so tests can shrink the list's per-Safe wait. */
