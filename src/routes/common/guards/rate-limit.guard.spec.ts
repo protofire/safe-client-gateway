@@ -14,33 +14,35 @@ const mockLoggingService = {
 } as jest.MockedObjectDeep<ILoggingService>;
 
 describe('RateLimitGuard', () => {
-  it('should allow the request if under the rate limit', async () => {
-    const ip = faker.internet.ipv4();
-    const path = new URL(faker.internet.url()).pathname;
-    const windowSeconds = faker.number.int({ min: 10, max: 20 });
-    const mockExecutionContext = {
-      switchToHttp: jest.fn().mockReturnValue({
-        getRequest: jest.fn().mockReturnValue({
-          ip,
-          route: { path },
-          method: 'POST',
+  it.each(['192.0.2.1', '2001:db8::1', '::ffff:192.0.2.1'])(
+    'should allow the request if under the rate limit (%s)',
+    async (ip) => {
+      const path = new URL(faker.internet.url()).pathname;
+      const windowSeconds = faker.number.int({ min: 10, max: 20 });
+      const mockExecutionContext = {
+        switchToHttp: jest.fn().mockReturnValue({
+          getRequest: jest.fn().mockReturnValue({
+            ip,
+            route: { path },
+            method: 'POST',
+          }),
         }),
-      }),
-    } as jest.MockedObjectDeep<ExecutionContext>;
-    mockCacheService.increment.mockResolvedValue(1); // under or equal to the limit
-    const guard = new RateLimitGuard(mockCacheService, mockLoggingService, {
-      max: faker.number.int({ min: 1, max: 10 }),
-      windowSeconds,
-    });
+      } as jest.MockedObjectDeep<ExecutionContext>;
+      mockCacheService.increment.mockResolvedValue(1); // under or equal to the limit
+      const guard = new RateLimitGuard(mockCacheService, mockLoggingService, {
+        max: faker.number.int({ min: 1, max: 10 }),
+        windowSeconds,
+      });
 
-    const result = await guard.canActivate(mockExecutionContext);
+      const result = await guard.canActivate(mockExecutionContext);
 
-    expect(result).toBe(true);
-    expect(mockCacheService.increment).toHaveBeenCalledWith(
-      `${path}_POST_${ip}_rate_limit`,
-      windowSeconds,
-    );
-  });
+      expect(result).toBe(true);
+      expect(mockCacheService.increment).toHaveBeenCalledWith(
+        `${path}_POST_${ip}_rate_limit`,
+        windowSeconds,
+      );
+    },
+  );
 
   it('should block the request if over the rate limit', async () => {
     const ip = faker.internet.ip();
@@ -83,33 +85,35 @@ describe('RateLimitGuard', () => {
     );
   });
 
-  it('should log a warning for invalid client IP', async () => {
-    const invalidIp = faker.string.sample(10);
-    const path = new URL(faker.internet.url()).pathname;
-    const mockExecutionContext = {
-      switchToHttp: jest.fn().mockReturnValue({
-        getRequest: jest.fn().mockReturnValue({
-          ip: invalidIp,
-          route: { path },
-          method: 'PATCH',
+  it.each(['not-an-ip', 'foo]@a.b/#', undefined])(
+    'should log a warning for invalid client IP (%s)',
+    async (invalidIp) => {
+      const path = new URL(faker.internet.url()).pathname;
+      const mockExecutionContext = {
+        switchToHttp: jest.fn().mockReturnValue({
+          getRequest: jest.fn().mockReturnValue({
+            ip: invalidIp,
+            route: { path },
+            method: 'PATCH',
+          }),
         }),
-      }),
-    } as jest.MockedObjectDeep<ExecutionContext>;
-    mockCacheService.increment.mockResolvedValue(1);
-    const guard = new RateLimitGuard(mockCacheService, mockLoggingService, {
-      max: faker.number.int({ min: 1, max: 10 }),
-      windowSeconds: faker.number.int({ min: 1, max: 10 }),
-    });
+      } as jest.MockedObjectDeep<ExecutionContext>;
+      mockCacheService.increment.mockResolvedValue(1);
+      const guard = new RateLimitGuard(mockCacheService, mockLoggingService, {
+        max: faker.number.int({ min: 1, max: 10 }),
+        windowSeconds: faker.number.int({ min: 1, max: 10 }),
+      });
 
-    await expect(guard.canActivate(mockExecutionContext)).rejects.toThrow(
-      new BadRequestException('Invalid client IP address'),
-    );
+      await expect(guard.canActivate(mockExecutionContext)).rejects.toThrow(
+        new BadRequestException('Invalid client IP address'),
+      );
 
-    expect(mockLoggingService.warn).toHaveBeenCalledWith({
-      clientIp: invalidIp,
-      method: 'PATCH',
-      route: path,
-      type: 'INVALID_IP',
-    });
-  });
+      expect(mockLoggingService.warn).toHaveBeenCalledWith({
+        clientIp: invalidIp,
+        method: 'PATCH',
+        route: path,
+        type: 'INVALID_IP',
+      });
+    },
+  );
 });

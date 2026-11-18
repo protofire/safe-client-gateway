@@ -5,7 +5,7 @@ import type { ILoggingService } from '@/logging/logging.interface';
 import type { CanActivate, ExecutionContext } from '@nestjs/common';
 import { BadRequestException, HttpException, HttpStatus } from '@nestjs/common';
 import type { Request } from 'express';
-import { z } from 'zod';
+import { isIP } from 'node:net';
 
 /**
  * RateLimitGuard is a guard that limits the number of requests
@@ -24,10 +24,7 @@ export class RateLimitGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req: Request = context.switchToHttp().getRequest();
-    const { success: isValidIp } = z
-      .union([z.ipv4(), z.ipv6()])
-      .safeParse(req.ip);
-    if (!isValidIp) {
+    if (!isIP(req.ip ?? '')) {
       this.logInvalidIp(req);
       throw new BadRequestException('Invalid client IP address');
     }
