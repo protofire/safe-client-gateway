@@ -166,7 +166,9 @@ describe('org migrations entry (org-migrate)', () => {
       process.env.ORG_DB_MIGRATOR_USERNAME = 'migrator-sentinel';
       process.env.ORG_DB_MIGRATOR_PASSWORD = 'migrator-password-sentinel';
 
-      const config = JSON.stringify(orgConfiguration());
+      const config = JSON.stringify(orgConfiguration(), (_k, v) =>
+        typeof v === 'bigint' ? v.toString() : v,
+      );
 
       expect(config).not.toContain('migrator-sentinel');
       expect(config).not.toContain('migrator-password-sentinel');

@@ -1,10 +1,13 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
+import request from 'supertest';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import { CacheKeyPrefix } from '@/datasources/cache/constants';
 import { OrgAppModule } from '@/org-app.module';
+import { configureOrgApp } from '@/org-main';
 import orgConfiguration from '@/config/org/org-configuration';
 import { ConfigurationModule } from '@/config/configuration.module';
 import { OrgConfigurationSchema } from '@/config/org/org-configuration.schema';
@@ -13,6 +16,7 @@ import { getDataSourceToken } from '@nestjs/typeorm';
 import { ORG_DATA_SOURCE } from '@/modules/org/db/org-database.module';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
 import { ORG_REDIS } from '@/modules/org/auth/nonce.store';
+import { OrgEventsConsumer } from '@/modules/org/events/org-events.consumer';
 
 // No database in unit tests: the 'org' DataSource is replaced, never connected.
 // The connection options factory still runs, so its keys must be present.
@@ -76,6 +80,45 @@ describe('OrgAppModule', () => {
     fakeOrgDataSource.destroy.mockClear();
     await moduleRef.close();
     expect(fakeOrgDataSource.destroy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('OrgAppModule route table', () => {
+  const HISTORY =
+    '/v1/chains/1/safes/0x0000000000000000000000000000000000000001/transactions/history';
+
+  it('mounts no gateway transaction route and answers 404 for it', async () => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [OrgAppModule.register()],
+    })
+      .overrideProvider('RedisClient')
+      .useValue({ ping: jest.fn(), isReady: true, quit: jest.fn() })
+      .overrideProvider(ORG_REDIS)
+      .useValue({ quit: jest.fn() })
+      .overrideProvider(getDataSourceToken(ORG_DATA_SOURCE))
+      .useValue(fakeOrgDataSource)
+      // no AMQP broker here
+      .overrideProvider(OrgEventsConsumer)
+      .useValue({})
+      .compile();
+    const app = moduleRef.createNestApplication<NestExpressApplication>();
+    configureOrgApp(app);
+    await app.init();
+    try {
+      const routes = (
+        app.getHttpAdapter().getInstance() as unknown as {
+          router: { stack: Array<{ route?: { path: string } }> };
+        }
+      ).router.stack.flatMap((l) => (l.route ? [l.route.path] : []));
+      // control: gateway routes are mounted, so the allowlist is what hides them
+      expect(routes).toContain('/v1/chains');
+      expect(routes.filter((r) => r.includes('/transactions/history'))).toEqual(
+        [],
+      );
+      await request(app.getHttpServer()).get(HISTORY).expect(404);
+    } finally {
+      await app.close();
+    }
   });
 });
 

@@ -195,6 +195,69 @@ export default () => ({
     // only appended to Infura RPC URIs of the chain config (payout run simulation)
     infura: { apiKey: process.env.ORG_INFURA_API_KEY ?? '' },
   },
+  // ---- keys read by the reused transaction mappers (TransactionMappersModule) ----
+  bridge: {
+    baseUri: 'https://li.quest',
+    // optional: the LI.FI mapper stays off (features.lifiTransactionsMapping); '' keeps getOrThrow from failing the boot
+    apiKey: process.env.ORG_BRIDGE_API_KEY ?? '',
+  },
+  earn: {
+    testnet: {
+      baseUri:
+        process.env.STAKING_TESTNET_API_BASE_URI ||
+        'https://api.testnet.kiln.fi',
+      apiKey: process.env.EARN_TESTNET_API_KEY,
+    },
+    mainnet: {
+      baseUri: process.env.STAKING_API_BASE_URI || 'https://api.kiln.fi',
+      apiKey: process.env.EARN_MAINNET_API_KEY,
+    },
+  },
+  staking: {
+    testnet: {
+      baseUri:
+        process.env.STAKING_TESTNET_API_BASE_URI ||
+        'https://api.testnet.kiln.fi',
+      apiKey: process.env.STAKING_TESTNET_API_KEY,
+    },
+    mainnet: {
+      baseUri: process.env.STAKING_API_BASE_URI || 'https://api.kiln.fi',
+      apiKey: process.env.STAKING_API_KEY,
+    },
+  },
+  mappings: {
+    imitation: {
+      lookupDistance: int(process.env.IMITATION_LOOKUP_DISTANCE, 3),
+      prefixLength: int(process.env.IMITATION_PREFIX_LENGTH, 3),
+      suffixLength: int(process.env.IMITATION_SUFFIX_LENGTH, 4),
+      valueTolerance: BigInt(process.env.IMITATION_VALUE_TOLERANCE ?? 1),
+      echoLimit: BigInt(process.env.IMITATION_ECHO_LIMIT ?? 10),
+    },
+    history: { maxNestedTransfers: int(process.env.MAX_NESTED_TRANSFERS, 100) },
+    transactionData: {
+      maxTokenInfoIndexSize: int(process.env.MAX_TOKEN_INFO, 100),
+    },
+  },
+  swaps: {
+    api: {
+      1: 'https://api.cow.fi/mainnet',
+      56: 'https://api.cow.fi/bnb',
+      100: 'https://api.cow.fi/xdai',
+      137: 'https://api.cow.fi/polygon',
+      8453: 'https://api.cow.fi/base',
+      232: 'https://api.cow.fi/lens',
+      42161: 'https://api.cow.fi/arbitrum_one',
+      43114: 'https://api.cow.fi/avalanche',
+      11155111: 'https://api.cow.fi/sepolia',
+      59144: 'https://api.cow.fi/linea',
+      9745: 'https://api.cow.fi/plasma',
+    },
+    explorerBaseUri:
+      process.env.SWAPS_EXPLORER_URI || 'https://explorer.cow.fi/',
+    restrictApps: flag('SWAPS_RESTRICT_APPS'),
+    allowedApps: process.env.SWAPS_ALLOWED_APPS?.split(',') || [],
+    maxNumberOfParts: int(process.env.SWAPS_MAX_NUMBER_OF_PARTS, 11),
+  },
   circuitBreaker: {
     failureThreshold: int(process.env.CIRCUIT_BREAKER_FAILURE_THRESHOLD, 20),
     successThreshold: int(process.env.CIRCUIT_BREAKER_SUCCESS_THRESHOLD, 10),
@@ -211,6 +274,7 @@ export default () => ({
     rpc: int(process.env.EXPIRATION_TIME_RPC_SECONDS, 15),
     hoodi: int(process.env.HOODI_EXPIRATION_TIME_SECONDS, 60),
     indexing: int(process.env.EXPIRATION_TIME_INDEXING_SECONDS, 5),
+    staking: int(process.env.EXPIRATION_TIME_STAKING_SECONDS, 60),
     notFound: {
       default: int(process.env.DEFAULT_NOT_FOUND_EXPIRE_TIME_SECONDS, 30),
       contract: int(process.env.CONTRACT_NOT_FOUND_EXPIRE_TIME_SECONDS, 60),
@@ -237,6 +301,10 @@ export default () => ({
       api: flag('FF_SIGNATURE_VERIFICATION_API'),
       proposal: flag('FF_SIGNATURE_VERIFICATION_PROPOSAL'),
     },
+    filterValueParsing: flag('FF_FILTER_VALUE_PARSING'),
+    vaultTransactionsMapping: flag('FF_VAULT_TRANSACTIONS_MAPPING'),
+    lifiTransactionsMapping: flag('FF_LIFITRANSACTIONS_MAPPING'),
+    improvedAddressPoisoning: flag('FF_IMPROVED_ADDRESS_POISONING'),
     ethSign: flag('FF_ETH_SIGN'),
     trustedDelegateCall: flag('FF_TRUSTED_DELEGATE_CALL'),
     trustedForDelegateCallContractsList: flag(

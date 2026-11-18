@@ -13,6 +13,7 @@ import { chainBuilder } from '@/modules/chains/domain/entities/__tests__/chain.b
 import { rawify } from '@/validation/entities/raw.entity';
 import { pageBuilder } from '@/domain/entities/__tests__/page.builder';
 import type { SafeV2 } from '@/modules/safe/domain/entities/safe.entity';
+import { safeBuilder } from '@/modules/safe/domain/entities/__tests__/safe.builder';
 
 const mockTransactionApiManager = {
   getApi: jest.fn(),
@@ -20,6 +21,7 @@ const mockTransactionApiManager = {
 
 const mockTransactionApi = {
   getSafesByOwnerV2: jest.fn(),
+  getMultisigTransactions: jest.fn(),
 } as jest.MockedObjectDeep<ITransactionApi>;
 
 const mockLoggingService = {
@@ -438,6 +440,28 @@ describe('SafeRepository', () => {
       await expect(
         repository.getAllSafesByOwnerV2({ ownerAddress }),
       ).rejects.toThrow('Failed to get chains');
+    });
+  });
+
+  describe('getTransactionQueueBySubmission', () => {
+    it('reads the newest 100 unexecuted transactions from the current nonce, newest submission first', async () => {
+      const chainId = faker.string.numeric();
+      const safe = safeBuilder().build();
+      mockTransactionApi.getMultisigTransactions.mockResolvedValue(
+        rawify(pageBuilder().with('results', []).build()),
+      );
+
+      await repository.getTransactionQueueBySubmission({ chainId, safe });
+
+      expect(mockTransactionApi.getMultisigTransactions).toHaveBeenCalledWith(
+        expect.objectContaining({
+          safeAddress: safe.address,
+          executed: false,
+          nonceGte: safe.nonce,
+          ordering: '-created',
+          limit: 100,
+        }),
+      );
     });
   });
 });
