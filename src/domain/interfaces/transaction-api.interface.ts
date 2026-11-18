@@ -171,6 +171,7 @@ export interface ITransactionApi {
     value?: string;
     nonce?: string;
     nonceGte?: number;
+    nonceLt?: number;
     limit?: number;
     offset?: number;
   }): Promise<Raw<Page<MultisigTransaction>>>;

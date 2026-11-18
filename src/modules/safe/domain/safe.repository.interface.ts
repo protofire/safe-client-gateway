@@ -117,6 +117,16 @@ export interface ISafeRepository {
     offset?: number;
   }): Promise<Page<MultisigTransaction>>;
 
+  /**
+   * Returns the Safe Transaction Queue sorted by creation
+   * (newest first), `limit` 100 unless given.
+   */
+  getTransactionQueueBySubmission(args: {
+    chainId: string;
+    safe: Safe;
+    limit?: number;
+  }): Promise<Page<MultisigTransaction>>;
+
   getCreationTransaction(args: {
     chainId: string;
     safeAddress: Address;
@@ -159,6 +169,7 @@ export interface ISafeRepository {
     value?: string;
     nonce?: string;
     nonceGte?: number;
+    nonceLt?: number;
     /** Default true; false also lists unsigned (delegate) proposals. */
     trusted?: boolean;
     limit?: number;
