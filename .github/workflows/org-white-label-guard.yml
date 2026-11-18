@@ -1,0 +1,30 @@
+name: Org white-label guard
+
+# The organization layer (cgw-org) ships only on the shared-UI branches. The
+# white-label `staging` and `production` branches must never contain it.
+on:
+  push:
+    branches: [staging, production]
+  pull_request:
+    branches: [staging, production]
+
+permissions:
+  contents: read
+
+jobs:
+  no-org-layer:
+    runs-on: ubuntu-latest
+    steps:
+      # pull_request checks out the merge result, push the pushed commit
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+      - name: Fail if org-layer paths exist
+        run: |
+          found=0
+          for path in src/modules/org src/config/org src/org-main.ts src/org-app.module.ts \
+            src/org-migrate.ts migrations/org test/org scripts/org-openapi.ts; do
+            if [ -e "$path" ]; then
+              echo "::error::$path must not reach the white-label branches (shared-UI only)"
+              found=1
+            fi
+          done
+          exit "$found"

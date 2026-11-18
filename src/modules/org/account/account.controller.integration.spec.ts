@@ -1,0 +1,446 @@
+import { totpCode } from '@/modules/org/auth/__tests__/auth-test-app';
+import { randomUUID } from 'node:crypto';
+import { AccountService } from '@/modules/org/account/account.service';
+import { SessionsRepository } from '@/modules/org/auth/sessions.repository';
+import { sha256Hex } from '@/modules/org/crypto/hashing';
+import {
+  createOrgTestApp,
+  TEST_TOTP_SECRET,
+  type OrgTestApp,
+  type TestUser,
+} from '@/modules/org/orgs/__tests__/org-test-app';
+
+jest.setTimeout(60_000);
+
+describe('account deletion (org)', () => {
+  let t: OrgTestApp;
+
+  beforeAll(async () => {
+    t = await createOrgTestApp(5);
+  });
+
+  afterAll(async () => {
+    await t?.close();
+  });
+
+  beforeEach(async () => {
+    await t.reset();
+  });
+
+  const deleteAccount = (user: TestUser): ReturnType<OrgTestApp['del']> =>
+    t.del('/v1/orgs/account').set('Cookie', user.cookie);
+
+  async function twoAdmins(): Promise<{
+    orgId: string;
+    a: TestUser;
+    b: TestUser;
+  }> {
+    const a = await t.user({ wallet: true });
+    const b = await t.user({ wallet: true });
+    const orgId = await t.createOrg(a);
+    await t.addMember(orgId, b, 'admin');
+    return { orgId, a, b };
+  }
+
+  it('deletes identities, factors, sessions and memberships, keeping the user row', async () => {
+    const { orgId, b } = await twoAdmins();
+    await t.sql.query(
+      `INSERT INTO factors (user_id, kind, secret_encrypted, confirmed_at) VALUES ($1, 'totp', 'x', now())`,
+      [b.userId],
+    );
+    await t.sql.query(
+      `INSERT INTO recovery_codes (user_id, code_hash) VALUES ($1, $2)`,
+      [b.userId, sha256Hex('aaaaabbbbbcccccddddd')],
+    );
+
+    await deleteAccount(b)
+      .send({ recoveryCode: 'aaaaa-bbbbb-ccccc-ddddd' })
+      .expect(204);
+
+    for (const table of [
+      'identities',
+      'factors',
+      'recovery_codes',
+      'sessions',
+      'members',
+    ]) {
+      expect(
+        await t.sql.query(`SELECT 1 FROM ${table} WHERE user_id = $1`, [
+          b.userId,
+        ]),
+      ).toEqual([]);
+    }
+    const [user] = await t.sql.query(`SELECT status FROM users WHERE id = $1`, [
+      b.userId,
+    ]);
+    expect(user.status).toBe('deleted');
+    await t.http().get('/v1/orgs/auth/me').set('Cookie', b.cookie).expect(401);
+    expect(await t.adminCount(orgId)).toBe(1);
+  });
+
+  it('answers /auth/me with 401, not 500, when the session row is gone after the guard read it', async () => {
+    const user = await t.user({ wallet: true });
+    const spy = jest
+      .spyOn(t.app.get(SessionsRepository), 'findActive')
+      .mockResolvedValueOnce({
+        id: randomUUID(),
+        userId: user.userId,
+        amr: ['siwe'],
+        lastStrongAuthAt: null,
+        updatedAt: new Date(),
+      });
+    try {
+      await t
+        .http()
+        .get('/v1/orgs/auth/me')
+        .set('Cookie', user.cookie)
+        .expect(401);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('requires fresh strong auth', async () => {
+    const user = await t.user({ wallet: true, strong: false });
+
+    const res = await deleteAccount(user).expect(403);
+
+    expect(res.body.code).toBe('step_up_required');
+  });
+
+  it('asks a user with TOTP for a current code or recovery code as well (403 totp_code_required, 401 wrong)', async () => {
+    const user = await t.user({ email: 'totp-del@example.com', totp: true });
+
+    const missing = await deleteAccount(user).expect(403);
+    expect(missing.body.code).toBe('totp_code_required');
+    const right = totpCode(TEST_TOTP_SECRET, new Date());
+    await deleteAccount(user)
+      .send({ code: right === '000000' ? '111111' : '000000' })
+      .expect(401);
+    await t
+      .http()
+      .get('/v1/orgs/auth/me')
+      .set('Cookie', user.cookie)
+      .expect(200);
+
+    await deleteAccount(user).send({ code: right }).expect(204);
+    const [row] = await t.sql.query(`SELECT status FROM users WHERE id = $1`, [
+      user.userId,
+    ]);
+    expect(row.status).toBe('deleted');
+  });
+
+  it('refuses a last admin with 409 before spending their recovery code', async () => {
+    const admin = await t.user({ email: 'last-admin@example.com', totp: true });
+    await t.createOrg(admin);
+    await t.sql.query(
+      `INSERT INTO recovery_codes (user_id, code_hash) VALUES ($1, $2)`,
+      [admin.userId, sha256Hex('aaaaabbbbbcccccddddd')],
+    );
+
+    const res = await deleteAccount(admin)
+      .send({ recoveryCode: 'aaaaa-bbbbb-ccccc-ddddd' })
+      .expect(409);
+
+    expect(res.body.code).toBe('last_admin');
+    const [code] = await t.sql.query(
+      `SELECT used_at FROM recovery_codes WHERE user_id = $1`,
+      [admin.userId],
+    );
+    expect(code.used_at).toBeNull();
+  });
+
+  it('blocks the last admin from deleting their account', async () => {
+    const admin = await t.user({ wallet: true });
+    const member = await t.user({ wallet: true });
+    const orgId = await t.createOrg(admin);
+    await t.addMember(orgId, member, 'member');
+
+    const res = await deleteAccount(admin).expect(409);
+
+    expect(res.body).toEqual({
+      statusCode: 409,
+      message: expect.any(String),
+      code: 'last_admin',
+    });
+    await t
+      .http()
+      .get('/v1/orgs/auth/me')
+      .set('Cookie', admin.cookie)
+      .expect(200);
+  });
+
+  it('answers one 409 when two admins delete their accounts concurrently', async () => {
+    const { orgId, a, b } = await twoAdmins();
+
+    const statuses = (
+      await Promise.all([deleteAccount(a), deleteAccount(b)])
+    ).map((r) => r.status);
+
+    expect(statuses.toSorted()).toEqual([204, 409]);
+    expect(await t.adminCount(orgId)).toBe(1);
+  });
+
+  it('keeps an admin when account deletion races a leave', async () => {
+    const { orgId, a, b } = await twoAdmins();
+
+    const [deleted, left] = await Promise.all([
+      deleteAccount(a),
+      t.post(`/v1/orgs/${orgId}/members/leave`).set('Cookie', b.cookie),
+    ]);
+
+    expect([deleted.status, left.status].toSorted()).toEqual([204, 409]);
+    expect(await t.adminCount(orgId)).toBe(1);
+  });
+
+  it('renders a deleted user as actorUserId null without ip in the activity log', async () => {
+    const { orgId, a, b } = await twoAdmins();
+    await t
+      .patch(`/v1/orgs/${orgId}`)
+      .set('Cookie', b.cookie)
+      .set('User-Agent', 'b-agent')
+      .send({ name: 'Renamed by b' })
+      .expect(200);
+
+    await deleteAccount(b).expect(204);
+
+    const res = await t
+      .http()
+      .get(`/v1/orgs/${orgId}/activity?type=org.renamed`)
+      .set('Cookie', a.cookie)
+      .expect(200);
+    expect(res.body.items).toHaveLength(1);
+    expect(res.body.items[0].actorUserId).toBeNull();
+    expect(res.body.items[0]).not.toHaveProperty('ip');
+    expect(res.body.items[0]).not.toHaveProperty('userAgent');
+    const [row] = await t.sql.query(
+      `SELECT actor_user_id AS "actorUserId", ip_encrypted AS ip, user_agent AS ua
+       FROM activity_events WHERE org_id = $1 AND type = 'org.renamed'`,
+      [orgId],
+    );
+    expect(row).toEqual({ actorUserId: b.userId, ip: null, ua: null });
+  });
+
+  describe('display name', () => {
+    const setName = (
+      user: TestUser,
+      displayName: unknown,
+    ): ReturnType<OrgTestApp['patch']> =>
+      t
+        .patch('/v1/orgs/account')
+        .set('Cookie', user.cookie)
+        .send({ displayName });
+
+    it('sets a trimmed name, shows it in members, /auth/me and the activity actor, and clears it with null', async () => {
+      const { orgId, a, b } = await twoAdmins();
+
+      const res = await setName(b, '  Bob Builder ').expect(200);
+
+      expect(res.body).toEqual({ displayName: 'Bob Builder' });
+      const me = await t
+        .http()
+        .get('/v1/orgs/auth/me')
+        .set('Cookie', b.cookie)
+        .expect(200);
+      expect(me.body.user).toEqual({
+        id: b.userId,
+        displayName: 'Bob Builder',
+      });
+      const members = await t
+        .http()
+        .get(`/v1/orgs/${orgId}/members`)
+        .set('Cookie', a.cookie)
+        .expect(200);
+      const named = (
+        members.body as Array<{ userId: string; displayName: string | null }>
+      ).map((m) => [m.userId, m.displayName]);
+      expect(named).toEqual(
+        expect.arrayContaining([
+          [a.userId, null],
+          [b.userId, 'Bob Builder'],
+        ]),
+      );
+      const activity = await t
+        .http()
+        .get(`/v1/orgs/${orgId}/activity?type=security.display_name_changed`)
+        .set('Cookie', a.cookie)
+        .expect(200);
+      expect(activity.body.items).toEqual([
+        expect.objectContaining({
+          actorUserId: b.userId,
+          actorDisplayName: 'Bob Builder',
+          payload: { cleared: false },
+        }),
+      ]);
+
+      await setName(b, null).expect(200, { displayName: null });
+      const [row] = await t.sql.query(
+        `SELECT display_name FROM users WHERE id = $1`,
+        [b.userId],
+      );
+      expect(row.display_name).toBeNull();
+    });
+
+    it.each([
+      ['empty after trim', '   '],
+      ['longer than 64', 'x'.repeat(65)],
+      ['a control character', 'Bob\u0007'],
+      ['a right-to-left override', 'Bob\u202Egnp.exe'],
+      ['a zero-width space', 'Bo\u200Bb'],
+      ['a BOM', '\uFEFFBob'],
+      ['only invisible fillers', '\u3164\u3164'],
+      ['only Unicode whitespace', '\u3000\u00A0\u2003'],
+      ['a combining grapheme joiner', 'Bo\u034Fb'],
+      ['a variation selector', 'Bob\uFE0F'],
+      ['a tag character', 'Bob\u{E0041}'],
+      ['a Khmer inherent vowel', 'Bob\u17B4'],
+      ['punctuation only', '...'],
+      ['a leading combining mark', '\u0301Bob'],
+      ['address-like', '0xAbC Treasury'],
+      ['the reserved "Deleted user"', 'deleted USER'],
+      ['the reserved "You"', ' you '],
+      ['the reserved "A member"', 'A Member'],
+      ['a reserved name with extra spaces', 'Deleted \u00A0  User'],
+      ['65 code points', '\u{1F600}'.repeat(65)],
+      ['not a string', 42],
+    ])('rejects a name that is %s with 400', async (_, value) => {
+      const user = await t.user({ wallet: true });
+      await setName(user, value).expect(400);
+    });
+
+    it('stores names NFC-normalised, and the DB refuses a U+202E name written around the API', async () => {
+      const user = await t.user({ wallet: true });
+
+      await setName(user, 'Jose\u0301').expect(200, {
+        displayName: 'Jos\u00E9',
+      });
+
+      await expect(
+        t.sql.query(`UPDATE users SET display_name = $2 WHERE id = $1`, [
+          user.userId,
+          'Bob\u202Egnp.exe',
+        ]),
+      ).rejects.toThrow(/users_display_name_(visible|rules)_check/);
+      await expect(
+        t.sql.query(`UPDATE users SET display_name = $2 WHERE id = $1`, [
+          user.userId,
+          'Jose\u0301',
+        ]),
+      ).rejects.toThrow(/users_display_name_(visible|rules)_check/);
+    });
+
+    it('counts 64 code points, not UTF-16 units', async () => {
+      const user = await t.user({ wallet: true });
+      const name = `A${'\u{1F600}'.repeat(63)}`;
+      await setName(user, name).expect(200, { displayName: name });
+    });
+
+    it('answers a DB check refusal (Unicode drift between API and DB) with 400, not counted', async () => {
+      const user = await t.user({ wallet: true });
+      const write = jest
+        .spyOn(
+          AccountService.prototype as unknown as {
+            write: () => Promise<void>;
+          },
+          'write',
+        )
+        .mockRejectedValue(
+          Object.assign(new Error('check'), {
+            code: '23514',
+            constraint: 'users_display_name_rules_check',
+          }),
+        );
+      try {
+        for (let i = 0; i < 6; i++) await setName(user, 'Drift').expect(400);
+      } finally {
+        write.mockRestore();
+      }
+      await setName(user, 'Fine').expect(200);
+    });
+
+    it('limits name changes to 5 an hour per user', async () => {
+      const user = await t.user({ wallet: true });
+      for (let i = 0; i < 5; i++) await setName(user, `Name ${i}`).expect(200);
+      await setName(user, 'Name 5').expect(429);
+      await setName(await t.user({ wallet: true }), 'Other').expect(200);
+    });
+
+    it.each([
+      ['a combining grapheme joiner', 'Bo\u034Fb'],
+      ['a variation selector', 'Bob\u{E0100}'],
+      ['no letter or digit', '...'],
+      ['a leading combining mark', '\u0301Bob'],
+      ['an address-like name', '0xdead'],
+      ['a reserved label', 'You'],
+      ['a reserved label with extra spaces', 'deleted   USER'],
+    ])('the DB also refuses %s', async (_, name) => {
+      const user = await t.user({ wallet: true });
+      await expect(
+        t.sql.query(`UPDATE users SET display_name = $2 WHERE id = $1`, [
+          user.userId,
+          name,
+        ]),
+      ).rejects.toThrow(/users_display_name_rules_check/);
+    });
+
+    it('hides the name of an actor who left the org from its activity', async () => {
+      const { orgId, a, b } = await twoAdmins();
+      await setName(b, 'Bob').expect(200);
+      await t
+        .post(`/v1/orgs/${orgId}/members/leave`)
+        .set('Cookie', b.cookie)
+        .expect(204);
+
+      const activity = await t
+        .http()
+        .get(`/v1/orgs/${orgId}/activity?type=security.display_name_changed`)
+        .set('Cookie', a.cookie)
+        .expect(200);
+      expect(activity.body.items[0]).toMatchObject({
+        actorUserId: b.userId,
+        actorDisplayName: null,
+      });
+    });
+
+    it('needs no step-up and changes only the caller', async () => {
+      const a = await t.user({ wallet: true, strong: false });
+      const b = await t.user({ wallet: true });
+
+      await setName(a, 'Alice').expect(200);
+
+      const rows: Array<{ id: string; displayName: string | null }> =
+        await t.sql.query(
+          `SELECT id, display_name AS "displayName" FROM users WHERE id = ANY($1)`,
+          [[a.userId, b.userId]],
+        );
+      expect(
+        Object.fromEntries(rows.map((r) => [r.id, r.displayName])),
+      ).toEqual({
+        [a.userId]: 'Alice',
+        [b.userId]: null,
+      });
+    });
+
+    it('erases the name when the account is deleted', async () => {
+      const { orgId, a, b } = await twoAdmins();
+      await setName(b, 'Bob').expect(200);
+
+      await deleteAccount(b).expect(204);
+
+      const [row] = await t.sql.query(
+        `SELECT display_name FROM users WHERE id = $1`,
+        [b.userId],
+      );
+      expect(row.display_name).toBeNull();
+      const activity = await t
+        .http()
+        .get(`/v1/orgs/${orgId}/activity?type=security.display_name_changed`)
+        .set('Cookie', a.cookie)
+        .expect(200);
+      expect(activity.body.items[0]).toMatchObject({
+        actorUserId: null,
+        actorDisplayName: null,
+      });
+    });
+  });
+});

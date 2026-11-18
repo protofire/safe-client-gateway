@@ -1,4 +1,4 @@
-import { Global, Module } from '@nestjs/common';
+import { DynamicModule, Global, Module } from '@nestjs/common';
 import { createClient } from 'redis';
 import { IConfigurationService } from '@/config/configuration.service.interface';
 import { CacheService } from '@/datasources/cache/cache.service.interface';
@@ -80,4 +80,16 @@ async function redisClientFactory(
   ],
   exports: [CacheService, CacheReadiness, 'RedisClient'],
 })
-export class CacheModule {}
+export class CacheModule {
+  /**
+   * Same module with a key prefix, so a process sharing a Redis instance with
+   * another one (cgw-org) stays in its own key space. Plain `CacheModule`
+   * keeps the empty prefix.
+   */
+  static register(keyPrefix: string): DynamicModule {
+    return {
+      module: CacheModule,
+      providers: [{ provide: CacheKeyPrefix, useValue: keyPrefix }],
+    };
+  }
+}

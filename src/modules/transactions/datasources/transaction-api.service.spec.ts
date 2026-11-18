@@ -963,6 +963,43 @@ describe('TransactionApi', () => {
       });
     });
 
+    it('should return the transfers of one transaction with the `transaction_hash` filter', async () => {
+      const safeAddress = getAddress(faker.finance.ethereumAddress());
+      const transactionHash = faker.string.hexadecimal({ length: 64 });
+      const transfersPage = pageBuilder()
+        .with('results', [erc20TransferBuilder().build()])
+        .build();
+      mockDataSource.get.mockResolvedValueOnce(rawify(transfersPage));
+
+      await service.getTransfers({
+        safeAddress,
+        onlyErc20: false,
+        onlyErc721: false,
+        limit: 100,
+        offset: 200,
+        transactionHash,
+      });
+
+      expect(mockDataSource.get).toHaveBeenCalledWith({
+        cacheDir: new CacheDir(
+          `${chainId}_transfers_${safeAddress}`,
+          `false_false_100_200_undefined_${transactionHash}`,
+        ),
+        expireTimeSeconds: defaultExpirationTimeInSeconds,
+        notFoundExpireTimeSeconds: notFoundExpireTimeSeconds,
+        url: `${baseUrl}/api/v1/safes/${safeAddress}/transfers/`,
+        networkRequest: {
+          params: {
+            erc20: false,
+            erc721: false,
+            limit: 100,
+            offset: 200,
+            transaction_hash: transactionHash,
+          },
+        },
+      });
+    });
+
     const errorMessage = faker.word.words();
     it.each([
       ['Transaction Service', { nonFieldErrors: [errorMessage] }],
