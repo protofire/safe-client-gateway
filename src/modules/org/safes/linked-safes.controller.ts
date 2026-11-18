@@ -36,11 +36,11 @@ import {
 const LinkSchema = z.object({
   chainId: z.string().regex(/^[1-9]\d{0,19}$/),
   address: z.string().refine((v) => isAddress(v, { strict: false })),
-  label: visibleText(64).optional(),
+  label: visibleText(64, { emoji: true }).optional(),
 });
 // null clears the name
 const RenameSchema = z.object({
-  label: visibleText(64).nullable(),
+  label: visibleText(64, { emoji: true }).nullable(),
 });
 // each overview fans out to the tx-service for up to 50 Safes (item 7)
 const OVERVIEWS_PER_USER_PER_MINUTE = 30;

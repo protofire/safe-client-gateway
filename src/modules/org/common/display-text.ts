@@ -19,24 +19,43 @@ export const foldName = (v: string): string =>
 /** Length in code points, as Postgres `length()` counts. */
 const codePoints = (v: string): number => [...v].length;
 
+// Emoji sequences use U+FE0F (presentation) and U+200D (joiner) between pictographs: not hidden text
+const EMOJI_JOINERS =
+  /(?<=\p{Extended_Pictographic}[\u{1F3FB}-\u{1F3FF}]?)\uFE0F|(?<=\p{Extended_Pictographic}[\u{1F3FB}-\u{1F3FF}]?\uFE0F?)\u200D(?=\p{Extended_Pictographic})/gu;
+
+/** The text with the joiners of emoji sequences removed, for the invisible-character check only */
+export const withoutEmojiJoiners = (v: string): string =>
+  v.replace(EMOJI_JOINERS, '');
+
 /**
  * NFC, no invisible characters (checked before trim), trimmed, 1..max code
  * points, no leading combining mark. `multiline`: `\n` allowed (`\r\n` and
- * `\r` become `\n`).
+ * `\r` become `\n`). `emoji`: the joiners inside emoji sequences are allowed
+ * (names of Safes and contacts; display names stay strict, their DB check mirrors this file).
  */
 export function visibleText(
   max: number,
-  { multiline = false }: { multiline?: boolean } = {},
+  {
+    multiline = false,
+    emoji = false,
+  }: { multiline?: boolean; emoji?: boolean } = {},
 ): z.ZodType<string, string> {
   return z
     .string()
+    .meta({ minLength: 1, maxLength: max })
     .transform((v) => {
       const nfc = v.normalize('NFC');
       return multiline ? nfc.replace(/\r\n?/g, '\n') : nfc;
     })
-    .refine((v) => !INVISIBLE.test(multiline ? v.replaceAll('\n', '') : v), {
-      error: 'No control, format or invisible characters',
-    })
+    .refine(
+      (v) => {
+        const text = multiline ? v.replaceAll('\n', '') : v;
+        return !INVISIBLE.test(emoji ? withoutEmojiJoiners(text) : text);
+      },
+      {
+        error: 'No control, format or invisible characters',
+      },
+    )
     .transform((v) => v.trim())
     .refine((v) => codePoints(v) >= 1 && codePoints(v) <= max, {
       error: `Must be 1 to ${max} characters`,

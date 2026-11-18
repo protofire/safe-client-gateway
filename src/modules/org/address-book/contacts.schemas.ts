@@ -8,7 +8,7 @@ export const MAX_PENDING_PER_ORG = 100;
 export const MAX_PENDING_PER_REQUESTER = 20;
 
 // no invisible, bidi or zero-width characters: names are shown in lists and audit lines
-const name = visibleText(64);
+const name = visibleText(64, { emoji: true });
 const address = z
   .string()
   .refine((v) => isAddress(v, { strict: false }), 'Invalid address')

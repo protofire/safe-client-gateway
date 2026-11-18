@@ -49,4 +49,17 @@ describe('parseSafeAddressBookCsv', () => {
       { line: 4, reason: expect.stringContaining('visible') },
     ]);
   });
+
+  it('keeps emoji names (presentation selector and joiner inside emoji) and stores them normalised', () => {
+    const { rows, errors } = parseSafeAddressBookCsv(
+      'address,name,chainId\n' +
+        `${A},Treasury \u2764\uFE0F,1\n` +
+        `${A},Team \u{1F468}\u200D\u{1F4BB} ,1\n`,
+    );
+    expect(errors).toEqual([]);
+    expect(rows.map((r) => r.name)).toEqual([
+      'Treasury \u2764\uFE0F',
+      'Team \u{1F468}\u200D\u{1F4BB}',
+    ]);
+  });
 });

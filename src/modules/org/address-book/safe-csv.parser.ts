@@ -18,6 +18,8 @@ const NAME_MAX = 64;
  * columns are ignored). An empty chainId means all networks. Invalid lines, malformed quoting included, are
  * reported, never thrown.
  */
+const CSV_NAME = visibleText(NAME_MAX, { emoji: true });
+
 export function parseSafeAddressBookCsv(text: string): {
   rows: Array<SafeCsvRow>;
   errors: Array<SafeCsvError>;
@@ -49,7 +51,7 @@ export function parseSafeAddressBookCsv(text: string): {
       errors.push({ line, reason: 'Row has fewer cells than the header' });
     } else if (!isAddress(address, { strict: true })) {
       errors.push({ line, reason: 'Invalid address' });
-    } else if (!visibleText(NAME_MAX).safeParse(name).success) {
+    } else if (!CSV_NAME.safeParse(name).success) {
       errors.push({
         line,
         reason: `Name must be 1-${NAME_MAX} visible characters`,
@@ -57,7 +59,8 @@ export function parseSafeAddressBookCsv(text: string): {
     } else if (chainId !== '' && !/^[1-9]\d{0,17}$/.test(chainId)) {
       errors.push({ line, reason: 'Invalid chainId' });
     } else {
-      rows.push({ line, address, name, chainId });
+      // the normalised name (NFC, trimmed), as the API stores it
+      rows.push({ line, address, name: CSV_NAME.parse(name), chainId });
     }
   }
   errors.sort((a, b) => a.line - b.line);

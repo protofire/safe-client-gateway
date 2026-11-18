@@ -468,6 +468,8 @@ describe('linked Safes and overview', () => {
     await patch(admin, { label: '' }).expect(400);
     await patch(admin, { label: 'Trea\u202Esury' }).expect(400);
     await patch(admin, { label: '\u200B' }).expect(400);
+    // emoji sequences are names, not hidden text
+    await patch(admin, { label: 'Ops \u26A1\uFE0F' }).expect(200);
     await patch(member, { label: 'Mine' }).expect(403);
     await patch(admin, { label: 'X' }, 'not-a-uuid').expect(404);
 
@@ -475,7 +477,7 @@ describe('linked Safes and overview', () => {
       `SELECT label FROM linked_safes WHERE id = $1`,
       [id],
     );
-    expect(row.label).toBeNull();
+    expect(row.label).toBe('Ops \u26A1\uFE0F');
     const events = await sql.query(
       `SELECT payload FROM activity_events WHERE org_id = $1 AND type = 'safe.renamed' ORDER BY created_at`,
       [orgA],
@@ -483,6 +485,7 @@ describe('linked Safes and overview', () => {
     expect(events).toEqual([
       { payload: { chainId: '1', address: SAFE_A, label: 'Ops' } },
       { payload: { chainId: '1', address: SAFE_A, previousLabel: 'Ops' } },
+      { payload: { chainId: '1', address: SAFE_A, label: 'Ops \u26A1\uFE0F' } },
     ]);
   });
 
