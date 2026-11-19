@@ -385,6 +385,10 @@ describe('OrgEventsHandler', () => {
     } as Event);
     expect(safeRepo.clearMultisigTransactions).toHaveBeenCalledWith(args);
     expect(safeRepo.clearMultisigTransaction).toHaveBeenCalled();
+    // a call started here and awaited by no one rejects unhandled on an
+    // unknown chain and terminates the process
+    expect(safeRepo.clearAllExecutedTransactions).not.toHaveBeenCalled();
+    expect(safeRepo.clearMultisigTransactions).toHaveBeenCalledTimes(1);
     jest.clearAllMocks();
 
     await handler.handle({

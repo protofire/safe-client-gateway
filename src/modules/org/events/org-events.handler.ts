@@ -289,7 +289,9 @@ export class OrgEventsHandler {
   private async invalidate(e: TxEvent): Promise<void> {
     const a = { chainId: e.chainId, safeAddress: e.address };
     const s = this.safeRepository;
-    const executed = [
+    // Lazy on purpose: a promise started here but not awaited by the branch
+    // below would reject unhandled and terminate the process.
+    const executed = (): Array<Promise<void>> => [
       s.clearAllExecutedTransactions(a),
       s.clearMultisigTransactions(a),
     ];
@@ -310,7 +312,7 @@ export class OrgEventsHandler {
         return;
       case TransactionEventType.EXECUTED_MULTISIG_TRANSACTION:
         await Promise.all([
-          ...executed,
+          ...executed(),
           s.clearTransfers(a),
           one(),
           safe(),
@@ -328,7 +330,7 @@ export class OrgEventsHandler {
       case TransactionEventType.INCOMING_ETHER:
       case TransactionEventType.INCOMING_TOKEN:
         await Promise.all([
-          ...executed,
+          ...executed(),
           s.clearTransfers(a),
           s.clearIncomingTransfers(a),
           this.balancesRepository.clearBalances(a),
@@ -337,7 +339,7 @@ export class OrgEventsHandler {
       case TransactionEventType.OUTGOING_ETHER:
       case TransactionEventType.OUTGOING_TOKEN:
         await Promise.all([
-          ...executed,
+          ...executed(),
           s.clearTransfers(a),
           this.balancesRepository.clearBalances(a),
         ]);

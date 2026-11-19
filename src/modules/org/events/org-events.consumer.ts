@@ -67,6 +67,11 @@ export class OrgEventsConsumer implements OnModuleInit, OnApplicationShutdown {
         await ch.bindQueue(queue, exchange, '');
       },
     });
+    // the wrapper emits 'error' when a setup call or consumer re-registration
+    // fails; without a listener that emit throws and terminates the process
+    this.channel.on('error', (error: Error) => {
+      this.logger.error(`Org events channel error: ${error.message}`);
+    });
     await this.channel.consume(queue, (msg: ConsumeMessage) => {
       void this.dispatch(msg);
     });
