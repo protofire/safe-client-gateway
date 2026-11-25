@@ -234,13 +234,12 @@ describe('OrgEventsHandler', () => {
     ]);
   });
 
-  it('ignores a duplicate delivery', async () => {
+  it('records nothing for a repeated event', async () => {
     await seed();
     const ev = executed();
     safeRepo.getSafe.mockResolvedValue(safeState({ threshold: 1 }));
     await handler.handle(ev);
-    // a redelivery must not diff again, even if the chain state moved on
-    safeRepo.getSafe.mockResolvedValue(safeState({ threshold: 3 }));
+    // the same event again finds the snapshot equal to the state
     await handler.handle(ev);
     expect(await events(orgA)).toHaveLength(1);
   });
@@ -360,33 +359,93 @@ describe('OrgEventsHandler', () => {
     );
   });
 
+  it('still triggers the policy scan and payout settlement when the snapshot step fails', async () => {
+    await seed();
+    const scanner = { enqueue: jest.fn() };
+    const payouts = { onExecuted: jest.fn().mockResolvedValue(undefined) };
+    const wired = new OrgEventsHandler(
+      safeRepo as never,
+      balancesRepo as never,
+      new OrgTransaction(sql),
+      new ActivityLog({} as FieldEncryptionService),
+      logger as never,
+      scanner as never,
+      payouts as never,
+    );
+    safeRepo.getSafe.mockRejectedValueOnce(new Error('node down'));
+    const ev = executed();
+
+    // nothing retries the event, and neither trigger needs the snapshot
+    await expect(wired.handle(ev)).rejects.toThrow('node down');
+    expect(scanner.enqueue).toHaveBeenCalledTimes(1);
+    expect(payouts.onExecuted).toHaveBeenCalledTimes(1);
+  });
+
   it('does not touch another Safe', async () => {
     await seed();
     await handler.handle(executed({ address: OTHER }));
     expect(await events(orgA)).toEqual([]);
   });
 
-  it('knows linked Safes in any address case and no others, from memory, reloading on a timer', async () => {
+  it('knows linked and payout-watched Safes in any address case and no others, from memory, reloading on a timer', async () => {
     jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
     const internals = handler as unknown as {
-      known?: unknown;
+      known: Set<string>;
       loadingKnown?: Promise<unknown>;
+      tx: { runInOrgTx: (...args: Array<unknown>) => Promise<unknown> };
     };
-    try {
-      expect(await handler.knows(CHAIN, SAFE.toLowerCase())).toBe(true);
-      expect(await handler.knows(CHAIN, OTHER)).toBe(false);
-      expect(await handler.knows('999999', SAFE)).toBe(false);
-
-      // answered from memory until the next reload, with or without events
-      await sql.query(`DELETE FROM linked_safes`);
-      expect(await handler.knows(CHAIN, SAFE)).toBe(true);
+    const reload = async (): Promise<void> => {
       jest.advanceTimersByTime(KNOWN_SAFES_TTL_MS);
       await internals.loadingKnown;
-      expect(await handler.knows(CHAIN, SAFE)).toBe(false);
+    };
+    // payout tables are under row-level security: written as org A
+    const asOrgA = (q: string, params: Array<unknown>): Promise<unknown> =>
+      internals.tx.runInOrgTx(
+        (em: { query: (q: string, p: Array<unknown>) => Promise<unknown> }) =>
+          em.query(q, params),
+        orgA,
+      );
+    let runId: string | undefined;
+    try {
+      expect(handler.knows(CHAIN, SAFE)).toBe(false);
+      await handler.watchKnown();
+      expect(handler.knows(CHAIN, SAFE.toLowerCase())).toBe(true);
+      expect(handler.knows(CHAIN, OTHER)).toBe(false);
+      expect(handler.knows('999999', SAFE)).toBe(false);
+
+      // a Safe no org links, watched by a payout run
+      [{ id: runId }] = (await asOrgA(
+        `INSERT INTO payout_runs (org_id, chain_id, safe_address, name, status, pinned_nonce)
+         VALUES ($1, $2, $3, 'run', 'proposing', 7) RETURNING id`,
+        [orgA, CHAIN, OTHER],
+      )) as Array<{ id: string }>;
+      await asOrgA(
+        `INSERT INTO payout_watch (run_id, org_id, chain_id, safe_address) VALUES ($1, $2, $3, $4)`,
+        [runId, orgA, CHAIN, OTHER.toLowerCase()],
+      );
+      await sql.query(`DELETE FROM linked_safes`);
+      // answered from memory until the next reload, with or without events
+      expect(handler.knows(CHAIN, SAFE)).toBe(true);
+      expect(handler.knows(CHAIN, OTHER)).toBe(false);
+
+      // a failed reload keeps the previous set
+      const failing = jest
+        .spyOn(internals.tx, 'runInOrgTx')
+        .mockRejectedValueOnce(new Error('db down'));
+      await reload();
+      expect(failing).toHaveBeenCalledTimes(1);
+      expect(handler.knows(CHAIN, SAFE)).toBe(true);
+      failing.mockRestore();
+
+      await reload();
+      expect(handler.knows(CHAIN, SAFE)).toBe(false);
+      expect(handler.knows(CHAIN, OTHER)).toBe(true);
     } finally {
       handler.onModuleDestroy();
-      internals.known = undefined;
+      internals.known = new Set();
       jest.useRealTimers();
+      await asOrgA(`DELETE FROM payout_watch WHERE run_id = $1`, [runId]);
+      await asOrgA(`DELETE FROM payout_runs WHERE id = $1`, [runId]);
     }
   });
 

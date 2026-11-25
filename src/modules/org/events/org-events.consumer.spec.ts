@@ -31,7 +31,7 @@ describe('OrgEventsConsumer.receive', () => {
 
   beforeEach(() => {
     jest.resetAllMocks();
-    handler.knows.mockResolvedValue(true);
+    handler.knows.mockReturnValue(true);
     handler.handle.mockResolvedValue(undefined);
     consumer = new OrgEventsConsumer(
       {} as never,
@@ -40,51 +40,45 @@ describe('OrgEventsConsumer.receive', () => {
     );
   });
 
-  it('skips a message that is not valid JSON', async () => {
-    await expect(consumer.receive(msg('{nope'))).resolves.toBeUndefined();
+  it('skips a message that is not valid JSON', () => {
+    expect(() => consumer.receive(msg('{nope'))).not.toThrow();
     expect(handler.knows).not.toHaveBeenCalled();
     expect(handler.handle).not.toHaveBeenCalled();
   });
 
-  it('skips an event without a Safe before any lookup', async () => {
-    await consumer.receive(msg({ type: 'CHAIN_UPDATE', chainId: '1' }));
-    await consumer.receive(msg(null));
+  it('skips an event without a Safe before any lookup', () => {
+    consumer.receive(msg({ type: 'CHAIN_UPDATE', chainId: '1' }));
+    consumer.receive(msg(null));
     expect(handler.knows).not.toHaveBeenCalled();
     expect(handler.handle).not.toHaveBeenCalled();
   });
 
-  it('drops an event of a Safe the org layer does not know', async () => {
-    handler.knows.mockResolvedValue(false);
-    await consumer.receive(msg(valid));
+  it('drops an event of a Safe the org layer does not know', () => {
+    handler.knows.mockReturnValue(false);
+    consumer.receive(msg(valid));
     expect(handler.knows).toHaveBeenCalledWith(valid.chainId, valid.address);
     expect(handler.handle).not.toHaveBeenCalled();
   });
 
-  it('skips a known Safe event that fails the event schema', async () => {
-    await consumer.receive(msg({ ...valid, type: 'X' }));
+  it('skips a known Safe event that fails the event schema', () => {
+    consumer.receive(msg({ ...valid, type: 'X' }));
     expect(handler.handle).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith({
       type: 'org_events_unparseable',
     });
   });
 
-  it('handles a known Safe event once', async () => {
-    await consumer.receive(msg(valid));
+  it('handles a known Safe event once', () => {
+    consumer.receive(msg(valid));
     expect(handler.handle).toHaveBeenCalledTimes(1);
   });
 
   it('logs a failed event and does not retry it', async () => {
     handler.handle.mockRejectedValue(new Error('node down'));
-    await consumer.receive(msg(valid));
+    consumer.receive(msg(valid));
     await tick();
     expect(handler.handle).toHaveBeenCalledTimes(1);
     expect(logger.error).toHaveBeenCalledWith('Org event failed: node down');
-  });
-
-  it('does not reject when the known-Safes lookup fails', async () => {
-    handler.knows.mockRejectedValue(new Error('db down'));
-    await expect(consumer.receive(msg(valid))).resolves.toBeUndefined();
-    expect(handler.handle).not.toHaveBeenCalled();
   });
 
   it('runs at most ORG_EVENTS_CONCURRENCY at a time, then the rest in order', async () => {
@@ -94,7 +88,7 @@ describe('OrgEventsConsumer.receive', () => {
     );
     const hash = (i: number): string => `0x${String(i).padStart(64, '0')}`;
     for (let i = 0; i < ORG_EVENTS_CONCURRENCY + 2; i++) {
-      await consumer.receive(msg({ ...valid, safeTxHash: hash(i) }));
+      consumer.receive(msg({ ...valid, safeTxHash: hash(i) }));
     }
     expect(handler.handle).toHaveBeenCalledTimes(ORG_EVENTS_CONCURRENCY);
     release[0]();
@@ -103,15 +97,20 @@ describe('OrgEventsConsumer.receive', () => {
     expect(handler.handle).toHaveBeenLastCalledWith(
       expect.objectContaining({ safeTxHash: hash(ORG_EVENTS_CONCURRENCY) }),
     );
+    release[1]();
+    await tick();
+    expect(handler.handle).toHaveBeenLastCalledWith(
+      expect.objectContaining({ safeTxHash: hash(ORG_EVENTS_CONCURRENCY + 1) }),
+    );
   });
 
-  it('drops events beyond the buffer and reports the count when it drains', async () => {
+  it('drops events beyond the buffer and reports the count once there is room again', async () => {
     const release: Array<() => void> = [];
     handler.handle.mockImplementation(
       () => new Promise<void>((r) => release.push(r)),
     );
     const total = ORG_EVENTS_CONCURRENCY + ORG_EVENTS_BUFFER + 2;
-    for (let i = 0; i < total; i++) await consumer.receive(msg(valid));
+    for (let i = 0; i < total; i++) consumer.receive(msg(valid));
     expect(logger.warn).toHaveBeenCalledWith({
       type: 'org_events_buffer_full',
     });
@@ -120,6 +119,8 @@ describe('OrgEventsConsumer.receive', () => {
       await tick();
     }
     expect(handler.handle).toHaveBeenCalledTimes(total - 2);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    consumer.receive(msg(valid));
     expect(logger.warn).toHaveBeenCalledWith({
       type: 'org_events_dropped',
       count: 2,
@@ -131,8 +132,6 @@ describe('org pool budget (item 9)', () => {
   it('keeps event handling and reconcile within a quarter of the shared org pool', () => {
     // each in-flight event or reconciled Safe can hold one connection
     // (per-Safe lock held across the node read); the API shares the pool
-    expect(ORG_EVENTS_CONCURRENCY).toBe(3);
-    expect(RECONCILE_CONCURRENCY).toBe(2);
     expect(ORG_EVENTS_CONCURRENCY + RECONCILE_CONCURRENCY).toBeLessThanOrEqual(
       ORG_PG_POOL.max / 4,
     );

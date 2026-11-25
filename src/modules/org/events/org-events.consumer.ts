@@ -18,7 +18,9 @@ import { OrgEventsHandler } from '@/modules/org/events/org-events.handler';
 // org pool max is 20 and shared with the API; each in-flight event can hold
 // a connection across its node read (per-Safe lock), so 3 at a time (item 9)
 export const ORG_EVENTS_CONCURRENCY = 3;
-// events of known Safes waiting for a free slot; beyond it they are dropped
+// events of known Safes waiting for a free slot
+// shortcut: beyond it they are dropped and left to the periodic passes;
+// upgrade to broker-side back-pressure (acks + prefetch) if drops show in logs
 export const ORG_EVENTS_BUFFER = 1000;
 
 /**
@@ -55,7 +57,6 @@ export class OrgEventsConsumer implements OnModuleInit, OnApplicationShutdown {
       reconnectTimeInSeconds: 5,
     });
     this.channel = this.connection.createChannel({
-      json: true,
       setup: async (ch: Channel) => {
         await ch.assertExchange(exchange, 'fanout', { durable: true });
         await ch.assertQueue(queue, { durable: true });
@@ -67,38 +68,40 @@ export class OrgEventsConsumer implements OnModuleInit, OnApplicationShutdown {
     this.channel.on('error', (error: Error) => {
       this.logger.error(`Org events channel error: ${error.message}`);
     });
-    // loaded before the first message: with noAck the broker hands over the
-    // whole backlog at once, and every message would wait on this query
-    await this.handler.knows('', '');
+    // before the first message: with noAck the broker hands over the whole
+    // backlog at once
+    await this.handler.watchKnown();
     await this.channel.consume(
       queue,
-      (msg: ConsumeMessage) => {
-        void this.receive(msg);
-      },
+      (msg: ConsumeMessage) => this.receive(msg),
       { noAck: true },
     );
     this.logger.info(`Org events subscribed to queue: ${queue}`);
   }
 
-  /** Never rejects: it is called without an await from the consume callback. */
-  async receive(msg: ConsumeMessage): Promise<void> {
+  /** Never throws: it is the consume callback. */
+  receive(msg: ConsumeMessage): void {
     try {
       const raw: unknown = JSON.parse(msg.content.toString());
       const { chainId, address } = (raw ?? {}) as Record<string, unknown>;
       // events without a Safe (chain updates, delegates) do nothing here
       if (typeof chainId !== 'string' || typeof address !== 'string') return;
-      if (!(await this.handler.knows(chainId, address))) return;
+      if (!this.handler.knows(chainId, address)) return;
       const parsed = EventSchema.safeParse(raw);
       if (!parsed.success) {
         this.logger.warn({ type: 'org_events_unparseable' });
         return;
       }
       if (this.buffer.length >= ORG_EVENTS_BUFFER) {
-        // logged once per overflow, with the total when it ends
+        // logged when an overflow starts, and its total when room returns
         if (this.dropped++ === 0) {
           this.logger.warn({ type: 'org_events_buffer_full' });
         }
         return;
+      }
+      if (this.dropped > 0) {
+        this.logger.warn({ type: 'org_events_dropped', count: this.dropped });
+        this.dropped = 0;
       }
       this.buffer.push(parsed.data);
       this.pump();
@@ -123,13 +126,6 @@ export class OrgEventsConsumer implements OnModuleInit, OnApplicationShutdown {
         )
         .finally(() => {
           this.inFlight--;
-          if (this.dropped > 0 && this.buffer.length === 0) {
-            this.logger.warn({
-              type: 'org_events_dropped',
-              count: this.dropped,
-            });
-            this.dropped = 0;
-          }
           this.pump();
         });
     }
