@@ -78,7 +78,7 @@ describe('OrgEventsConsumer.receive', () => {
     await consumer.receive(msg(valid));
     await tick();
     expect(handler.handle).toHaveBeenCalledTimes(1);
-    expect(logger.warn).toHaveBeenCalledWith('Org event failed: node down');
+    expect(logger.error).toHaveBeenCalledWith('Org event failed: node down');
   });
 
   it('does not reject when the known-Safes lookup fails', async () => {
@@ -92,13 +92,17 @@ describe('OrgEventsConsumer.receive', () => {
     handler.handle.mockImplementation(
       () => new Promise<void>((r) => release.push(r)),
     );
+    const hash = (i: number): string => `0x${String(i).padStart(64, '0')}`;
     for (let i = 0; i < ORG_EVENTS_CONCURRENCY + 2; i++) {
-      await consumer.receive(msg(valid));
+      await consumer.receive(msg({ ...valid, safeTxHash: hash(i) }));
     }
     expect(handler.handle).toHaveBeenCalledTimes(ORG_EVENTS_CONCURRENCY);
     release[0]();
     await tick();
     expect(handler.handle).toHaveBeenCalledTimes(ORG_EVENTS_CONCURRENCY + 1);
+    expect(handler.handle).toHaveBeenLastCalledWith(
+      expect.objectContaining({ safeTxHash: hash(ORG_EVENTS_CONCURRENCY) }),
+    );
   });
 
   it('drops events beyond the buffer and reports the count when it drains', async () => {

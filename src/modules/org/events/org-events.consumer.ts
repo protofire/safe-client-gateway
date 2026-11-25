@@ -67,6 +67,9 @@ export class OrgEventsConsumer implements OnModuleInit, OnApplicationShutdown {
     this.channel.on('error', (error: Error) => {
       this.logger.error(`Org events channel error: ${error.message}`);
     });
+    // loaded before the first message: with noAck the broker hands over the
+    // whole backlog at once, and every message would wait on this query
+    await this.handler.knows('', '');
     await this.channel.consume(
       queue,
       (msg: ConsumeMessage) => {
@@ -113,7 +116,8 @@ export class OrgEventsConsumer implements OnModuleInit, OnApplicationShutdown {
       void this.handler
         .handle(event)
         .catch((error: unknown) =>
-          this.logger.warn(
+          // not retried, so this is the event's final outcome
+          this.logger.error(
             `Org event failed: ${error instanceof Error ? error.message : String(error)}`,
           ),
         )

@@ -377,6 +377,21 @@ describe('OrgEventsHandler', () => {
     expect(await handler.knows(CHAIN, SAFE)).toBe(false);
   });
 
+  it('answers from the current set while an expired one reloads', async () => {
+    const internals = handler as unknown as {
+      known?: { loadedAt: number };
+      loadingKnown?: Promise<unknown>;
+    };
+    internals.known = undefined;
+    expect(await handler.knows(CHAIN, SAFE)).toBe(true);
+    await sql.query(`DELETE FROM linked_safes`);
+    internals.known!.loadedAt = 0;
+
+    expect(await handler.knows(CHAIN, SAFE)).toBe(true);
+    await internals.loadingKnown;
+    expect(await handler.knows(CHAIN, SAFE)).toBe(false);
+  });
+
   it('invalidates the caches on executed, confirmation and incoming events', async () => {
     const base = { chainId: CHAIN, address: SAFE };
     const args = { chainId: CHAIN, safeAddress: SAFE };

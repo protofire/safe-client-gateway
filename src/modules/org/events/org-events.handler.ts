@@ -22,7 +22,7 @@ import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface
 
 type TxEvent = Extract<Event, { address: string; chainId: string }>;
 
-export const KNOWN_SAFES_TTL_MS = 30_000;
+export const KNOWN_SAFES_TTL_MS = 5_000;
 const ZERO = '0x0000000000000000000000000000000000000000';
 const lower = (a: string): string => a.toLowerCase();
 const sameSet = (a: Array<string>, b: Array<string>): boolean =>
@@ -62,16 +62,21 @@ export class OrgEventsHandler {
   /**
    * Whether the org layer has anything to do for this Safe: an org links it
    * or a payout run watches it. The queue carries every event of the
-   * environment, so this is answered from memory.
-   * shortcut: a Safe linked or watched within the last KNOWN_SAFES_TTL_MS may
-   * be missed; the periodic passes (reconcile, policy scan, payouts) cover it.
-   * Throws when the first load fails; later failures keep the previous set.
+   * environment, so this is answered from memory; only the first call waits
+   * for the query, later ones use the current set while it reloads.
+   * shortcut: a Safe linked or watched within the last KNOWN_SAFES_TTL_MS (plus
+   * the reload) may be missed; the periodic passes (reconcile, policy scan,
+   * payouts) cover it.
+   * Never throws: a failed load keeps the previous set (none yet: an empty
+   * one) and is tried again after the same interval.
    */
   async knows(chainId: string, address: string): Promise<boolean> {
-    const fresh =
-      this.known && Date.now() - this.known.loadedAt < KNOWN_SAFES_TTL_MS;
-    const keys = fresh ? this.known!.keys : await this.loadKnown();
-    return keys.has(`${chainId}:${lower(address)}`);
+    const key = `${chainId}:${lower(address)}`;
+    if (!this.known) return (await this.loadKnown()).has(key);
+    if (Date.now() - this.known.loadedAt >= KNOWN_SAFES_TTL_MS) {
+      void this.loadKnown();
+    }
+    return this.known.keys.has(key);
   }
 
   private loadKnown(): Promise<Set<string>> {
@@ -90,13 +95,15 @@ export class OrgEventsHandler {
         return keys;
       })
       .catch((error: unknown) => {
-        if (!this.known) throw error;
         this.logger.warn({
           type: 'org_events_known_safes_stale',
           error: error instanceof Error ? error.message : String(error),
         });
         // not retried on every event while the DB is down
-        this.known.loadedAt = Date.now();
+        this.known = {
+          keys: this.known?.keys ?? new Set(),
+          loadedAt: Date.now(),
+        };
         return this.known.keys;
       })
       .finally(() => {
