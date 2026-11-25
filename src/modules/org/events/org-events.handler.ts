@@ -1,5 +1,9 @@
-import { createHash } from 'node:crypto';
-import { Inject, Injectable, Optional } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  type OnModuleDestroy,
+  Optional,
+} from '@nestjs/common';
 import type { EntityManager } from 'typeorm';
 import type { Address } from 'viem';
 import { ILoggingService, LoggingService } from '@/logging/logging.interface';
@@ -22,6 +26,7 @@ import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface
 
 type TxEvent = Extract<Event, { address: string; chainId: string }>;
 
+export const KNOWN_SAFES_TTL_MS = 5_000;
 const ZERO = '0x0000000000000000000000000000000000000000';
 const lower = (a: string): string => a.toLowerCase();
 const sameSet = (a: Array<string>, b: Array<string>): boolean =>
@@ -43,7 +48,7 @@ async function readSnapshot(
 }
 
 @Injectable()
-export class OrgEventsHandler {
+export class OrgEventsHandler implements OnModuleDestroy {
   constructor(
     @Inject(ISafeRepository) private readonly safeRepository: ISafeRepository,
     @Inject(IBalancesRepository)
@@ -55,7 +60,67 @@ export class OrgEventsHandler {
     @Optional() private readonly payouts?: PayoutStatusUpdater,
   ) {}
 
-  /** Throws on infrastructure failures (cache, node, DB): the consumer decides to retry. */
+  private known = new Set<string>();
+  private knownTimer?: NodeJS.Timeout;
+  private loadingKnown?: Promise<void>;
+
+  /**
+   * Whether the org layer has anything to do for this Safe: an org links it
+   * or a payout run watches it. The queue carries every event of the
+   * environment, so this is answered from memory (see `watchKnown`).
+   * shortcut: a Safe linked or watched within the last KNOWN_SAFES_TTL_MS (plus
+   * one query) may be missed, the periodic passes (reconcile, policy scan,
+   * payouts) cover it; upgrade to adding the key at link / watch time if
+   * that window ever matters.
+   */
+  knows(chainId: string, address: string): boolean {
+    return this.known.has(`${chainId}:${lower(address)}`);
+  }
+
+  /**
+   * Loads the set `knows` answers from and reloads it every
+   * KNOWN_SAFES_TTL_MS, traffic or not. Called once, before the queue is read.
+   * Never rejects: a failed load keeps the previous set (empty at first).
+   */
+  async watchKnown(): Promise<void> {
+    this.knownTimer ??= setInterval(
+      () => void this.loadKnown(),
+      KNOWN_SAFES_TTL_MS,
+    ).unref();
+    await this.loadKnown();
+  }
+
+  onModuleDestroy(): void {
+    clearInterval(this.knownTimer);
+    this.knownTimer = undefined;
+  }
+
+  private loadKnown(): Promise<void> {
+    this.loadingKnown ??= this.tx
+      .runInOrgTx((em) =>
+        em.query(
+          `SELECT chain_id, address FROM linked_safes
+           UNION SELECT chain_id, safe_address FROM payout_watch`,
+        ),
+      )
+      .then((rows: Array<{ chain_id: string; address: string }>) => {
+        this.known = new Set(
+          rows.map((r) => `${r.chain_id}:${lower(r.address)}`),
+        );
+      })
+      .catch((error: unknown) =>
+        this.logger.warn({
+          type: 'org_events_known_safes_stale',
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      )
+      .finally(() => {
+        this.loadingKnown = undefined;
+      });
+    return this.loadingKnown;
+  }
+
+  /** Throws on infrastructure failures (cache, node, DB); the consumer logs them. */
   async handle(event: Event): Promise<void> {
     if (!('address' in event) || !('chainId' in event)) return;
     const e = event as TxEvent;
@@ -77,33 +142,32 @@ export class OrgEventsHandler {
       isConfigCandidate || isScan
         ? await this.linkingOrgs(e.chainId, e.address)
         : [];
-    if (orgIds.length === 0) {
-      await this.invalidate(e);
+    try {
+      if (orgIds.length > 0 && (isConfigCandidate || isSeedOnly)) {
+        await this.tx.runInOrgTx((em) =>
+          this.process(em, e, orgIds, isConfigCandidate),
+        );
+      } else {
+        await this.invalidate(e);
+      }
+    } finally {
+      // after commit, and also when the step above failed: nothing retries
+      // an event, and neither of these needs the snapshot
+      if (orgIds.length > 0 && isScan) {
+        this.scanner?.enqueue(
+          e.chainId,
+          e.address,
+          (e as { safeTxHash: string }).safeTxHash,
+        );
+      }
       await this.settlePayouts(e);
-      return;
     }
-    if (isConfigCandidate || isSeedOnly) {
-      await this.tx.runInOrgTx((em) =>
-        this.process(em, e, orgIds, isConfigCandidate),
-      );
-    } else {
-      await this.invalidate(e);
-    }
-    // after commit
-    if (isScan) {
-      this.scanner?.enqueue(
-        e.chainId,
-        e.address,
-        (e as { safeTxHash: string }).safeTxHash,
-      );
-    }
-    await this.settlePayouts(e);
   }
 
   /**
    * Payout runs pinned on any Safe (linked or not, unlinked runs still settle);
-   * returns at once when none watches it. Awaited so the AMQP prefetch bounds
-   * the work; a failure is only logged (the periodic pass retries).
+   * returns at once when none watches it. Awaited so the consumer's concurrency
+   * limit bounds the work; a failure is only logged (the periodic pass retries).
    */
   private async settlePayouts(e: TxEvent): Promise<void> {
     if (e.type !== TransactionEventType.EXECUTED_MULTISIG_TRANSACTION) return;
@@ -125,7 +189,8 @@ export class OrgEventsHandler {
    * `getSafe` is read, so reads and diffs happen in the same order for
    * concurrent events and a diff can never be reversed. It holds one DB
    * connection during the node read (bounded by lock_timeout and the HTTP
-   * timeouts); events of other Safes are not blocked.
+   * timeouts); events of other Safes are not blocked. A repeated event finds
+   * the snapshot already equal to the state and records nothing.
    */
   private async process(
     em: EntityManager,
@@ -139,22 +204,6 @@ export class OrgEventsHandler {
     const previous = await readSnapshot(em, e.chainId, e.address);
     if (!isConfigCandidate && previous !== null) return;
 
-    if (isConfigCandidate) {
-      const key = createHash('sha256')
-        .update(
-          `${e.chainId}|${lower(e.address)}|${lower(
-            (e as { txHash: string }).txHash,
-          )}|${e.type}`,
-        )
-        .digest('hex');
-      const inserted: Array<unknown> = await em.query(
-        `INSERT INTO processed_events (event_key) VALUES ($1)
-         ON CONFLICT (event_key) DO NOTHING RETURNING event_key`,
-        [key],
-      );
-      if (inserted.length === 0) return;
-    }
-
     let current: Snapshot;
     try {
       current = toSnapshot(
@@ -164,7 +213,7 @@ export class OrgEventsHandler {
         }),
       );
     } catch (error) {
-      // a failed read for a seed-only event must not cost a retry
+      // seeding is best effort: reconcile seeds the Safe later
       if (!isConfigCandidate) {
         this.logger.warn({
           type: 'org_events_seed_failed',
@@ -188,8 +237,8 @@ export class OrgEventsHandler {
   }
 
   /**
-   * Catches up on changes whose events were lost (dropped after the last
-   * retry, consumer down): same lock and diff as `process`, from a fresh
+   * Catches up on changes whose events were lost (handling failed, buffer
+   * full, consumer down): same lock and diff as `process`, from a fresh
    * `getSafe`. Seeds a Safe whose link-time seed failed, without events.
    * Throws on infrastructure failures; the caller logs and moves on.
    */

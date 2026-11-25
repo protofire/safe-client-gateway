@@ -22,7 +22,7 @@ const RUN_LOCK = [0x6f7267, 1] as const;
 
 /**
  * Hourly (and once shortly after boot) state diff of every linked Safe, so a
- * change whose event was lost after the consumer's retries still reaches the
+ * change whose event was lost or failed (events are not retried) still reaches the
  * activity log (`source: 'reconcile'`). One run at a time across replicas:
  * a replica that cannot take the run lock skips its turn.
  */
