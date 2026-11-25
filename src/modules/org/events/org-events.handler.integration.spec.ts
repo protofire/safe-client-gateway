@@ -363,6 +363,20 @@ describe('OrgEventsHandler', () => {
     expect(await events(orgA)).toEqual([]);
   });
 
+  it('knows linked Safes in any address case and no others, from memory', async () => {
+    const internals = handler as unknown as { known?: unknown };
+    internals.known = undefined;
+    expect(await handler.knows(CHAIN, SAFE.toLowerCase())).toBe(true);
+    expect(await handler.knows(CHAIN, OTHER)).toBe(false);
+    expect(await handler.knows('999999', SAFE)).toBe(false);
+
+    // answered from memory until the set expires
+    await sql.query(`DELETE FROM linked_safes`);
+    expect(await handler.knows(CHAIN, SAFE)).toBe(true);
+    internals.known = undefined;
+    expect(await handler.knows(CHAIN, SAFE)).toBe(false);
+  });
+
   it('invalidates the caches on executed, confirmation and incoming events', async () => {
     const base = { chainId: CHAIN, address: SAFE };
     const args = { chainId: CHAIN, safeAddress: SAFE };

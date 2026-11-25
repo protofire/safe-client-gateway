@@ -22,6 +22,7 @@ import { ISafeRepository } from '@/modules/safe/domain/safe.repository.interface
 
 type TxEvent = Extract<Event, { address: string; chainId: string }>;
 
+export const KNOWN_SAFES_TTL_MS = 30_000;
 const ZERO = '0x0000000000000000000000000000000000000000';
 const lower = (a: string): string => a.toLowerCase();
 const sameSet = (a: Array<string>, b: Array<string>): boolean =>
@@ -55,7 +56,56 @@ export class OrgEventsHandler {
     @Optional() private readonly payouts?: PayoutStatusUpdater,
   ) {}
 
-  /** Throws on infrastructure failures (cache, node, DB): the consumer decides to retry. */
+  private known?: { keys: Set<string>; loadedAt: number };
+  private loadingKnown?: Promise<Set<string>>;
+
+  /**
+   * Whether the org layer has anything to do for this Safe: an org links it
+   * or a payout run watches it. The queue carries every event of the
+   * environment, so this is answered from memory.
+   * shortcut: a Safe linked or watched within the last KNOWN_SAFES_TTL_MS may
+   * be missed; the periodic passes (reconcile, policy scan, payouts) cover it.
+   * Throws when the first load fails; later failures keep the previous set.
+   */
+  async knows(chainId: string, address: string): Promise<boolean> {
+    const fresh =
+      this.known && Date.now() - this.known.loadedAt < KNOWN_SAFES_TTL_MS;
+    const keys = fresh ? this.known!.keys : await this.loadKnown();
+    return keys.has(`${chainId}:${lower(address)}`);
+  }
+
+  private loadKnown(): Promise<Set<string>> {
+    this.loadingKnown ??= this.tx
+      .runInOrgTx((em) =>
+        em.query(
+          `SELECT chain_id, address FROM linked_safes
+           UNION SELECT chain_id, safe_address FROM payout_watch`,
+        ),
+      )
+      .then((rows: Array<{ chain_id: string; address: string }>) => {
+        const keys = new Set(
+          rows.map((r) => `${r.chain_id}:${lower(r.address)}`),
+        );
+        this.known = { keys, loadedAt: Date.now() };
+        return keys;
+      })
+      .catch((error: unknown) => {
+        if (!this.known) throw error;
+        this.logger.warn({
+          type: 'org_events_known_safes_stale',
+          error: error instanceof Error ? error.message : String(error),
+        });
+        // not retried on every event while the DB is down
+        this.known.loadedAt = Date.now();
+        return this.known.keys;
+      })
+      .finally(() => {
+        this.loadingKnown = undefined;
+      });
+    return this.loadingKnown;
+  }
+
+  /** Throws on infrastructure failures (cache, node, DB); the consumer logs them. */
   async handle(event: Event): Promise<void> {
     if (!('address' in event) || !('chainId' in event)) return;
     const e = event as TxEvent;
@@ -188,8 +238,8 @@ export class OrgEventsHandler {
   }
 
   /**
-   * Catches up on changes whose events were lost (dropped after the last
-   * retry, consumer down): same lock and diff as `process`, from a fresh
+   * Catches up on changes whose events were lost (handling failed, buffer
+   * full, consumer down): same lock and diff as `process`, from a fresh
    * `getSafe`. Seeds a Safe whose link-time seed failed, without events.
    * Throws on infrastructure failures; the caller logs and moves on.
    */
