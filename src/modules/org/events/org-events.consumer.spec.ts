@@ -104,27 +104,42 @@ describe('OrgEventsConsumer.receive', () => {
     );
   });
 
-  it('drops events beyond the buffer and reports the count once there is room again', async () => {
+  it('drops events beyond the buffer and reports the count when it drains', async () => {
     const release: Array<() => void> = [];
     handler.handle.mockImplementation(
       () => new Promise<void>((r) => release.push(r)),
     );
     const total = ORG_EVENTS_CONCURRENCY + ORG_EVENTS_BUFFER + 2;
     for (let i = 0; i < total; i++) consumer.receive(msg(valid));
-    expect(logger.warn).toHaveBeenCalledWith({
-      type: 'org_events_buffer_full',
-    });
+    expect(logger.warn).not.toHaveBeenCalled();
     while (release.length > 0) {
       release.shift()!();
       await tick();
     }
     expect(handler.handle).toHaveBeenCalledTimes(total - 2);
     expect(logger.warn).toHaveBeenCalledTimes(1);
-    consumer.receive(msg(valid));
     expect(logger.warn).toHaveBeenCalledWith({
       type: 'org_events_dropped',
       count: 2,
     });
+  });
+
+  it('reports the dropped count once a minute while the buffer stays full', () => {
+    handler.handle.mockReturnValue(new Promise<void>(() => undefined));
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      const full = ORG_EVENTS_CONCURRENCY + ORG_EVENTS_BUFFER;
+      for (let i = 0; i < full + 2; i++) consumer.receive(msg(valid));
+      expect(logger.warn).not.toHaveBeenCalled();
+      now.mockReturnValue(1_000_000 + 60_000);
+      consumer.receive(msg(valid));
+      expect(logger.warn).toHaveBeenCalledWith({
+        type: 'org_events_dropped',
+        count: 3,
+      });
+    } finally {
+      now.mockRestore();
+    }
   });
 });
 

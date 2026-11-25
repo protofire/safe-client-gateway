@@ -151,7 +151,6 @@ describe('OrgEventsHandler', () => {
     await sql.query(`DELETE FROM activity_events`);
     await sql.query(`DELETE FROM linked_safes`);
     await sql.query(`DELETE FROM linked_safe_snapshots`);
-    await sql.query(`DELETE FROM processed_events`);
     for (const org of [orgA, orgB]) {
       await sql.query(
         `INSERT INTO linked_safes (org_id, chain_id, address) VALUES ($1, $2, $3)`,

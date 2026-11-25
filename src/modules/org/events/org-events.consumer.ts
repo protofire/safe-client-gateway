@@ -22,6 +22,7 @@ export const ORG_EVENTS_CONCURRENCY = 3;
 // shortcut: beyond it they are dropped and left to the periodic passes;
 // upgrade to broker-side back-pressure (acks + prefetch) if drops show in logs
 export const ORG_EVENTS_BUFFER = 1000;
+const DROP_REPORT_MS = 60_000;
 
 /**
  * Own durable queue on the gateway's fanout exchange (never the gateway's
@@ -40,6 +41,7 @@ export class OrgEventsConsumer implements OnModuleInit, OnApplicationShutdown {
   private readonly buffer: Array<Event> = [];
   private inFlight = 0;
   private dropped = 0;
+  private droppedSince = 0;
 
   constructor(
     @Inject(IConfigurationService)
@@ -93,15 +95,12 @@ export class OrgEventsConsumer implements OnModuleInit, OnApplicationShutdown {
         return;
       }
       if (this.buffer.length >= ORG_EVENTS_BUFFER) {
-        // logged when an overflow starts, and its total when room returns
-        if (this.dropped++ === 0) {
-          this.logger.warn({ type: 'org_events_buffer_full' });
+        // reported once a minute while it lasts, and when the buffer drains
+        if (this.dropped++ === 0) this.droppedSince = Date.now();
+        else if (Date.now() - this.droppedSince >= DROP_REPORT_MS) {
+          this.reportDropped();
         }
         return;
-      }
-      if (this.dropped > 0) {
-        this.logger.warn({ type: 'org_events_dropped', count: this.dropped });
-        this.dropped = 0;
       }
       this.buffer.push(parsed.data);
       this.pump();
@@ -110,6 +109,11 @@ export class OrgEventsConsumer implements OnModuleInit, OnApplicationShutdown {
         `Org event skipped: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
+  }
+
+  private reportDropped(): void {
+    this.logger.warn({ type: 'org_events_dropped', count: this.dropped });
+    this.dropped = 0;
   }
 
   private pump(): void {
@@ -126,6 +130,9 @@ export class OrgEventsConsumer implements OnModuleInit, OnApplicationShutdown {
         )
         .finally(() => {
           this.inFlight--;
+          if (this.dropped > 0 && this.buffer.length === 0) {
+            this.reportDropped();
+          }
           this.pump();
         });
     }
