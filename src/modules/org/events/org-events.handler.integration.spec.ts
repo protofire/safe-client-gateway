@@ -9,7 +9,10 @@ import {
   type OrgTestDb,
 } from '@/modules/org/db/__tests__/org-test-db';
 import { OrgTransaction } from '@/modules/org/db/org-transaction';
-import { OrgEventsHandler } from '@/modules/org/events/org-events.handler';
+import {
+  KNOWN_SAFES_TTL_MS,
+  OrgEventsHandler,
+} from '@/modules/org/events/org-events.handler';
 import { OrgEventsReconciler } from '@/modules/org/events/org-events.reconciler';
 import { systemClock } from '@/modules/org/common/clock';
 import { PurgeProcessor } from '@/modules/org/jobs/purge.processor';
@@ -363,33 +366,28 @@ describe('OrgEventsHandler', () => {
     expect(await events(orgA)).toEqual([]);
   });
 
-  it('knows linked Safes in any address case and no others, from memory', async () => {
-    const internals = handler as unknown as { known?: unknown };
-    internals.known = undefined;
-    expect(await handler.knows(CHAIN, SAFE.toLowerCase())).toBe(true);
-    expect(await handler.knows(CHAIN, OTHER)).toBe(false);
-    expect(await handler.knows('999999', SAFE)).toBe(false);
-
-    // answered from memory until the set expires
-    await sql.query(`DELETE FROM linked_safes`);
-    expect(await handler.knows(CHAIN, SAFE)).toBe(true);
-    internals.known = undefined;
-    expect(await handler.knows(CHAIN, SAFE)).toBe(false);
-  });
-
-  it('answers from the current set while an expired one reloads', async () => {
+  it('knows linked Safes in any address case and no others, from memory, reloading on a timer', async () => {
+    jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
     const internals = handler as unknown as {
-      known?: { loadedAt: number };
+      known?: unknown;
       loadingKnown?: Promise<unknown>;
     };
-    internals.known = undefined;
-    expect(await handler.knows(CHAIN, SAFE)).toBe(true);
-    await sql.query(`DELETE FROM linked_safes`);
-    internals.known!.loadedAt = 0;
+    try {
+      expect(await handler.knows(CHAIN, SAFE.toLowerCase())).toBe(true);
+      expect(await handler.knows(CHAIN, OTHER)).toBe(false);
+      expect(await handler.knows('999999', SAFE)).toBe(false);
 
-    expect(await handler.knows(CHAIN, SAFE)).toBe(true);
-    await internals.loadingKnown;
-    expect(await handler.knows(CHAIN, SAFE)).toBe(false);
+      // answered from memory until the next reload, with or without events
+      await sql.query(`DELETE FROM linked_safes`);
+      expect(await handler.knows(CHAIN, SAFE)).toBe(true);
+      jest.advanceTimersByTime(KNOWN_SAFES_TTL_MS);
+      await internals.loadingKnown;
+      expect(await handler.knows(CHAIN, SAFE)).toBe(false);
+    } finally {
+      handler.onModuleDestroy();
+      internals.known = undefined;
+      jest.useRealTimers();
+    }
   });
 
   it('invalidates the caches on executed, confirmation and incoming events', async () => {

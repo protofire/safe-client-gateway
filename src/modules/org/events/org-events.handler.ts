@@ -1,5 +1,10 @@
 import { createHash } from 'node:crypto';
-import { Inject, Injectable, Optional } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  type OnModuleDestroy,
+  Optional,
+} from '@nestjs/common';
 import type { EntityManager } from 'typeorm';
 import type { Address } from 'viem';
 import { ILoggingService, LoggingService } from '@/logging/logging.interface';
@@ -44,7 +49,7 @@ async function readSnapshot(
 }
 
 @Injectable()
-export class OrgEventsHandler {
+export class OrgEventsHandler implements OnModuleDestroy {
   constructor(
     @Inject(ISafeRepository) private readonly safeRepository: ISafeRepository,
     @Inject(IBalancesRepository)
@@ -56,27 +61,35 @@ export class OrgEventsHandler {
     @Optional() private readonly payouts?: PayoutStatusUpdater,
   ) {}
 
-  private known?: { keys: Set<string>; loadedAt: number };
+  private known?: Set<string>;
+  private knownTimer?: NodeJS.Timeout;
   private loadingKnown?: Promise<Set<string>>;
 
   /**
    * Whether the org layer has anything to do for this Safe: an org links it
    * or a payout run watches it. The queue carries every event of the
-   * environment, so this is answered from memory; only the first call waits
-   * for the query, later ones use the current set while it reloads.
+   * environment, so this is answered from memory: the first call loads the
+   * set and starts reloading it every KNOWN_SAFES_TTL_MS, traffic or not.
    * shortcut: a Safe linked or watched within the last KNOWN_SAFES_TTL_MS (plus
-   * the reload) may be missed; the periodic passes (reconcile, policy scan,
+   * one query) may be missed; the periodic passes (reconcile, policy scan,
    * payouts) cover it.
    * Never throws: a failed load keeps the previous set (none yet: an empty
-   * one) and is tried again after the same interval.
+   * one) until the next reload.
    */
   async knows(chainId: string, address: string): Promise<boolean> {
-    const key = `${chainId}:${lower(address)}`;
-    if (!this.known) return (await this.loadKnown()).has(key);
-    if (Date.now() - this.known.loadedAt >= KNOWN_SAFES_TTL_MS) {
-      void this.loadKnown();
+    if (!this.known) {
+      this.knownTimer ??= setInterval(
+        () => void this.loadKnown(),
+        KNOWN_SAFES_TTL_MS,
+      ).unref();
     }
-    return this.known.keys.has(key);
+    const known = this.known ?? (await this.loadKnown());
+    return known.has(`${chainId}:${lower(address)}`);
+  }
+
+  onModuleDestroy(): void {
+    clearInterval(this.knownTimer);
+    this.knownTimer = undefined;
   }
 
   private loadKnown(): Promise<Set<string>> {
@@ -88,23 +101,18 @@ export class OrgEventsHandler {
         ),
       )
       .then((rows: Array<{ chain_id: string; address: string }>) => {
-        const keys = new Set(
+        this.known = new Set(
           rows.map((r) => `${r.chain_id}:${lower(r.address)}`),
         );
-        this.known = { keys, loadedAt: Date.now() };
-        return keys;
+        return this.known;
       })
       .catch((error: unknown) => {
         this.logger.warn({
           type: 'org_events_known_safes_stale',
           error: error instanceof Error ? error.message : String(error),
         });
-        // not retried on every event while the DB is down
-        this.known = {
-          keys: this.known?.keys ?? new Set(),
-          loadedAt: Date.now(),
-        };
-        return this.known.keys;
+        this.known ??= new Set();
+        return this.known;
       })
       .finally(() => {
         this.loadingKnown = undefined;
